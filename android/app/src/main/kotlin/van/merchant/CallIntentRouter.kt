@@ -54,6 +54,7 @@ object CallIntentRouter {
         return when (intent.action) {
             MainActivity.ACTION_SHOW_INCOMING_CALL -> buildIncomingPayload(intent)
             MainActivity.ACTION_CANCEL_INCOMING_CALL -> buildCancelPayload(intent)
+            MainActivity.ACTION_SHOW_CHAT_NOTIFICATION -> buildChatPayload(intent)
             else -> null
         }
     }
@@ -78,6 +79,18 @@ object CallIntentRouter {
         return mapOf(
             "channelId" to channelId,
             "cancelOnly" to true
+        )
+    }
+
+    private fun buildChatPayload(intent: Intent): Map<String, Any?>? {
+        val chatId = intent.getStringExtra(MainActivity.EXTRA_CHAT_ID) ?: return null
+        return mapOf(
+            "type" to "chat",
+            "chatId" to chatId,
+            "senderId" to intent.getStringExtra(MainActivity.EXTRA_SENDER_ID),
+            "senderName" to intent.getStringExtra(MainActivity.EXTRA_SENDER_NAME),
+            "message" to intent.getStringExtra(MainActivity.EXTRA_MESSAGE),
+            "orderId" to intent.getStringExtra(MainActivity.EXTRA_ORDER_ID)
         )
     }
 

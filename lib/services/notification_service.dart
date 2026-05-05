@@ -570,6 +570,10 @@ class NotificationService {
       _handleCallCancelFromNative(payload['channelId'] as String?);
       return;
     }
+    if (payload['type'] == 'chat') {
+      unawaited(_openChatFromNotificationData(payload));
+      return;
+    }
     final bool minimizeOnEnd = payload['appWasForeground'] == false;
     _navigateToIncomingCall(
       channelId: payload['channelId'] as String? ?? '',

@@ -132,6 +132,7 @@ class MainActivity : FlutterActivity() {
 		const val ACTION_SHOW_INCOMING_CALL = "van.merchant.ACTION_SHOW_INCOMING_CALL"
 		const val ACTION_CANCEL_INCOMING_CALL = "van.merchant.ACTION_CANCEL_INCOMING_CALL"
 		const val EXTRA_CHANNEL_ID = "extra_channel_id"
+		const val EXTRA_APP_ID = "extra_app_id"
 		const val EXTRA_CALL_TOKEN = "extra_call_token"
 		const val EXTRA_CALLER_ID = "extra_caller_id"
 		const val EXTRA_CALLER_NAME = "extra_caller_name"

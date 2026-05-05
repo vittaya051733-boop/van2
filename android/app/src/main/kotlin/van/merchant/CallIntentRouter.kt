@@ -63,6 +63,7 @@ object CallIntentRouter {
         val token = intent.getStringExtra(MainActivity.EXTRA_CALL_TOKEN) ?: return null
         return mapOf(
             "channelId" to channelId,
+            "appId" to intent.getStringExtra(MainActivity.EXTRA_APP_ID),
             "token" to token,
             "callerId" to intent.getStringExtra(MainActivity.EXTRA_CALLER_ID),
             "callerName" to intent.getStringExtra(MainActivity.EXTRA_CALLER_NAME),

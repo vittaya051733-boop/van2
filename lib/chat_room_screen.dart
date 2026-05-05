@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,14 +12,17 @@ import 'models/chat_message.dart';
 import 'models/user_profile.dart';
 import 'services/chat_service.dart';
 import 'services/friend_service.dart';
-import 'services/notification_service.dart';
-import 'call_screen.dart';
 import 'widgets/cached_app_image.dart';
 
 class ChatRoomScreen extends StatefulWidget {
-  const ChatRoomScreen({super.key, required this.friendProfile});
+  const ChatRoomScreen({
+    super.key,
+    required this.friendProfile,
+    this.orderId,
+  });
 
   final UserProfile friendProfile;
+  final String? orderId;
 
   @override
   State<ChatRoomScreen> createState() => _ChatRoomScreenState();
@@ -27,19 +32,36 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ChatService _chatService = ChatService();
   final FriendService _friendService = FriendService();
-  final NotificationService _notificationService = NotificationService();
   final ImagePicker _imagePicker = ImagePicker();
 
   UserProfile? _currentProfile;
   bool _sending = false;
   bool _uploading = false;
-  bool _startingCall = false;
+  bool _markingAsRead = false;
   String? _error;
 
   String get _chatId => _chatService.chatIdFor(
         _currentProfile?.uid ?? '',
         widget.friendProfile.uid,
       );
+
+  String _chatIdForProfile(UserProfile profile) {
+    return _chatService.chatIdFor(profile.uid, widget.friendProfile.uid);
+  }
+
+  Future<void> _bindOrderContext(UserProfile profile) async {
+    final orderId = widget.orderId?.trim();
+    if (orderId == null || orderId.isEmpty) {
+      return;
+    }
+    await FirebaseFirestore.instance.collection('chats').doc(_chatIdForProfile(profile)).set(
+      {
+        'orderId': orderId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
 
   @override
   void initState() {
@@ -61,9 +83,29 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     }
     final profile = await _friendService.getProfile(user.uid) ??
         await _friendService.ensureCurrentUserProfile(user);
+    if (profile == null) {
+      if (!mounted) return;
+      setState(() => _error = 'ไม่พบข้อมูลผู้ใช้ปัจจุบัน');
+      return;
+    }
+
+    try {
+      final chatId = _chatIdForProfile(profile);
+      await _chatService.ensureChatAvailable(
+        sender: profile,
+        target: widget.friendProfile,
+      );
+      await _bindOrderContext(profile);
+      await _chatService.purgeExpiredMessages(chatId);
+      await _chatService.markChatAsRead(owner: profile, friend: widget.friendProfile);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'ไม่สามารถเริ่มห้องแชทได้: $e');
+      return;
+    }
+
     if (!mounted) return;
     setState(() => _currentProfile = profile);
-    await _chatService.purgeExpiredMessages(_chatId);
   }
 
   @override
@@ -84,25 +126,13 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                widget.friendProfile.displayName,
+                _buildChatTitle(),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'โทรด้วยเสียง',
-            icon: const Icon(Icons.call_outlined),
-            onPressed: _startingCall ? null : () => _startCall(isVideo: false),
-          ),
-          IconButton(
-            tooltip: 'วิดีโอคอล',
-            icon: const Icon(Icons.videocam_outlined),
-            onPressed: _startingCall ? null : () => _startCall(isVideo: true),
-          ),
-        ],
       ),
       body: profile == null
           ? Center(
@@ -121,6 +151,15 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
+  String _buildChatTitle() {
+    final orderId = widget.orderId?.trim();
+    if (orderId == null || orderId.isEmpty) {
+      return widget.friendProfile.displayName;
+    }
+    final shortOrderId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
+    return '${widget.friendProfile.displayName} • Order $shortOrderId';
+  }
+
   Widget _buildMessageList(UserProfile profile) {
     return StreamBuilder<List<ChatMessage>>(
       stream: _chatService.watchMessages(_chatId),
@@ -129,6 +168,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
           return const Center(child: CircularProgressIndicator());
         }
         final messages = snapshot.data ?? const [];
+        _scheduleMarkAsRead(profile);
         if (messages.isEmpty) {
           return const Center(child: Text('เริ่มต้นสนทนาก่อนเลย'));
         }
@@ -144,6 +184,20 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
         );
       },
     );
+  }
+
+  void _scheduleMarkAsRead(UserProfile profile) {
+    if (_markingAsRead) {
+      return;
+    }
+    _markingAsRead = true;
+    unawaited(() async {
+      try {
+        await _chatService.markChatAsRead(owner: profile, friend: widget.friendProfile);
+      } finally {
+        _markingAsRead = false;
+      }
+    }());
   }
 
   Widget _buildComposer(UserProfile profile) {
@@ -307,78 +361,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     }
   }
 
-  Future<void> _startCall({required bool isVideo}) async {
-    if (_startingCall) return;
-    final caller = _currentProfile;
-    if (caller == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ไม่สามารถเริ่มการโทรได้: ไม่พบข้อมูลผู้ใช้ปัจจุบัน')),
-      );
-      return;
-    }
-
-    setState(() => _startingCall = true);
-
-    try {
-      // 1. เรียก Cloud Function ผ่าน NotificationService เพื่อสร้าง token และส่ง notification
-      final callData = await _notificationService.initiateCall(
-        caller: caller,
-        callee: widget.friendProfile,
-        isVideo: isVideo,
-      );
-
-      if (!mounted) return;
-
-      // 2. สร้างโปรไฟล์เป้าหมายจากข้อมูลที่ Cloud Function ส่งกลับ (ถ้ามี)
-      UserProfile targetProfile = widget.friendProfile;
-      final calleeProfileData = callData['calleeProfile'];
-      if (calleeProfileData is Map<String, dynamic>) {
-        targetProfile = targetProfile.copyWith(
-          displayName: (calleeProfileData['displayName'] as String?) ?? targetProfile.displayName,
-          phoneNumber: (calleeProfileData['phoneNumber'] as String?) ?? targetProfile.phoneNumber,
-          photoUrl: (calleeProfileData['photoUrl'] as String?) ?? targetProfile.photoUrl,
-        );
-      }
-
-      // 3. นำทางไปยังหน้าจอการโทร พร้อมข้อมูลที่ได้จาก Cloud Function
-      final callResult = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => CallScreen(
-            channelName: callData['channelId'] as String? ?? _chatId, // ใช้ channelId จาก function
-            isVideo: isVideo,
-            targetProfile: targetProfile,
-            appIdOverride: callData['appId'] as String?,
-            tokenOverride: callData['token'] as String?, // ใช้ token จาก function
-            isIncoming: false,
-          ),
-        ),
-      );
-
-      final answered = (callResult is Map && callResult['answered'] == true);
-      final durationMillis = (callResult is Map ? callResult['durationMillis'] as int? : null);
-      final declined = (callResult is Map && callResult['declined'] == true);
-
-      await _chatService.logCallEvent(
-        initiator: caller,
-        target: widget.friendProfile,
-        isVideo: isVideo,
-        answered: answered,
-        duration: durationMillis != null ? Duration(milliseconds: durationMillis) : null,
-        declined: declined,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('เกิดข้อผิดพลาดในการเริ่มการโทร: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _startingCall = false);
-      }
-    }
-  }
 }
  
 class _MessageBubble extends StatelessWidget {

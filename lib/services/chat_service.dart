@@ -11,6 +11,8 @@ import '../storage_helper.dart';
 class ChatService {
   ChatService();
 
+  static const String _userCollection = 'customer_users';
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = StorageHelper.instance;
 
@@ -31,6 +33,15 @@ class ChatService {
               .map((doc) => ChatMessage.fromSnapshot(doc))
               .toList(),
         );
+  }
+
+  Future<void> ensureChatAvailable({
+    required UserProfile sender,
+    required UserProfile target,
+  }) async {
+    final chatId = chatIdFor(sender.uid, target.uid);
+    final chatDoc = _firestore.collection('chats').doc(chatId);
+    await _ensureChatDocument(chatDoc, sender: sender, target: target);
   }
 
   Future<void> sendTextMessage({
@@ -61,6 +72,7 @@ class ChatService {
       lastMessage: text,
       lastMessageType: 'text',
       sender: sender,
+      target: target,
     );
   }
 
@@ -106,6 +118,7 @@ class ChatService {
       lastMessage: summaryText,
       lastMessageType: messageType,
       sender: sender,
+      target: target,
     );
   }
 
@@ -150,7 +163,41 @@ class ChatService {
       lastMessage: description,
       lastMessageType: 'call',
       sender: initiator,
+      target: target,
     );
+  }
+
+  Future<void> markChatAsRead({
+    required UserProfile owner,
+    required UserProfile friend,
+  }) async {
+    final chatDoc = _firestore.collection('chats').doc(chatIdFor(owner.uid, friend.uid));
+    final ownerFriendRef = _firestore
+        .collection(_userCollection)
+        .doc(owner.uid)
+        .collection('friends')
+        .doc(friend.uid);
+
+    final batch = _firestore.batch();
+    batch.set(
+      chatDoc,
+      {
+        'unreadCounts.${owner.uid}': 0,
+        'lastReadAt.${owner.uid}': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    batch.set(
+      ownerFriendRef,
+      {
+        'uid': friend.uid,
+        ...friend.toFirestore(),
+        'unreadCount': 0,
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
   }
 
   Future<void> purgeExpiredMessages(String chatId) async {
@@ -175,16 +222,22 @@ class ChatService {
     required UserProfile sender,
     required UserProfile target,
   }) async {
-    final snapshot = await chatDoc.get();
-    if (snapshot.exists) return;
     await chatDoc.set({
       'participants': [sender.uid, target.uid],
       'participantProfiles': {
         sender.uid: sender.toFirestore(),
         target.uid: target.toFirestore(),
       },
+      'participantNames': {
+        sender.uid: sender.displayName,
+        target.uid: target.displayName,
+      },
+      'unreadCounts': {
+        sender.uid: 0,
+        target.uid: 0,
+      },
       'createdAt': FieldValue.serverTimestamp(),
-    });
+    }, SetOptions(merge: true));
   }
 
   Future<void> _updateChatSummary(
@@ -192,13 +245,42 @@ class ChatService {
     required String lastMessage,
     required String lastMessageType,
     required UserProfile sender,
+    required UserProfile target,
   }) async {
-    await chatDoc.set({
-      'lastMessage': lastMessage,
-      'lastMessageType': lastMessageType,
-      'lastMessageSender': sender.uid,
-      'lastMessageAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final senderFriendRef = _firestore
+        .collection(_userCollection)
+        .doc(sender.uid)
+        .collection('friends')
+        .doc(target.uid);
+
+    final batch = _firestore.batch();
+    batch.set(
+      chatDoc,
+      {
+        'lastMessage': lastMessage,
+        'lastMessageType': lastMessageType,
+        'lastMessageSender': sender.uid,
+        'lastSenderId': sender.uid,
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'unreadCounts.${sender.uid}': 0,
+        'unreadCounts.${target.uid}': FieldValue.increment(1),
+        'lastReadAt.${sender.uid}': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+    batch.set(
+      senderFriendRef,
+      {
+        'uid': target.uid,
+        ...target.toFirestore(),
+        'lastMessage': lastMessage,
+        'lastActivity': FieldValue.serverTimestamp(),
+        'unreadCount': 0,
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
   }
 
   String _guessMimeType(String fileName) {

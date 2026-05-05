@@ -44,6 +44,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
   latlng.LatLng? _marketCenter;
   bool _isResolvingMarketCenter = true;
   bool _isMapReady = false;
+  bool _isShopListCollapsed = false;
   latlng.LatLng? _pendingCenter;
   double? _pendingZoom;
 
@@ -157,6 +158,12 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
     });
   }
 
+  void _toggleShopListCollapsed() {
+    setState(() {
+      _isShopListCollapsed = !_isShopListCollapsed;
+    });
+  }
+
   double _visibleRadiusKm(BuildContext context) {
     final mediaSize = MediaQuery.of(context).size;
     final mapWidthPx = mediaSize.width;
@@ -211,6 +218,9 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
     final showShopImageMarkers =
         _visibleRadiusKm(context) <= _shopImageRadiusKmThreshold;
     final marketCenter = _marketCenter ?? _marketCenterFallback;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final expandedShopListHeight = math.min(screenHeight * 0.38, 360.0);
+    const collapsedShopListHeight = 104.0;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4FAFB),
@@ -270,10 +280,11 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
             );
           }
 
+          final featuredShop = selectedShop ?? shops.first;
+
           return Column(
             children: <Widget>[
               Expanded(
-                flex: 6,
                 child: Stack(
                   children: <Widget>[
                     FlutterMap(
@@ -496,8 +507,12 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                   ],
                 ),
               ),
-              Expanded(
-                flex: 4,
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                height: _isShopListCollapsed
+                    ? collapsedShopListHeight
+                    : expandedShopListHeight,
                 child: Container(
                   decoration: const BoxDecoration(
                     color: Colors.white,
@@ -513,109 +528,78 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                   child: Column(
                     children: <Widget>[
                       const SizedBox(height: 12),
-                      Container(
-                        width: 44,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE5E7EB),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                          itemCount: shops.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final shop = shops[index];
-                            final isSelected = shop.shopId == selectedShop?.shopId;
-                            final distanceKm = _distanceKmTo(shop);
-
-                            return Material(
-                              color: isSelected
-                                  ? const Color(0xFFFFF3E0)
-                                  : const Color(0xFFF8FAFC),
-                              borderRadius: BorderRadius.circular(20),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(20),
-                                onTap: () => _selectShop(shop),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(14),
-                                  child: Row(
-                                    children: <Widget>[
-                                      Container(
-                                        width: 48,
-                                        height: 48,
-                                        decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? const Color(0xFFF57C00)
-                                              : const Color(0xFFFFEDD5),
-                                          borderRadius: BorderRadius.circular(16),
-                                        ),
-                                        clipBehavior: Clip.antiAlias,
-                                        child: shop.shopImageUrl?.trim().isNotEmpty == true
-                                            ? CachedNetworkImage(
-                                                imageUrl: shop.shopImageUrl!.trim(),
-                                                fit: BoxFit.cover,
-                                                errorWidget: (_, __, ___) => _BottomShopImageFallback(
-                                                  isSelected: isSelected,
-                                                ),
-                                                placeholder: (_, __) => _BottomShopImageFallback(
-                                                  isSelected: isSelected,
-                                                ),
-                                              )
-                                            : _BottomShopImageFallback(
-                                                isSelected: isSelected,
-                                              ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: <Widget>[
-                                            Text(
-                                              shop.shopName?.trim().isNotEmpty == true
-                                                  ? shop.shopName!.trim()
-                                                  : 'ร้านค้า',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleMedium
-                                                  ?.copyWith(fontWeight: FontWeight.w800),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              distanceKm == null
-                                                  ? 'ไม่พบระยะทาง'
-                                                  : 'ห่างจากคุณ ${distanceKm.toStringAsFixed(1)} กม.',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodyMedium
-                                                  ?.copyWith(color: const Color(0xFF6B7280)),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      FilledButton(
-                                        onPressed: () => _openShopCatalog(shop),
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: const Color(0xFFF57C00),
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 14,
-                                            vertical: 12,
-                                          ),
-                                        ),
-                                        child: const Text('เข้าร้าน'),
-                                      ),
-                                    ],
-                                  ),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _toggleShopListCollapsed,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Column(
+                            children: <Widget>[
+                              Container(
+                                width: 44,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE5E7EB),
+                                  borderRadius: BorderRadius.circular(999),
                                 ),
                               ),
-                            );
-                          },
+                              const SizedBox(height: 10),
+                              Row(
+                                children: <Widget>[
+                                  Expanded(
+                                    child: Text(
+                                      _isShopListCollapsed
+                                          ? 'ย่อแถบร้านอยู่ แตะเพื่อขยาย'
+                                          : 'ร้านใกล้คุณ ${shops.length} ร้าน',
+                                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: const Color(0xFF374151),
+                                          ),
+                                    ),
+                                  ),
+                                  Icon(
+                                    _isShopListCollapsed
+                                        ? Icons.keyboard_arrow_up_rounded
+                                        : Icons.keyboard_arrow_down_rounded,
+                                    color: const Color(0xFF6B7280),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      if (_isShopListCollapsed)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          child: _BottomShopListTile(
+                            shop: featuredShop,
+                            isSelected: true,
+                            distanceKm: _distanceKmTo(featuredShop),
+                            onTap: () => _selectShop(featuredShop),
+                            onOpen: () => _openShopCatalog(featuredShop),
+                            compact: true,
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                            itemCount: shops.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final shop = shops[index];
+                              return _BottomShopListTile(
+                                shop: shop,
+                                isSelected: shop.shopId == selectedShop?.shopId,
+                                distanceKm: _distanceKmTo(shop),
+                                onTap: () => _selectShop(shop),
+                                onOpen: () => _openShopCatalog(shop),
+                              );
+                            },
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -623,6 +607,120 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _BottomShopListTile extends StatelessWidget {
+  const _BottomShopListTile({
+    required this.shop,
+    required this.isSelected,
+    required this.distanceKm,
+    required this.onTap,
+    required this.onOpen,
+    this.compact = false,
+  });
+
+  final PublicCatalogSection shop;
+  final bool isSelected;
+  final double? distanceKm;
+  final VoidCallback onTap;
+  final VoidCallback onOpen;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final shopName = shop.shopName?.trim().isNotEmpty == true
+        ? shop.shopName!.trim()
+        : 'ร้านค้า';
+    final titleStyle = compact
+        ? Theme.of(context).textTheme.titleSmall
+        : Theme.of(context).textTheme.titleMedium;
+    final subtitleStyle = compact
+        ? Theme.of(context).textTheme.bodySmall
+        : Theme.of(context).textTheme.bodyMedium;
+    final imageSize = compact ? 40.0 : 48.0;
+    final buttonPadding = compact
+        ? const EdgeInsets.symmetric(horizontal: 12, vertical: 10)
+        : const EdgeInsets.symmetric(horizontal: 14, vertical: 12);
+
+    return Material(
+      color: isSelected ? const Color(0xFFFFF3E0) : const Color(0xFFF8FAFC),
+      borderRadius: BorderRadius.circular(compact ? 18 : 20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(compact ? 18 : 20),
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.all(compact ? 12 : 14),
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: imageSize,
+                height: imageSize,
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFFF57C00)
+                      : const Color(0xFFFFEDD5),
+                  borderRadius: BorderRadius.circular(compact ? 14 : 16),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: shop.shopImageUrl?.trim().isNotEmpty == true
+                    ? CachedNetworkImage(
+                        imageUrl: shop.shopImageUrl!.trim(),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, __, ___) => _BottomShopImageFallback(
+                          isSelected: isSelected,
+                        ),
+                        placeholder: (_, __) => _BottomShopImageFallback(
+                          isSelected: isSelected,
+                        ),
+                      )
+                    : _BottomShopImageFallback(
+                        isSelected: isSelected,
+                      ),
+              ),
+              SizedBox(width: compact ? 10 : 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      shopName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: titleStyle?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      distanceKm == null
+                          ? 'ไม่พบระยะทาง'
+                          : 'ห่างจากคุณ ${distanceKm!.toStringAsFixed(1)} กม.',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: subtitleStyle?.copyWith(
+                        color: const Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: onOpen,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFF57C00),
+                  foregroundColor: Colors.white,
+                  padding: buttonPadding,
+                  visualDensity: compact
+                      ? const VisualDensity(horizontal: -1, vertical: -1)
+                      : VisualDensity.standard,
+                ),
+                child: const Text('เข้าร้าน'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

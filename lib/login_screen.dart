@@ -61,6 +61,37 @@ class _LoginScreenState extends State<LoginScreen> {
     return value.contains('@');
   }
 
+  Future<_LoginIdentifierStatus?> _lookupIdentifierStatus({
+    String? email,
+    String? phoneNumber,
+  }) async {
+    try {
+      final callable = _functions.httpsCallable('lookupLoginIdentifier');
+      final response = await callable.call(<String, dynamic>{
+        if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
+        if (phoneNumber != null && phoneNumber.trim().isNotEmpty)
+          'phoneNumber': phoneNumber.trim(),
+      });
+      final data = response.data;
+      if (data is! Map) {
+        return null;
+      }
+      return _LoginIdentifierStatus.fromMap(Map<Object?, Object?>.from(data));
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) {
+        return null;
+      }
+      _showSnackBar(error.message ?? 'ตรวจสอบข้อมูลเข้าสู่ระบบไม่สำเร็จ');
+      return null;
+    } catch (error) {
+      if (!mounted) {
+        return null;
+      }
+      _showSnackBar('ตรวจสอบข้อมูลเข้าสู่ระบบไม่สำเร็จ: $error');
+      return null;
+    }
+  }
+
   Future<String?> _askForResetEmail() async {
     final emailController = TextEditingController(
       text: _isEmailIdentifier(_identifierController.text.trim())
@@ -175,9 +206,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _handleLogin() async {
     final identifier = _identifierController.text.trim();
     final password = _passwordController.text.trim();
+    final isEmail = _isEmailIdentifier(identifier);
+    final normalizedPhone = isEmail ? '' : PhoneLoginHelper.normalize(identifier);
 
     if (identifier.isEmpty || password.isEmpty) {
-      _showSnackBar('กรุณากรอกเบอร์โทรหรืออีเมล และรหัสผ่านให้ครบ');
+      _showSnackBar('กรุณากรอกอีเมลหรือเบอร์โทร และรหัสผ่านให้ครบ');
       return;
     }
 
@@ -186,11 +219,30 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    final channel = _isEmailIdentifier(identifier)
-        ? VerificationChannel.email
-        : VerificationChannel.phone;
+    if (!isEmail && !normalizedPhone.startsWith('+')) {
+      _showSnackBar('กรุณากรอกเบอร์โทรให้ถูกต้อง');
+      return;
+    }
 
-    if (channel == VerificationChannel.email) {
+    if (isEmail) {
+      final emailStatus = await _lookupIdentifierStatus(email: identifier);
+      if (emailStatus == null || !mounted) {
+        return;
+      }
+
+      if (!emailStatus.emailExists) {
+        final verified = await _openOtpVerification(
+          identifier: identifier,
+          password: password,
+          channel: VerificationChannel.email,
+          purpose: VerificationPurpose.register,
+        );
+        if (verified == true && mounted) {
+          _completeLogin();
+        }
+        return;
+      }
+
       final directEmailSignIn = await _trySignInEmailWithoutOtp(
         identifier,
         password,
@@ -199,24 +251,51 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      await _openOtpVerification(
+      final verified = await _openOtpVerification(
         identifier: identifier,
         password: password,
-        channel: channel,
+        channel: VerificationChannel.email,
       );
+      if (verified == true && mounted) {
+        _completeLogin();
+      }
       return;
     }
 
-    final fastSignIn = await _trySignInPhoneWithoutOtp(identifier, password);
-    if (fastSignIn != false) {
+    final phoneStatus = await _lookupIdentifierStatus(phoneNumber: normalizedPhone);
+    if (phoneStatus == null || !mounted) {
       return;
     }
 
-    await _openOtpVerification(
-      identifier: identifier,
-      password: password,
-      channel: channel,
-    );
+    if (!phoneStatus.phoneExists) {
+      final verified = await _openOtpVerification(
+        identifier: normalizedPhone,
+        password: password,
+        channel: VerificationChannel.phone,
+        purpose: VerificationPurpose.register,
+      );
+      if (verified == true && mounted) {
+        _completeLogin();
+      }
+      return;
+    }
+
+    if (phoneStatus.phoneExists) {
+      final fastSignIn = await _trySignInPhoneWithoutOtp(normalizedPhone, password);
+      if (fastSignIn != false) {
+        return;
+      }
+
+      final verified = await _openOtpVerification(
+        identifier: normalizedPhone,
+        password: password,
+        channel: VerificationChannel.phone,
+      );
+      if (verified == true && mounted) {
+        _completeLogin();
+      }
+      return;
+    }
   }
 
   Future<bool?> _trySignInEmailWithoutOtp(
@@ -345,7 +424,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _openOtpVerification({
+  Future<bool> _openOtpVerification({
     required String identifier,
     required String password,
     required VerificationChannel channel,
@@ -368,9 +447,7 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
 
-    if (verified == true && mounted) {
-      _completeLogin();
-    }
+    return verified == true;
   }
 
   void _completeLogin() {
@@ -515,15 +592,15 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 10),
               Text(
                 widget.serviceType == null
-                    ? 'กรอกข้อมูลเพื่อเข้าสู่ระบบก่อนใช้งานเมนูนี้'
-                    : 'หมวดที่เลือก: ${widget.serviceType}',
+                    ? 'กรอกอีเมลหรือเบอร์โทรอย่างใดอย่างหนึ่งเพื่อเข้าสู่ระบบหรือสมัครครั้งแรก'
+                    : 'หมวดที่เลือก: ${widget.serviceType} • กรอกอีเมลหรือเบอร์โทรอย่างใดอย่างหนึ่งได้',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: const Color(0xFF7C2D12),
                 ),
               ),
               const SizedBox(height: 28),
               _LoginTextField(
-                label: 'เบอร์โทรศัพท์ หรือ อีเมล',
+                label: 'อีเมล หรือ เบอร์โทรศัพท์',
                 icon: Icons.person_outline,
                 controller: _identifierController,
               ),
@@ -598,24 +675,44 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
+class _LoginIdentifierStatus {
+  const _LoginIdentifierStatus({
+    required this.emailExists,
+    required this.phoneExists,
+  });
+
+  factory _LoginIdentifierStatus.fromMap(Map<Object?, Object?> map) {
+    return _LoginIdentifierStatus(
+      emailExists: map['emailExists'] == true,
+      phoneExists: map['phoneExists'] == true,
+    );
+  }
+
+  final bool emailExists;
+  final bool phoneExists;
+}
+
 class _LoginTextField extends StatelessWidget {
   const _LoginTextField({
     required this.label,
     required this.icon,
     required this.controller,
     this.obscureText = false,
+    this.keyboardType,
   });
 
   final String label;
   final IconData icon;
   final TextEditingController controller;
   final bool obscureText;
+  final TextInputType? keyboardType;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
       obscureText: obscureText,
+      keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon),

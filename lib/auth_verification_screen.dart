@@ -9,7 +9,7 @@ import 'phone_login_helper.dart';
 
 enum VerificationChannel { phone, email }
 
-enum VerificationPurpose { signIn, resetPassword }
+enum VerificationPurpose { signIn, register, resetPassword }
 
 class AuthVerificationScreen extends StatefulWidget {
   const AuthVerificationScreen({
@@ -88,7 +88,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
   String get _normalizedPhone =>
       PhoneLoginHelper.normalize(widget.identifier.trim());
   bool get _isPhoneFlow => widget.channel == VerificationChannel.phone;
-    bool get _isResetPasswordFlow =>
+  bool get _isRegisterFlow => widget.purpose == VerificationPurpose.register;
+  bool get _isResetPasswordFlow =>
       widget.purpose == VerificationPurpose.resetPassword;
 
   @override
@@ -265,19 +266,32 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         'email': _email,
         'otp': otp,
         'password': targetPassword,
-        'mode': _isResetPasswordFlow ? 'reset_password' : 'sign_in',
+        'mode': _isResetPasswordFlow
+            ? 'reset_password'
+            : (_isRegisterFlow ? 'register' : 'sign_in'),
       });
 
       final data = response.data;
       final responseMap = data is Map ? Map<Object?, Object?>.from(data) : null;
       final customToken = responseMap?['customToken'];
-      if (customToken is String && customToken.trim().isNotEmpty) {
-        await FirebaseAuth.instance.signInWithCustomToken(customToken);
+
+      if (_isRegisterFlow) {
+        if (customToken is String && customToken.trim().isNotEmpty) {
+          // Replace any stale anonymous session before switching to the new account.
+          await FirebaseAuth.instance.signOut();
+          await FirebaseAuth.instance.signInWithCustomToken(customToken);
+        } else {
+          await FirebaseAuth.instance.currentUser?.reload();
+        }
       } else {
-        await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: _email,
-          password: targetPassword,
-        );
+        if (customToken is String && customToken.trim().isNotEmpty) {
+          await FirebaseAuth.instance.signInWithCustomToken(customToken);
+        } else {
+          await FirebaseAuth.instance.signInWithEmailAndPassword(
+            email: _email,
+            password: targetPassword,
+          );
+        }
       }
 
       if (!mounted) {
@@ -535,6 +549,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         title: Text(
           _isPhoneFlow
               ? 'ยืนยันรหัส OTP'
+              : _isRegisterFlow
+              ? 'ยืนยันอีเมลเพื่อสมัครสมาชิก'
               : showResetPasswordFormOnly
               ? 'ตั้งรหัสผ่านใหม่'
               : _isResetPasswordFlow
@@ -554,6 +570,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                 Text(
                   _isPhoneFlow
                       ? 'ยืนยันตัวตนด้วยเบอร์โทร'
+                      : _isRegisterFlow
+                      ? 'ยืนยันอีเมลเพื่อเปิดบัญชีใหม่'
                       : _isResetPasswordFlow
                       ? 'ยืนยัน OTP เพื่อตั้งรหัสผ่านใหม่'
                       : 'ยืนยันตัวตนด้วยอีเมล',
@@ -565,9 +583,13 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                 const SizedBox(height: 10),
                 Text(
                   _isPhoneFlow
-                      ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_normalizedPhone ก่อนเข้าสู่ระบบ'
+                      ? (_isRegisterFlow
+                        ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_normalizedPhone เพื่อยืนยันเบอร์โทรของผู้ใช้ใหม่'
+                        : 'กรอกรหัส 6 หลักที่ส่งไปที่ $_normalizedPhone ก่อนเข้าสู่ระบบ')
                       : _isResetPasswordFlow
                       ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email แล้วตั้งรหัสผ่านใหม่ จากนั้นระบบจะพาเข้าหน้าแรกทันที'
+                      : _isRegisterFlow
+                      ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email เพื่อยืนยันอีเมล จากนั้นระบบจะเปิดบัญชีใหม่และพาเข้าหน้าแรก'
                       : 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email ก่อนเข้าสู่ระบบ',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: const Color(0xFF7C2D12),
@@ -623,7 +645,9 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                               color: Colors.white,
                             ),
                           )
-                        : const Text('ยืนยันและเข้าสู่ระบบ'),
+                        : Text(
+                          _isRegisterFlow ? 'ยืนยันเบอร์โทร' : 'ยืนยันและเข้าสู่ระบบ',
+                        ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -734,6 +758,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                             ? (_isResetOtpVerified
                               ? 'ตั้งรหัสผ่านใหม่'
                               : 'ตรวจสอบ OTP')
+                            : _isRegisterFlow
+                            ? 'ยืนยันอีเมลและเปิดบัญชี'
                             : 'ยืนยันและเข้าสู่ระบบ',
                           ),
                   ),

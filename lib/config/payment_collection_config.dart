@@ -1,0 +1,122 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+enum PaymentChannelType {
+  promptPayPhone,
+  promptPayNationalId,
+  merchantQrPayload,
+  bankTransfer,
+}
+
+class PaymentCollectionSettings {
+  const PaymentCollectionSettings({
+    required this.recipientDisplayName,
+    required this.bankName,
+    required this.bankAccountNumber,
+    required this.promptPayPhoneNumber,
+    required this.promptPayNationalIdOrTaxId,
+    required this.merchantQrPayload,
+    required this.slipProviderLabel,
+  });
+
+  final String recipientDisplayName;
+  final String bankName;
+  final String bankAccountNumber;
+  final String? promptPayPhoneNumber;
+  final String? promptPayNationalIdOrTaxId;
+  final String? merchantQrPayload;
+  final String slipProviderLabel;
+
+  static const PaymentCollectionSettings defaults = PaymentCollectionSettings(
+    recipientDisplayName: 'วิทยา ทนหงษา',
+    bankName: 'ธนาคารกสิกรไทย',
+    bankAccountNumber: '1643440349',
+    promptPayPhoneNumber: null,
+    promptPayNationalIdOrTaxId: '1410400168710',
+    merchantQrPayload: null,
+    slipProviderLabel: 'Slip OK',
+  );
+
+  factory PaymentCollectionSettings.fromFirestore(Map<String, dynamic>? data) {
+    final source = data ?? const <String, dynamic>{};
+    return PaymentCollectionSettings(
+      recipientDisplayName: _readString(
+        source['recipientDisplayName'],
+        defaults.recipientDisplayName,
+      ),
+      bankName: _readString(source['bankName'], defaults.bankName),
+      bankAccountNumber: _readString(
+        source['bankAccountNumber'],
+        defaults.bankAccountNumber,
+      ),
+      promptPayPhoneNumber: _readOptionalString(source['promptPayPhoneNumber']),
+      promptPayNationalIdOrTaxId: _readOptionalString(
+        source['promptPayNationalIdOrTaxId'],
+      ),
+      merchantQrPayload: _readOptionalString(source['merchantQrPayload']),
+      slipProviderLabel: _readString(
+        source['slipProviderLabel'],
+        defaults.slipProviderLabel,
+      ),
+    );
+  }
+
+  static String _readString(Object? value, String fallback) {
+    final normalized = _readOptionalString(value);
+    return normalized ?? fallback;
+  }
+
+  static String? _readOptionalString(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    final normalized = value.toString().trim();
+    return normalized.isEmpty ? null : normalized;
+  }
+}
+
+class PaymentCollectionConfigService {
+  PaymentCollectionConfigService._();
+
+  static final PaymentCollectionConfigService instance = PaymentCollectionConfigService._();
+
+  static const String collectionPath = 'payment_config';
+  static const String documentId = 'collection';
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  DocumentReference<Map<String, dynamic>> get _documentRef =>
+      _firestore.collection(collectionPath).doc(documentId);
+
+  Future<PaymentCollectionSettings> loadOnce() async {
+    try {
+      final snapshot = await _documentRef.get().timeout(const Duration(seconds: 5));
+      return PaymentCollectionSettings.fromFirestore(snapshot.data());
+    } catch (_) {
+      return PaymentCollectionSettings.defaults;
+    }
+  }
+
+  Stream<PaymentCollectionSettings> watch() {
+    return _documentRef.snapshots().map(
+      (snapshot) => PaymentCollectionSettings.fromFirestore(snapshot.data()),
+    );
+  }
+}
+
+class PaymentChannelDefinition {
+  const PaymentChannelDefinition({
+    required this.type,
+    required this.title,
+    required this.description,
+    required this.isConfigured,
+    this.qrPayload,
+    this.destinationLabel,
+  });
+
+  final PaymentChannelType type;
+  final String title;
+  final String description;
+  final bool isConfigured;
+  final String? qrPayload;
+  final String? destinationLabel;
+}

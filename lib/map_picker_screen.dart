@@ -1,8 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart' as latlng;
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 class PickedLocation {
   const PickedLocation({
@@ -35,12 +36,12 @@ class MapPickerScreen extends StatefulWidget {
 }
 
 class _MapPickerScreenState extends State<MapPickerScreen> {
-  static const latlng.LatLng _bangkokCenter = latlng.LatLng(13.7563, 100.5018);
+  static const LatLng _bangkokCenter = LatLng(13.7563, 100.5018);
 
   final TextEditingController _searchController = TextEditingController();
-  final MapController _mapController = MapController();
 
-  late latlng.LatLng _selectedPosition;
+  GoogleMapController? _mapController;
+  late LatLng _selectedPosition;
   String _selectedLabel = 'ตำแหน่งที่เลือก';
   String? _selectedSubtitle;
   bool _isSearching = false;
@@ -52,7 +53,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     super.initState();
     _selectedPosition = widget.initialLocation == null
         ? _bangkokCenter
-        : latlng.LatLng(
+        : LatLng(
             widget.initialLocation!.latitude,
             widget.initialLocation!.longitude,
           );
@@ -60,9 +61,11 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     _selectedSubtitle = widget.initialLocation?.subtitle;
 
     if (widget.initialLocation == null) {
-      _getCurrentLocation();
+      unawaited(_getCurrentLocation());
     } else {
-      _resolveAddress(_selectedPosition, fallbackTitle: _selectedLabel);
+      unawaited(
+        _resolveAddress(_selectedPosition, fallbackTitle: _selectedLabel),
+      );
     }
   }
 
@@ -72,23 +75,23 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     try {
       final permissionGranted = await _ensureLocationPermission();
       if (!permissionGranted) {
-        setState(() => _isLoadingLocation = false);
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+      final position = await Geolocator.getCurrentPosition();
+      final target = LatLng(position.latitude, position.longitude);
 
-      final target = latlng.LatLng(position.latitude, position.longitude);
+      if (!mounted) {
+        return;
+      }
+
       setState(() {
         _selectedPosition = target;
         _selectedLabel = 'ตำแหน่งปัจจุบัน';
         _selectedSubtitle = null;
       });
 
-      _mapController.move(target, 16);
-
+      await _moveCamera(target);
       await _resolveAddress(target, fallbackTitle: 'ตำแหน่งปัจจุบัน');
     } catch (error) {
       _showSnackBar('ไม่สามารถดึงตำแหน่งได้: $error');
@@ -123,32 +126,45 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     return true;
   }
 
-  Future<void> _searchLocation(String query) async {
-    if (query.trim().isEmpty) {
+  Future<void> _moveCamera(LatLng target) async {
+    await _mapController?.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(target: target, zoom: 16),
+      ),
+    );
+  }
+
+  Future<void> _searchByText(String query) async {
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) {
       return;
     }
 
+    FocusScope.of(context).unfocus();
     setState(() => _isSearching = true);
 
     try {
-      final locations = await locationFromAddress(query);
+      final locations = await locationFromAddress(trimmedQuery);
       if (locations.isEmpty) {
         _showSnackBar('ไม่พบตำแหน่งที่ค้นหา');
         return;
       }
 
       final first = locations.first;
-      final target = latlng.LatLng(first.latitude, first.longitude);
+      final target = LatLng(first.latitude, first.longitude);
+
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _selectedPosition = target;
-        _selectedLabel = query;
+        _selectedLabel = trimmedQuery;
         _selectedSubtitle = null;
       });
 
-      _mapController.move(target, 16);
-
-      await _resolveAddress(target, fallbackTitle: query);
+      await _moveCamera(target);
+      await _resolveAddress(target, fallbackTitle: trimmedQuery);
     } catch (error) {
       _showSnackBar('ค้นหาสถานที่ไม่สำเร็จ: $error');
     } finally {
@@ -159,7 +175,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   }
 
   Future<void> _resolveAddress(
-    latlng.LatLng position, {
+    LatLng position, {
     required String fallbackTitle,
   }) async {
     setState(() => _isResolvingAddress = true);
@@ -218,10 +234,20 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     }
   }
 
+  Future<void> _handleMapPositionChanged(
+    LatLng position, {
+    required String fallbackTitle,
+  }) async {
+    setState(() {
+      _selectedPosition = position;
+      _selectedLabel = fallbackTitle;
+      _selectedSubtitle = null;
+    });
+    await _resolveAddress(position, fallbackTitle: fallbackTitle);
+  }
+
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -256,7 +282,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
             child: TextField(
               controller: _searchController,
               textInputAction: TextInputAction.search,
-              onSubmitted: _searchLocation,
+              onSubmitted: _searchByText,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 hintText: 'ค้นหาสถานที่หรือที่อยู่',
                 prefixIcon: const Icon(Icons.search),
@@ -270,14 +297,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                         ),
                       )
                     : (_searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () {
-                                _searchController.clear();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.clear),
-                            )),
+                        ? null
+                        : IconButton(
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.clear),
+                          )),
                 filled: true,
                 fillColor: Colors.white,
                 border: OutlineInputBorder(
@@ -285,51 +312,46 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                   borderSide: BorderSide.none,
                 ),
               ),
-              onChanged: (_) => setState(() {}),
             ),
           ),
           Expanded(
             child: Stack(
               children: <Widget>[
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _selectedPosition,
-                    initialZoom: 15,
-                    onTap: (_, latlng.LatLng position) {
-                      setState(() {
-                        _selectedPosition = position;
-                        _selectedLabel = 'ตำแหน่งที่เลือก';
-                        _selectedSubtitle = null;
-                      });
-                      _resolveAddress(position, fallbackTitle: 'ตำแหน่งที่เลือก');
-                    },
+                GoogleMap(
+                  initialCameraPosition: CameraPosition(
+                    target: _selectedPosition,
+                    zoom: 15,
                   ),
-                  children: <Widget>[
-                    TileLayer(
-                      urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.van2',
-                    ),
-                    MarkerLayer(
-                      markers: <Marker>[
-                        Marker(
-                          point: _selectedPosition,
-                          width: 56,
-                          height: 56,
-                          child: const Icon(
-                            Icons.location_on,
-                            size: 42,
-                            color: Color(0xFFD84315),
+                  onMapCreated: (GoogleMapController controller) {
+                    _mapController = controller;
+                  },
+                  myLocationEnabled: true,
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                  mapToolbarEnabled: false,
+                  markers: <Marker>{
+                    Marker(
+                      markerId: const MarkerId('selected-location'),
+                      position: _selectedPosition,
+                      draggable: true,
+                      onDragEnd: (LatLng position) {
+                        unawaited(
+                          _handleMapPositionChanged(
+                            position,
+                            fallbackTitle: 'ตำแหน่งที่เลือก',
                           ),
-                        ),
-                      ],
+                        );
+                      },
                     ),
-                    RichAttributionWidget(
-                      attributions: <SourceAttribution>[
-                        TextSourceAttribution('OpenStreetMap contributors'),
-                      ],
-                    ),
-                  ],
+                  },
+                  onTap: (LatLng position) {
+                    unawaited(
+                      _handleMapPositionChanged(
+                        position,
+                        fallbackTitle: 'ตำแหน่งที่เลือก',
+                      ),
+                    );
+                  },
                 ),
                 Positioned(
                   top: 16,
@@ -432,6 +454,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   @override
   void dispose() {
+    _mapController?.dispose();
     _searchController.dispose();
     super.dispose();
   }

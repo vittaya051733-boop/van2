@@ -1,8 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
 
-import 'utils/shop_profile_resolver.dart';
-
 class PublicCatalogProduct {
   const PublicCatalogProduct({
     required this.id,
@@ -41,32 +39,13 @@ class PublicCatalogSection {
   final List<PublicCatalogProduct> products;
 }
 
-class _ResolvedShopProfile {
-  const _ResolvedShopProfile({
-    this.name,
-    this.imageUrl,
-  });
-
-  final String? name;
-  final String? imageUrl;
-}
-
 class PublicCatalogService {
   PublicCatalogService._();
 
-  static const List<String> _allRegistrationCollections = <String>[
-    'market_registrations',
-    'shop_registrations',
-    'restaurant_registrations',
-    'pharmacy_registrations',
-  ];
-
   static Stream<List<PublicCatalogSection>> streamAllSections() {
-    final query = FirebaseFirestore.instance
-        .collection('products')
-        .where('isActive', isEqualTo: true);
+    final query = FirebaseFirestore.instance.collection('products');
 
-    return _streamSectionsFromQuery(query).map(
+    return _streamSectionsFromQuery(query, '', '').map(
       (sections) => sections.toList()
         ..sort(
           (left, right) => (left.shopName ?? left.shopId).compareTo(
@@ -77,12 +56,9 @@ class PublicCatalogService {
   }
 
   static Stream<List<PublicCatalogSection>> streamSectionsByServiceType(String serviceType) {
-    final query = FirebaseFirestore.instance
-        .collection('products')
-        .where('serviceType', isEqualTo: serviceType)
-        .where('isActive', isEqualTo: true);
+    final query = FirebaseFirestore.instance.collection('products');
 
-    return _streamSectionsFromQuery(query);
+    return _streamSectionsFromQuery(query, serviceType, '');
   }
 
   static Stream<List<PublicCatalogSection>> streamSectionsByShopId(String shopId) {
@@ -91,28 +67,43 @@ class PublicCatalogService {
       return Stream<List<PublicCatalogSection>>.value(const <PublicCatalogSection>[]);
     }
 
-    final query = FirebaseFirestore.instance
-        .collection('products')
-        .where('ownerUid', isEqualTo: normalizedShopId)
-        .where('isActive', isEqualTo: true);
+    final query = FirebaseFirestore.instance.collection('products');
 
-    return _streamSectionsFromQuery(query);
+    return _streamSectionsFromQuery(query, '', normalizedShopId);
   }
 
   static Stream<List<PublicCatalogSection>> _streamSectionsFromQuery(
     Query<Map<String, dynamic>> query,
+    String requiredServiceType,
+    String requiredShopId,
   ) {
     return query.snapshots().asyncMap((snapshot) async {
       final Map<String, List<PublicCatalogProduct>> grouped = <String, List<PublicCatalogProduct>>{};
       final Map<String, String> serviceTypeByShopId = <String, String>{};
+      final normalizedTargetServiceType = requiredServiceType.trim().isEmpty
+          ? null
+          : _normalizeServiceType(requiredServiceType);
+      final normalizedTargetShopId = requiredShopId.trim();
 
       for (final doc in snapshot.docs) {
         final data = doc.data();
-        final shopId = ((data['ownerUid'] as String?) ?? '').trim();
+        if (!_isProductActive(data)) continue;
+
+        final shopId = _readShopId(data);
         if (shopId.isEmpty) continue;
 
-        final serviceType = (data['serviceType'] as String?)?.trim();
-        if (serviceType != null && serviceType.isNotEmpty) {
+        if (normalizedTargetShopId.isNotEmpty && shopId != normalizedTargetShopId) {
+          continue;
+        }
+
+        final serviceType = _readServiceType(data);
+        if (normalizedTargetServiceType != null &&
+            normalizedTargetServiceType.isNotEmpty &&
+            _normalizeServiceType(serviceType) != normalizedTargetServiceType) {
+          continue;
+        }
+
+        if (serviceType.isNotEmpty) {
           serviceTypeByShopId.putIfAbsent(shopId, () => serviceType);
         }
 
@@ -120,7 +111,7 @@ class PublicCatalogService {
           id: doc.id,
           shopId: shopId,
           shopName: _readShopName(data),
-          shopImageUrl: _readShopImageUrl(data),
+          shopImageUrl: _readShopImage(data),
           shopLatitude: _extractLatitude(data),
           shopLongitude: _extractLongitude(data),
           data: data,
@@ -129,20 +120,15 @@ class PublicCatalogService {
         grouped.putIfAbsent(shopId, () => <PublicCatalogProduct>[]).add(product);
       }
 
-      final registrationProfiles = await _fetchRegistrationProfiles(serviceTypeByShopId);
+      const registrationImages = <String, String>{};
 
       return grouped.entries
           .map((entry) {
             final products = entry.value;
             if (products.isEmpty) return null;
             final first = products.first;
-            final registrationProfile = registrationProfiles[entry.key];
-            final shopName = _preferResolvedValue(
-              registrationProfile?.name,
-              first.shopName,
-            );
-            final shopImageUrl = _preferResolvedValue(
-              registrationProfile?.imageUrl,
+            final shopImageUrl = _preferRegistrationImage(
+              registrationImages[entry.key],
               first.shopImageUrl,
             );
             final mappedProducts = products
@@ -150,7 +136,7 @@ class PublicCatalogService {
                   (product) => PublicCatalogProduct(
                     id: product.id,
                     shopId: product.shopId,
-                    shopName: shopName,
+                    shopName: product.shopName,
                     shopImageUrl: shopImageUrl,
                     shopLatitude: product.shopLatitude,
                     shopLongitude: product.shopLongitude,
@@ -161,7 +147,7 @@ class PublicCatalogService {
 
             return PublicCatalogSection(
               shopId: entry.key,
-              shopName: shopName,
+              shopName: first.shopName,
               shopImageUrl: shopImageUrl,
               shopLatitude: first.shopLatitude,
               shopLongitude: first.shopLongitude,
@@ -173,163 +159,6 @@ class PublicCatalogService {
     });
   }
 
-  static Future<Map<String, _ResolvedShopProfile>> _fetchRegistrationProfiles(
-    Map<String, String> serviceTypeByShopId,
-  ) async {
-    if (serviceTypeByShopId.isEmpty) {
-      return const <String, _ResolvedShopProfile>{};
-    }
-
-    final Map<String, Set<String>> shopIdsByCollection = <String, Set<String>>{};
-    for (final entry in serviceTypeByShopId.entries) {
-      final collection = _registrationCollectionForServiceType(entry.value);
-      if (collection != null) {
-        shopIdsByCollection.putIfAbsent(collection, () => <String>{}).add(entry.key);
-      } else {
-        for (final fallbackCollection in _allRegistrationCollections) {
-          shopIdsByCollection.putIfAbsent(fallbackCollection, () => <String>{}).add(entry.key);
-        }
-      }
-    }
-
-    final List<Future<Map<String, _ResolvedShopProfile>>> tasks = shopIdsByCollection.entries
-        .map(
-          (entry) => _fetchProfilesFromCollection(
-            collection: entry.key,
-            shopIds: entry.value.toList(growable: false),
-          ),
-        )
-        .toList(growable: false);
-
-    final results = await Future.wait(tasks);
-    final merged = <String, _ResolvedShopProfile>{};
-    for (final result in results) {
-      for (final entry in result.entries) {
-        merged.putIfAbsent(entry.key, () => entry.value);
-      }
-    }
-    return merged;
-  }
-
-  static Future<Map<String, _ResolvedShopProfile>> _fetchProfilesFromCollection({
-    required String collection,
-    required List<String> shopIds,
-  }) async {
-    if (shopIds.isEmpty) {
-      return const <String, _ResolvedShopProfile>{};
-    }
-
-    final ref = FirebaseFirestore.instance.collection(collection);
-    final results = <String, _ResolvedShopProfile>{};
-
-    for (final chunk in _chunkIds(shopIds, 10)) {
-      final ownerQuery = await ref.where('ownerId', whereIn: chunk).get();
-      for (final doc in ownerQuery.docs) {
-        final ownerId = (doc.data()['ownerId'] as String?)?.trim();
-        if (ownerId == null || ownerId.isEmpty) {
-          continue;
-        }
-        final profile = _buildResolvedShopProfile(doc.data());
-        if (profile == null) {
-          continue;
-        }
-        results.putIfAbsent(ownerId, () => profile);
-      }
-
-      final docIdQuery = await ref.where(FieldPath.documentId, whereIn: chunk).get();
-      for (final doc in docIdQuery.docs) {
-        final shopId = doc.id.trim();
-        if (shopId.isEmpty) {
-          continue;
-        }
-        final profile = _buildResolvedShopProfile(doc.data());
-        if (profile == null) {
-          continue;
-        }
-        results.putIfAbsent(shopId, () => profile);
-      }
-    }
-
-    return results;
-  }
-
-  static Iterable<List<String>> _chunkIds(List<String> values, int size) sync* {
-    for (var index = 0; index < values.length; index += size) {
-      final end = index + size > values.length ? values.length : index + size;
-      yield values.sublist(index, end);
-    }
-  }
-
-  static List<PublicCatalogProduct> _mapProducts({
-    required String shopId,
-    required String? shopName,
-    required String? shopImageUrl,
-    required double? shopLatitude,
-    required double? shopLongitude,
-    required List<String> orderedIds,
-    required Map<String, Map<String, dynamic>> docsById,
-  }) {
-    if (orderedIds.isEmpty || docsById.isEmpty) {
-      return const <PublicCatalogProduct>[];
-    }
-
-    return orderedIds
-        .map((id) {
-          final data = docsById[id];
-          if (data == null) return null;
-          final ownerUid = (data['ownerUid'] as String?)?.trim();
-          if (ownerUid != shopId) return null;
-
-          return PublicCatalogProduct(
-            id: id,
-            shopId: shopId,
-            shopName: shopName,
-            shopImageUrl: shopImageUrl,
-            shopLatitude: shopLatitude,
-            shopLongitude: shopLongitude,
-            data: data,
-          );
-        })
-        .whereType<PublicCatalogProduct>()
-        .toList(growable: false);
-  }
-}
-
-_ResolvedShopProfile? _buildResolvedShopProfile(Map<String, dynamic> data) {
-  final imageUrl = _readShopImageUrl(data);
-  final name = _readShopName(data);
-  if (imageUrl == null && name == null) {
-    return null;
-  }
-  return _ResolvedShopProfile(name: name, imageUrl: imageUrl);
-}
-
-String? _readShopName(Map<String, dynamic>? data) {
-  final resolved = ShopProfileResolver.resolveName(data);
-  if (resolved != null && resolved.trim().isNotEmpty) {
-    return resolved.trim();
-  }
-
-  final shopName = (data?['shopName'] as String?)?.trim();
-  if (shopName != null && shopName.isNotEmpty) {
-    return shopName;
-  }
-
-  return null;
-}
-
-String? _readShopImageUrl(Map<String, dynamic>? data) {
-  final resolved = ShopProfileResolver.resolveImageUrl(data);
-  if (resolved != null && resolved.trim().isNotEmpty) {
-    return resolved.trim();
-  }
-
-  final shopImageUrl = (data?['shopImageUrl'] as String?)?.trim();
-  if (shopImageUrl != null && shopImageUrl.isNotEmpty) {
-    return shopImageUrl;
-  }
-
-  return null;
 }
 
 double? _extractLatitude(Map<String, dynamic> data) {
@@ -384,32 +213,193 @@ double? _toDouble(Object? value) {
   return null;
 }
 
-String? _registrationCollectionForServiceType(String serviceType) {
-  final normalized = serviceType.trim();
-  switch (normalized) {
-    case 'ตลาด':
-      return 'market_registrations';
-    case 'ร้านค้า':
-      return 'shop_registrations';
-    case 'ร้านอาหาร':
-      return 'restaurant_registrations';
-    case 'ร้านขายยา':
-      return 'pharmacy_registrations';
-    default:
-      return null;
-  }
-}
-
-String? _preferResolvedValue(String? primary, String? fallback) {
-  final primaryValue = primary?.trim();
-  if (primaryValue != null && primaryValue.isNotEmpty) {
-    return primaryValue;
+String? _preferRegistrationImage(String? registrationImageUrl, String? productImageUrl) {
+  final registration = registrationImageUrl?.trim();
+  if (registration != null && registration.isNotEmpty) {
+    return registration;
   }
 
-  final fallbackValue = fallback?.trim();
-  if (fallbackValue != null && fallbackValue.isNotEmpty) {
-    return fallbackValue;
+  final product = productImageUrl?.trim();
+  if (product != null && product.isNotEmpty) {
+    return product;
   }
 
   return null;
+}
+
+bool _isProductActive(Map<String, dynamic> data) {
+  final raw = data['isActive'] ?? data['active'] ?? data['is_open'];
+  if (raw is bool) {
+    return raw;
+  }
+  if (raw is num) {
+    return raw != 0;
+  }
+  if (raw is String) {
+    final normalized = raw.trim().toLowerCase();
+    if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+      return true;
+    }
+    if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+      return false;
+    }
+  }
+
+  // Require explicit active=true for customer catalog visibility.
+  return false;
+}
+
+String _readShopId(Map<String, dynamic> data) {
+  final candidates = <Object?>[
+    data['ownerUid'],
+    data['ownerId'],
+    data['owner_id'],
+    data['shopId'],
+    data['shop_id'],
+    data['shopOwnerId'],
+    data['shopOwnerUid'],
+    data['merchantId'],
+    data['merchantUid'],
+    data['owner'],
+    data['uid'],
+  ];
+
+  for (final candidate in candidates) {
+    final value = candidate?.toString().trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+String? _readShopName(Map<String, dynamic> data) {
+  final candidates = <Object?>[
+    data['shopName'],
+    data['name'],
+    data['displayName'],
+    data['businessName'],
+    data['storeName'],
+  ];
+
+  for (final candidate in candidates) {
+    final value = candidate?.toString().trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+String? _readShopImage(Map<String, dynamic> data) {
+  final candidates = <Object?>[
+    data['shopImageUrl'],
+    data['imageUrl'],
+    data['photoUrl'],
+    data['logoUrl'],
+  ];
+
+  for (final candidate in candidates) {
+    final value = candidate?.toString().trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+String _readServiceType(Map<String, dynamic> data) {
+  final candidates = <Object?>[
+    data['serviceType'],
+    data['service_type'],
+    data['shopServiceType'],
+    data['shop_type'],
+    data['storeType'],
+    data['store_type'],
+    data['businessType'],
+    data['business_type'],
+    data['businessCategory'],
+    data['business_category'],
+    data['registrationType'],
+    data['registration_type'],
+    data['category'],
+    data['productCategory'],
+    data['type'],
+  ];
+
+  for (final candidate in candidates) {
+    final value = candidate?.toString().trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+String _normalizeServiceType(String rawServiceType) {
+  final normalized = rawServiceType.trim().toLowerCase();
+  if (normalized.isEmpty) {
+    return '';
+  }
+
+  if (normalized.contains('ร้านอาหาร') || normalized.contains('restaurant') || normalized == 'food') {
+    return 'ร้านอาหาร';
+  }
+  if (normalized.contains('ตลาด') || normalized.contains('market')) {
+    return 'ตลาด';
+  }
+  if (normalized.contains('ยา') ||
+      normalized.contains('pharmacy') ||
+      normalized.contains('drugstore') ||
+      normalized.contains('drug_store')) {
+    return 'ร้านขายยา';
+  }
+  if (normalized.contains('ร้านค้า') ||
+      normalized.contains('shop') ||
+      normalized.contains('store') ||
+      normalized.contains('retail') ||
+      normalized.contains('mini_mart') ||
+      normalized.contains('mini mart') ||
+      normalized.contains('ของชำ') ||
+      normalized.contains('ร้านชำ')) {
+    return 'ร้านค้า';
+  }
+
+  switch (normalized) {
+    case 'restaurant':
+    case 'food':
+    case 'ร้านอาหาร':
+      return 'ร้านอาหาร';
+    case 'market':
+    case 'fresh_market':
+    case 'fresh market':
+    case 'ตลาดสด':
+    case 'ตลาด':
+      return 'ตลาด';
+    case 'shop':
+    case 'store':
+    case 'stores':
+    case 'general store':
+    case 'general_store':
+    case 'mini mart':
+    case 'mini_mart':
+    case 'retail':
+    case 'retailer':
+    case 'ร้านชำ':
+    case 'ของชำ':
+    case 'ร้านค้า':
+    case 'shop_registrations':
+      return 'ร้านค้า';
+    case 'pharmacy':
+    case 'drugstore':
+    case 'drug_store':
+    case 'ร้านขายยา':
+      return 'ร้านขายยา';
+    default:
+      return rawServiceType.trim();
+  }
 }

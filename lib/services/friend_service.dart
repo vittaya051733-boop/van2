@@ -8,6 +8,7 @@ class FriendService {
   FriendService();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static const String _customerUsersCollection = 'customer_users';
   static const Duration _cacheTtl = Duration(minutes: 5);
   static const int _perCollectionSearchLimit = 40;
   static const int _perCollectionSuggestionLimit = 25;
@@ -23,7 +24,7 @@ class FriendService {
 
   Stream<List<FriendPreview>> watchFriends(String ownerId) {
     final ref = _firestore
-        .collection('users')
+        .collection(_customerUsersCollection)
         .doc(ownerId)
         .collection('friends')
         .orderBy('lastActivity', descending: true);
@@ -36,7 +37,7 @@ class FriendService {
   }
 
   Future<UserProfile?> ensureCurrentUserProfile(User user) async {
-    final docRef = _firestore.collection('users').doc(user.uid);
+    final docRef = _firestore.collection(_customerUsersCollection).doc(user.uid);
     final snapshot = await docRef.get();
     final profile = await _resolveCanonicalProfile(
       user.uid,
@@ -53,7 +54,7 @@ class FriendService {
   }
 
   Future<UserProfile?> getProfile(String uid) async {
-    final snapshot = await _firestore.collection('users').doc(uid).get();
+    final snapshot = await _firestore.collection(_customerUsersCollection).doc(uid).get();
     final profile = await _resolveCanonicalProfile(uid, userData: snapshot.data());
     if (profile == null) {
       return null;
@@ -67,7 +68,7 @@ class FriendService {
     if (normalized.isEmpty) return null;
 
     final directQuery = await _firestore
-        .collection('users')
+      .collection(_customerUsersCollection)
         .where('phoneNumber', isEqualTo: normalized)
         .limit(1)
         .get();
@@ -94,7 +95,7 @@ class FriendService {
         profileCompleted: (data['isProfileCompleted'] as bool?) ?? false,
       );
 
-      await _firestore.collection('users').doc(doc.id).set(
+      await _firestore.collection(_customerUsersCollection).doc(doc.id).set(
             <String, dynamic>{
               ...profile.toFirestore(),
               'phoneNumber': normalized,
@@ -175,7 +176,7 @@ class FriendService {
 
     final exclude = <String>{ownerId};
     final existingFriends = await _firestore
-        .collection('users')
+      .collection(_customerUsersCollection)
         .doc(ownerId)
         .collection('friends')
         .limit(200)
@@ -248,7 +249,7 @@ class FriendService {
     if (suggestions.length < limit) {
       final fallbackLimit = ((limit - suggestions.length) * 3).clamp(12, 60).toInt();
       final userSnapshot = await _firestore
-          .collection('users')
+          .collection(_customerUsersCollection)
           .orderBy('updatedAt', descending: true)
           .limit(fallbackLimit)
           .get();
@@ -328,7 +329,7 @@ class FriendService {
 
   Future<String?> _getOwnerServiceType(String ownerId) async {
     try {
-      final userDoc = await _firestore.collection('users').doc(ownerId).get();
+      final userDoc = await _firestore.collection(_customerUsersCollection).doc(ownerId).get();
       final serviceType = (userDoc.data()?['serviceType'] as String?)?.trim();
       if (serviceType != null && serviceType.isNotEmpty) {
         return serviceType;
@@ -398,7 +399,7 @@ class FriendService {
     }
 
     final ownerFriendRef =
-        _firestore.collection('users').doc(ownerId).collection('friends').doc(friend.uid);
+      _firestore.collection(_customerUsersCollection).doc(ownerId).collection('friends').doc(friend.uid);
     final already = await ownerFriendRef.get();
     if (already.exists) {
       throw const FriendException('คุณเพิ่มเพื่อนคนนี้ไว้แล้ว');
@@ -411,7 +412,7 @@ class FriendService {
 
     final now = FieldValue.serverTimestamp();
     final reverseRef =
-        _firestore.collection('users').doc(friend.uid).collection('friends').doc(ownerId);
+      _firestore.collection(_customerUsersCollection).doc(friend.uid).collection('friends').doc(ownerId);
 
     final batch = _firestore.batch();
     batch.set(ownerFriendRef, <String, dynamic>{
@@ -547,7 +548,7 @@ class FriendService {
   }
 
   Future<Map<String, dynamic>?> _loadUserData(String uid) async {
-    final snapshot = await _firestore.collection('users').doc(uid).get();
+    final snapshot = await _firestore.collection(_customerUsersCollection).doc(uid).get();
     return snapshot.data();
   }
 
@@ -580,7 +581,7 @@ class FriendService {
       return;
     }
     await _firestore
-        .collection('users')
+      .collection(_customerUsersCollection)
         .doc(ownerId)
         .collection('friends')
         .doc(friendId)

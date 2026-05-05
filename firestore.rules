@@ -42,6 +42,54 @@ service cloud.firestore {
           );
     }
 
+    function isUnverifiedPromptPayOrder(data) {
+      return data != null
+          && data.paymentMethod != null
+          && data.paymentMethod == 'promptpay_qr'
+          && data.paymentStatus != null
+          && data.paymentStatus != 'verified';
+    }
+
+    function canAccessOrderAsParticipant(data) {
+      return signedIn()
+          && data != null
+          && (
+            (data.customerId != null && data.customerId == uid())
+            || (
+              !isUnverifiedPromptPayOrder(data)
+              && (
+                (data.shopId != null && data.shopId == uid())
+                || (data.shopOwnerId != null && data.shopOwnerId == uid())
+                || (data.driverId != null && data.driverId == uid())
+              )
+            )
+          );
+    }
+
+    function canCreateVan3NotificationForOrder() {
+      return request.resource.data.orderId is string
+          && request.resource.data.orderId != ''
+          && exists(/databases/$(database)/documents/orders/$(request.resource.data.orderId))
+          && signedIn()
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data != null
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerId != null
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerId == uid()
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId != null
+          && request.resource.data.recipientUid == get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerConfirmed == true
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.riderNotifyReady == true
+          && !isUnverifiedPromptPayOrder(get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data);
+    }
+
+    function canCreateAppNotification() {
+      return signedIn()
+          && (
+            request.resource.data.targetApp != 'van3'
+            || request.resource.data.sourceApp != 'van2_customer'
+            || canCreateVan3NotificationForOrder()
+          );
+    }
+
     function isCallParticipant(data) {
       return signedIn()
           && data != null
@@ -53,6 +101,12 @@ service cloud.firestore {
 
     // แอปเช็คอัปเดต ต้องอ่านได้ก่อนล็อกอิน (ใช้ใน AppUpdateGate)
     match /app_updates/{docId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // อัตราบวกเพิ่มราคากลางของระบบ (เช่น 7% = 0.07)
+    match /pricing_config/{docId} {
       allow get, list: if true;
       allow create, update, delete: if isAdmin();
     }
@@ -72,8 +126,8 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.ownerUid == uid();
     }
 
-    // โปรไฟล์ผู้ใช้ (ใช้เก็บ fcmToken ฯลฯ)
-    match /users/{userId} {
+    // โปรไฟล์ผู้ใช้ฝั่งลูกค้า (ใช้เก็บ fcmToken ฯลฯ)
+    match /customer_users/{userId} {
       allow get: if isSelf(userId);
       allow create, update, delete: if isSelf(userId);
       allow list: if false;
@@ -83,6 +137,24 @@ service cloud.firestore {
         allow get, list: if isSelf(userId);
         allow create, update, delete: if isSelf(userId);
       }
+    }
+
+    // โปรไฟล์ผู้ใช้เดิม (รองรับช่วง migration)
+    match /users/{userId} {
+      allow get: if isSelf(userId);
+      allow create, update, delete: if isSelf(userId);
+      allow list: if false;
+
+      match /friends/{friendId} {
+        allow get, list: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
+      }
+    }
+
+    // สถานะไรเดอร์ออนไลน์ (ใช้ในหน้าตะกร้าฝั่งลูกค้า และอัปเดตจากแอปไรเดอร์)
+    match /riders/{riderId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isSelf(riderId);
     }
 
     // ข้อมูลสัญญา
@@ -156,14 +228,14 @@ service cloud.firestore {
 
     // ออเดอร์
     match /orders/{orderId} {
-      allow read: if isOrderParticipant(resource.data);
+      allow read: if canAccessOrderAsParticipant(resource.data);
       allow create: if isOrderParticipant(request.resource.data);
-      allow update: if isOrderParticipant(resource.data);
+      allow update: if canAccessOrderAsParticipant(resource.data);
       allow delete: if isAdmin();
 
       match /timeline/{timelineId} {
         allow read, write: if signedIn()
-            && isOrderParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data);
+            && canAccessOrderAsParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data);
       }
     }
 
@@ -193,6 +265,21 @@ service cloud.firestore {
       allow create: if isCallParticipant(request.resource.data);
       allow update: if isCallParticipant(resource.data);
       allow delete: if isAdmin();
+    }
+
+    // การแจ้งเตือนข้ามแอป (van3 -> van1/van2)
+    match /app_notifications/{notificationId} {
+      allow create: if canCreateAppNotification();
+      allow get, list: if signedIn() && resource.data.recipientUid == uid();
+      allow update: if signedIn()
+          && resource.data.recipientUid == uid()
+          && request.resource.data.recipientUid == resource.data.recipientUid;
+      allow delete: if isAdmin();
+    }
+
+    match /payment_config/{documentId} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     // Default deny

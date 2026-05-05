@@ -32,25 +32,17 @@ class VanFirebaseMessagingService : FlutterFirebaseMessagingService() {
 
     private fun showIncomingCallNotification(data: Map<String, String>) {
         val channelId = data["channelId"] ?: return
+        val appId = data["appId"]
         val token = data["token"] ?: return
         val callerName = data["callerName"] ?: "ผู้โทร"
         val callerId = data["callerId"] ?: data["caller_id"]
         val callerPhoto = data["callerPhotoUrl"]
         val isVideo = data["callType"] == "video" || data["isVideo"].equals("true", true)
 
-        val intent = MainActivityIntentBuilder.build(
-            context = this,
-            channelId = channelId,
-            token = token,
-            callerId = callerId,
-            callerName = callerName,
-            callerPhoto = callerPhoto,
-            isVideo = isVideo
-        )
-
         val incomingActivityIntent = IncomingCallActivityIntentBuilder.build(
             context = this,
             channelId = channelId,
+            appId = appId,
             token = token,
             callerId = callerId,
             callerName = callerName,
@@ -69,28 +61,6 @@ class VanFirebaseMessagingService : FlutterFirebaseMessagingService() {
         ensureChannel(notificationManager)
         wakeDeviceForIncomingCall()
 
-        if (!VanMerchantApp.isAppInForeground()) {
-            IncomingCallOverlayController.show(
-                context = this,
-                data = IncomingCallOverlayData(
-                    channelId = channelId,
-                    callerName = callerName,
-                    isVideo = isVideo,
-                ),
-                onOpenCallScreen = {
-                    try {
-                        startActivity(incomingActivityIntent)
-                    } catch (error: Exception) {
-                        Log.w(TAG, "Unable to open call screen from overlay", error)
-                    }
-                },
-                onDismiss = {
-                    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                    manager.cancel(NOTIFICATION_ID_INCOMING_CALL)
-                },
-            )
-        }
-
         val notification = NotificationCompat.Builder(this, CALL_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle(if (isVideo) "สายวิดีโอคอลเข้า" else "สายเข้าจาก $callerName")
@@ -108,7 +78,7 @@ class VanFirebaseMessagingService : FlutterFirebaseMessagingService() {
             .build()
 
         notificationManager.notify(NOTIFICATION_ID_INCOMING_CALL, notification)
-        CallIntentRouter.deliverIntent(intent)
+        CallIntentRouter.deliverIntent(incomingActivityIntent)
         try {
             startActivity(incomingActivityIntent)
         } catch (error: Exception) {
@@ -211,6 +181,7 @@ private object IncomingCallActivityIntentBuilder {
     fun build(
         context: Context,
         channelId: String,
+        appId: String?,
         token: String,
         callerId: String?,
         callerName: String,
@@ -219,9 +190,9 @@ private object IncomingCallActivityIntentBuilder {
     ) = Intent(context, IncomingCallActivity::class.java).apply {
         action = MainActivity.ACTION_SHOW_INCOMING_CALL
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-            Intent.FLAG_ACTIVITY_CLEAR_TOP or
             Intent.FLAG_ACTIVITY_SINGLE_TOP
         putExtra(MainActivity.EXTRA_CHANNEL_ID, channelId)
+        putExtra(MainActivity.EXTRA_APP_ID, appId)
         putExtra(MainActivity.EXTRA_CALL_TOKEN, token)
         putExtra(MainActivity.EXTRA_CALLER_ID, callerId.orEmpty())
         putExtra(MainActivity.EXTRA_CALLER_NAME, callerName)

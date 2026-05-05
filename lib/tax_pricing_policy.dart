@@ -1,10 +1,44 @@
 class TaxPricingPolicy {
   TaxPricingPolicy._();
 
-  // Centralized pricing config so future rate changes are made in one file.
-  static const num taxableMarkupRate = 0.07;
-  static const num nonTaxableMarkupRate = 0.07;
-  static const num toppingMarkupRate = 0.07;
+  // 7% fuse defaults are used when Firestore config is missing/invalid.
+  static const double defaultTaxableMarkupRate = 0.07;
+  static const double defaultNonTaxableMarkupRate = 0.07;
+  static const double defaultToppingMarkupRate = 0.07;
+
+  static double _taxableMarkupRate = defaultTaxableMarkupRate;
+  static double _nonTaxableMarkupRate = defaultNonTaxableMarkupRate;
+  static double _toppingMarkupRate = defaultToppingMarkupRate;
+
+  static double get taxableMarkupRate => _taxableMarkupRate;
+  static double get nonTaxableMarkupRate => _nonTaxableMarkupRate;
+  static double get toppingMarkupRate => _toppingMarkupRate;
+
+  static void configureRates({
+    required double taxableMarkupRate,
+    required double nonTaxableMarkupRate,
+    required double toppingMarkupRate,
+  }) {
+    _taxableMarkupRate = _sanitizeRate(
+      taxableMarkupRate,
+      defaultTaxableMarkupRate,
+    );
+    _nonTaxableMarkupRate = _sanitizeRate(
+      nonTaxableMarkupRate,
+      defaultNonTaxableMarkupRate,
+    );
+    _toppingMarkupRate = _sanitizeRate(
+      toppingMarkupRate,
+      defaultToppingMarkupRate,
+    );
+  }
+
+  static double _sanitizeRate(double value, double fallback) {
+    if (value.isNaN || value.isInfinite || value < 0 || value > 5) {
+      return fallback;
+    }
+    return value;
+  }
 
   static bool isTaxableProduct(Map<String, dynamic> data) {
     const boolKeys = <String>[

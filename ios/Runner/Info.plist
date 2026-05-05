@@ -47,5 +47,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>แอปนี้ต้องใช้ไมโครโฟนสำหรับการโทรด้วยเสียงและวิดีโอ</string>
+	<key>NSCameraUsageDescription</key>
+	<string>แอปนี้ต้องใช้กล้องสำหรับการโทรวิดีโอระหว่างร้านค้าและไรเดอร์</string>
 </dict>
 </plist>

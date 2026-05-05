@@ -172,9 +172,9 @@ class CategoryCatalogScreen extends StatelessWidget {
           }
 
           return ListView.separated(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             itemCount: sections.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 16),
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
               final section = sections[index];
               return _ShopSectionCard(
@@ -212,46 +212,28 @@ class _ShopSectionCard extends StatelessWidget {
       shopLongitude: section.shopLongitude,
     );
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 18,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const double spacing = 8;
+        final itemWidth = (constraints.maxWidth - spacing) / 2;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
           children: [
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: section.products.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.72,
-              ),
-              itemBuilder: (context, index) {
-                return _ProductCard(
-                  product: section.products[index],
+            for (final product in section.products)
+              SizedBox(
+                width: itemWidth,
+                child: _ProductCard(
+                  product: product,
                   shopLatitude: section.shopLatitude,
                   shopLongitude: section.shopLongitude,
                   shopDistanceKm: shopDistanceKm,
                   onConfirmOrder: onConfirmOrder,
-                );
-              },
-            ),
+                ),
+              ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -301,85 +283,79 @@ class _ProductCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: imageUrl != null
-                      ? CachedNetworkImage(
-                          imageUrl: imageUrl,
-                          cacheManager: _localFirstImageCacheManager,
-                          useOldImageOnUrlChange: true,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => _ProductPlaceholder(name: name),
-                        )
-                      : _ProductPlaceholder(name: name),
+        AspectRatio(
+          aspectRatio: 1.05,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: imageUrl != null
+                ? CachedNetworkImage(
+                    imageUrl: imageUrl,
+                    cacheManager: _localFirstImageCacheManager,
+                    useOldImageOnUrlChange: true,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorWidget: (_, __, ___) => _ProductPlaceholder(name: name),
+                  )
+                : _ProductPlaceholder(name: name),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF111827),
+              ),
+        ),
+        if (cleanDescription.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            cleanDescription,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF6B7280),
                 ),
+          ),
+        ],
+        if (distanceText != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.near_me_outlined,
+                size: 14,
+                color: Color(0xFF6B7280),
               ),
-              const SizedBox(height: 8),
-              Text(
-                name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF111827),
-                    ),
-              ),
-              if (cleanDescription.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  cleanDescription,
-                  maxLines: 2,
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'ห่าง $distanceText',
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: const Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
                       ),
                 ),
-              ],
-              if (distanceText != null) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.near_me_outlined,
-                      size: 14,
-                      color: Color(0xFF6B7280),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        'ห่าง $distanceText',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: const Color(0xFF6B7280),
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 6),
-              Text(
-                '฿$adjustedPriceText',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFFE55A00),
-                    ),
               ),
             ],
           ),
+        ],
+        const SizedBox(height: 6),
+        Text(
+          '฿$adjustedPriceText',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFFE55A00),
+              ),
         ),
         const SizedBox(height: 8),
         SizedBox(
@@ -641,7 +617,7 @@ String? _formatDistanceKm(double? distanceKm) {
                         ? null
                         : () {
                       final selectedNames = selectedToppings
-                          .map((index) => toppings[index].displayLabel)
+                          .map((index) => toppings[index].label)
                           .toList(growable: false);
                       final toppingTotal = selectedToppings.fold<num>(
                         0,

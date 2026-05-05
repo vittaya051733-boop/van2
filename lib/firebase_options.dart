@@ -31,7 +31,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '802503541368',
     projectId: 'van-merchant',
     authDomain: 'van-merchant.firebaseapp.com',
-    storageBucket: 'van-merchant.firebasestorage.app',
+    storageBucket: 'van-merchant-van2-storage-802503541368',
     measurementId: 'G-WNMT2HGLVF',
   );
 
@@ -40,7 +40,7 @@ class DefaultFirebaseOptions {
     appId: '1:802503541368:android:c8333c4310663e19f6a38d',
     messagingSenderId: '802503541368',
     projectId: 'van-merchant',
-    storageBucket: 'van-merchant.firebasestorage.app',
+    storageBucket: 'van-merchant-van2-storage-802503541368',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -48,7 +48,7 @@ class DefaultFirebaseOptions {
     appId: '1:802503541368:ios:ea92f5b881a6c472f6a38d',
     messagingSenderId: '802503541368',
     projectId: 'van-merchant',
-    storageBucket: 'van-merchant.firebasestorage.app',
+    storageBucket: 'van-merchant-van2-storage-802503541368',
     iosBundleId: 'van-merchan',
   );
 }

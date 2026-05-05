@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
@@ -37,6 +38,7 @@ class NotificationService {
     'pharmacy_registrations',
     'other_registrations',
   ];
+  static const String _customerUsersCollection = 'customer_users';
 
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
@@ -49,6 +51,7 @@ class NotificationService {
   final Set<String> _cancelledChannelIds = <String>{};
   String? _backgroundReturnChannelId;
   bool _shouldReturnAppToBackground = false;
+  StreamSubscription<User?>? _authSubscription;
 
   /// เริ่มต้นระบบ Notification
   Future<void> initialize() async {
@@ -101,6 +104,17 @@ class NotificationService {
 
     // Listen to token refresh
     _firebaseMessaging.onTokenRefresh.listen(_saveFCMToken);
+
+    _authSubscription ??= FirebaseAuth.instance.authStateChanges().listen((user) async {
+      if (user == null || user.isAnonymous) {
+        return;
+      }
+      final token = _currentFcmToken ?? await _firebaseMessaging.getToken();
+      if (token == null || token.isEmpty) {
+        return;
+      }
+      await saveUserFcmToken(user.uid);
+    });
 
     // Handle foreground messages
     FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
@@ -201,6 +215,11 @@ class NotificationService {
       }
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
+      if (user.isAnonymous) {
+        _currentFcmToken = token;
+        debugPrint('Skip persisting FCM token for anonymous user');
+        return;
+      }
 
       final batch = FirebaseFirestore.instance.batch();
       final String? registrationCollection = await _resolveRegistrationCollection(user.uid);
@@ -213,8 +232,10 @@ class NotificationService {
         debugPrint('⚠️ ไม่พบคอลเลกชันร้านค้าของ ${user.uid} ข้ามการอัปเดต shopFCMToken');
       }
 
-      // อัพเดทใน users collection (สร้างหรืออัปเดตได้เสมอ)
-      final userDocRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      // อัพเดทในคอลเลกชัน customer_users (สร้างหรืออัปเดตได้เสมอ)
+      final userDocRef = FirebaseFirestore.instance
+          .collection(_customerUsersCollection)
+          .doc(user.uid);
       batch.set(userDocRef, {'fcmToken': token}, SetOptions(merge: true));
 
       await batch.commit();
@@ -228,7 +249,10 @@ class NotificationService {
   Future<String?> _resolveRegistrationCollection(String userId) async {
     String? collection;
     try {
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+      final userDoc = await FirebaseFirestore.instance
+          .collection(_customerUsersCollection)
+          .doc(userId)
+          .get();
       collection = _collectionFromServiceType(
         (userDoc.data()?['serviceType'] as String?)?.trim(),
       );
@@ -294,7 +318,7 @@ class NotificationService {
         return;
       }
 
-      await FirebaseFirestore.instance.collection('users').doc(userId).set(
+      await FirebaseFirestore.instance.collection(_customerUsersCollection).doc(userId).set(
         {'fcmToken': token},
         SetOptions(merge: true),
       );
@@ -343,6 +367,7 @@ class NotificationService {
             'chatId': data['chatId'],
             'senderId': data['senderId'],
             'senderName': senderName,
+            'orderId': data['orderId'],
           }),
         );
       }
@@ -355,6 +380,10 @@ class NotificationService {
       final callerId = data['callerId'] ?? data['caller_id'];
       if (currentUid != null && callerId != null && currentUid == callerId) {
         debugPrint('Skip showing incoming UI for own outgoing call');
+        return;
+      }
+      if (Platform.isAndroid) {
+        debugPrint('Android native fullscreen incoming-call UI will present this call');
         return;
       }
       _navigateToIncomingCall(
@@ -469,6 +498,10 @@ class NotificationService {
         debugPrint('Skip navigating to CallScreen for self-originated notification');
         return;
       }
+      if (Platform.isAndroid) {
+        debugPrint('Android native fullscreen incoming-call UI handles notification taps');
+        return;
+      }
       _navigateToIncomingCall(
         channelId: message.data['channelId'] ?? '',
         appId: message.data['appId'],
@@ -491,7 +524,7 @@ class NotificationService {
   }
 
   void _setupCallIntentBridge() {
-    if (!Platform.isAndroid || _callIntentBridgeAttached) {
+    if ((!Platform.isAndroid && !Platform.isIOS) || _callIntentBridgeAttached) {
       return;
     }
     _callIntentBridgeAttached = true;
@@ -501,7 +534,7 @@ class NotificationService {
       }
       _handleIncomingCallPayload(call.arguments);
     });
-    _drainPendingAndroidIntents();
+    _drainPendingPlatformIntents();
   }
 
   Map<String, dynamic>? _normalizePlatformPayload(dynamic arguments) {
@@ -515,7 +548,7 @@ class NotificationService {
     return normalized;
   }
 
-  Future<void> _drainPendingAndroidIntents() async {
+  Future<void> _drainPendingPlatformIntents() async {
     try {
       final List<dynamic>? pending =
           await _callIntentChannel.invokeListMethod<dynamic>(_methodDrainPending);
@@ -524,7 +557,7 @@ class NotificationService {
         _handleIncomingCallPayload(rawPayload);
       }
     } catch (error) {
-      debugPrint('Unable to drain Android call intents: $error');
+      debugPrint('Unable to drain call intents: $error');
     }
   }
 
@@ -581,7 +614,7 @@ class NotificationService {
     required String callerName,
     String? callerPhotoUrl,
     required bool isVideo,
-    int retryCount = 8,
+    int retryCount = 30,
     bool minimizeOnEnd = false,
   }) {
     if (channelId.isEmpty || token == null || token.isEmpty) {
@@ -597,10 +630,9 @@ class NotificationService {
       return;
     }
     final navigatorState = MyApp.navigatorKey.currentState;
-    final context = navigatorState?.context;
-    if (context == null) {
+    if (navigatorState == null) {
       if (retryCount <= 0) {
-        debugPrint('Navigator context unavailable, cannot open CallScreen');
+        debugPrint('Navigator not ready, cannot open CallScreen');
         return;
       }
       Future.delayed(const Duration(milliseconds: 300), () {
@@ -714,11 +746,15 @@ class NotificationService {
     final senderIdRaw = data['senderId'] ?? data['sender_id'];
     final String? senderId = senderIdRaw?.toString();
     final senderName = (data['senderName'] ?? data['title'] ?? 'คู่สนทนา').toString();
+    final orderId = data['orderId']?.toString().trim();
 
     UserProfile? profile;
     if (senderId != null && senderId.isNotEmpty) {
       try {
-        final doc = await FirebaseFirestore.instance.collection('users').doc(senderId).get();
+        final doc = await FirebaseFirestore.instance
+            .collection(_customerUsersCollection)
+            .doc(senderId)
+            .get();
         if (doc.exists) {
           profile = UserProfile.fromSnapshot(doc);
         }
@@ -734,7 +770,10 @@ class NotificationService {
 
     navigatorState.push(
       MaterialPageRoute(
-        builder: (_) => ChatRoomScreen(friendProfile: profile!),
+        builder: (_) => ChatRoomScreen(
+          friendProfile: profile!,
+          orderId: orderId != null && orderId.isNotEmpty ? orderId : null,
+        ),
       ),
     );
   }
@@ -749,7 +788,8 @@ class NotificationService {
     required String calleeFCMToken,
     required String callType, // 'voice' หรือ 'video'
   }) async {
-    final callable = FirebaseFunctions.instanceFor().httpsCallable('callUser');
+    final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
+        .httpsCallable('callUser');
     final result = await callable.call({
       'callerId': callerId,
       'callerName': callerName,

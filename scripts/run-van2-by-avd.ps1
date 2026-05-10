@@ -1,6 +1,7 @@
 param(
     [string]$Serial,
-    [string]$AvdName = 'van2'
+    [string]$AvdName = 'van2',
+    [switch]$Attach
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,11 +70,14 @@ Write-Host "Launching $packageName on $target" -ForegroundColor Cyan
 & $adb -s $target shell am force-stop $packageName | Out-Null
 & $adb -s $target shell am start -n "$packageName/$activityName"
 
-Write-Host "Attaching Flutter debugger to $target" -ForegroundColor Cyan
-$attachArgs = @(
-    'attach',
-    '-d',
-    $target
-)
-
-flutter @attachArgs
+if ($Attach) {
+    Write-Host "Attaching Flutter debugger to $target" -ForegroundColor Cyan
+    $attachArgs = @(
+        'attach',
+        '-d',
+        $target
+    )
+    flutter @attachArgs
+} else {
+    Write-Host "App launched. Skipping 'flutter attach' (use -Attach to enable)." -ForegroundColor Green
+}

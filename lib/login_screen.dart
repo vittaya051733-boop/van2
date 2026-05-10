@@ -698,21 +698,18 @@ class _LoginTextField extends StatelessWidget {
     required this.icon,
     required this.controller,
     this.obscureText = false,
-    this.keyboardType,
   });
 
   final String label;
   final IconData icon;
   final TextEditingController controller;
   final bool obscureText;
-  final TextInputType? keyboardType;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
       obscureText: obscureText,
-      keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon),

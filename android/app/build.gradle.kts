@@ -37,6 +37,39 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Strip Agora extensions we don't use (voice-only calls).
+    // Removes ~30+ MB per ABI from the final APK.
+    packaging {
+        jniLibs {
+            excludes += listOf(
+                "**/libagora_lip_sync_extension.so",
+                "**/libagora_spatial_audio_extension.so",
+                "**/libagora_clear_vision_extension.so",
+                "**/libagora_face_capture_extension.so",
+                "**/libagora_segmentation_extension.so",
+                "**/libagora_audio_beauty_extension.so",
+                "**/libagora_content_inspect_extension.so",
+                "**/libagora_face_detection_extension.so",
+                "**/libagora_video_quality_analyzer_extension.so",
+                "**/libagora_video_av1_encoder_extension.so",
+                "**/libagora_video_av1_decoder_extension.so",
+                "**/libagora_video_encoder_extension.so",
+                "**/libagora_video_decoder_extension.so",
+                "**/libagora_screen_capture_extension.so"
+                // NOTE: libagora-ffmpeg.so MUST stay bundled — it is loaded
+                // as a dynamic dependency of libagora-rtc-sdk.so. Removing it
+                // causes UnsatisfiedLinkError at startup whenever the Agora
+                // plugin tries to load (calls crash before ringing).
+            )
         }
     }
 }

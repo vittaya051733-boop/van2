@@ -111,6 +111,9 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   @override
   Widget build(BuildContext context) {
     final profile = _currentProfile;
+    final friendName = widget.friendProfile.displayName.trim();
+    final friendInitial =
+        friendName.isNotEmpty ? friendName.characters.first.toUpperCase() : '?';
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -120,7 +123,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                   ? NetworkImage(widget.friendProfile.photoUrl!)
                   : null,
               child: widget.friendProfile.photoUrl == null
-                  ? Text(widget.friendProfile.displayName.characters.first.toUpperCase())
+                  ? Text(friendInitial)
                   : null,
             ),
             const SizedBox(width: 12),
@@ -420,7 +423,7 @@ class _MessageBubble extends StatelessWidget {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(callIcon, color: textColor.withOpacity(0.8), size: 18),
+            Icon(callIcon, color: textColor.withValues(alpha: 0.8), size: 18),
             const SizedBox(width: 8),
             Flexible(
               child: Text(

@@ -7,7 +7,7 @@ const logger = require('firebase-functions/logger');
 const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -1626,6 +1626,251 @@ exports.verifyOrderPaymentSlip = onCall(
   },
 );
 
+exports.verifyTopUpSlip = onCall(
+  {
+    region: DEFAULT_REGION,
+    secrets: [SLIPOK_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนส่งสลิป');
+    }
+
+    const expectedAmount = parseNumber(request.data?.expectedAmount);
+    const storagePath = String(request.data?.storagePath || '').trim();
+    const storageBucket = String(request.data?.bucket || '').trim();
+    const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
+    const fileName = String(request.data?.fileName || 'slip.jpg').trim() || 'slip.jpg';
+    const contentType = String(request.data?.contentType || 'image/jpeg').trim() || 'image/jpeg';
+
+    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
+      throw new HttpsError('invalid-argument', 'กรุณาระบุ expectedAmount ให้ถูกต้อง');
+    }
+    if (!storagePath) {
+      throw new HttpsError('invalid-argument', 'กรุณาระบุ storagePath');
+    }
+    if (!paymentGroupId) {
+      throw new HttpsError('invalid-argument', 'กรุณาระบุ paymentGroupId');
+    }
+
+    if (storageBucket) {
+      const allowedBuckets = new Set([
+        'van-merchant-van2-storage-802503541368',
+        'van-merchant-van3-storage-802503541368',
+      ]);
+      if (!allowedBuckets.has(storageBucket)) {
+        throw new HttpsError('invalid-argument', 'ไม่รองรับ bucket ที่ระบุ');
+      }
+    }
+
+    const paymentCollectionSettings = await getPaymentCollectionSettings();
+
+    const bucket = storageBucket
+      ? admin.storage().bucket(storageBucket)
+      : admin.storage().bucket();
+    const file = bucket.file(storagePath);
+    const [exists] = await file.exists();
+    if (!exists) {
+      throw new HttpsError('not-found', 'ไม่พบไฟล์สลิปใน Firebase Storage');
+    }
+
+    let verificationStatus = 'error';
+    let verificationMessage = 'ส่งสลิปไปตรวจไม่สำเร็จ';
+    let responseCode = 0;
+    let providerPayload = null;
+    let verifiedSlipAmount = null;
+    let providerRawText = '';
+
+    try {
+      const [buffer] = await file.download();
+      const apiKey = readRequiredConfiguredSecret(
+        SLIPOK_API_KEY_SECRET,
+        'SLIPOK_API_KEY',
+        'ระบบตรวจสลิป Slip OK',
+      );
+
+      const formData = new FormData();
+      formData.append('files', new Blob([buffer], { type: contentType }), fileName);
+      formData.append('log', 'true');
+      formData.append('amount', expectedAmount.toString());
+
+      const slipResponse = await fetch(SLIPOK_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'x-authorization': apiKey,
+        },
+        body: formData,
+      });
+
+      responseCode = slipResponse.status;
+      providerRawText = await slipResponse.text();
+      try {
+        providerPayload = providerRawText ? JSON.parse(providerRawText) : null;
+      } catch (_) {
+        providerPayload = { raw: providerRawText };
+      }
+
+      const rawCode = Number(providerPayload?.code);
+      const requestSucceeded = providerPayload?.success === true;
+      const dataSucceeded = providerPayload?.data?.success === true;
+      verifiedSlipAmount = parseNumber(providerPayload?.data?.amount);
+      const hasValidAmount = Number.isFinite(verifiedSlipAmount) && verifiedSlipAmount > 0;
+      const receiverValidation = validateSlipReceiver(providerPayload, paymentCollectionSettings);
+      const hasMatchingReceiver = receiverValidation.matched;
+      const hasMatchingAmount = amountsMatch(verifiedSlipAmount, expectedAmount);
+
+      if (rawCode === 1012) {
+        verificationStatus = 'failed';
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          'สลิปนี้ถูกใช้ตรวจสอบไปแล้ว',
+        );
+      } else if (
+        slipResponse.ok &&
+        requestSucceeded &&
+        dataSucceeded &&
+        hasMatchingReceiver &&
+        hasValidAmount
+      ) {
+        verificationStatus = 'verified';
+        if (hasMatchingAmount) {
+          verificationMessage = 'ตรวจสอบสลิปสำเร็จ เติมเครดิตเรียบร้อย';
+        } else if (verifiedSlipAmount < expectedAmount) {
+          const remaining = expectedAmount - verifiedSlipAmount;
+          verificationMessage = `ตรวจสอบสลิปสำเร็จ แต่ยอดจ่ายไม่ครบ (ขาด ${remaining.toFixed(2)} บาท) เติมเครดิตตามยอดที่จ่ายแล้ว`;
+        } else {
+          const overpaid = verifiedSlipAmount - expectedAmount;
+          verificationMessage = `ตรวจสอบสลิปสำเร็จ แต่ยอดจ่ายเกิน (เกิน ${overpaid.toFixed(2)} บาท) เติมเครดิตตามยอดที่จ่ายแล้ว`;
+        }
+      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingReceiver) {
+        verificationStatus = 'failed';
+        providerPayload = {
+          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
+          code: Number(providerPayload?.code) || 1014,
+          data: {
+            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
+            receiverValidation,
+            expectedRecipientDisplayName: paymentCollectionSettings.recipientDisplayName,
+            expectedReceiverTargets: buildExpectedReceiverTargets(paymentCollectionSettings),
+            message:
+              providerPayload?.data?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+          },
+          message: providerPayload?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+        };
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+        );
+      } else {
+        verificationStatus = 'failed';
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          `Slip OK responded with status ${slipResponse.status}`,
+        );
+      }
+    } catch (error) {
+      verificationStatus = 'error';
+      providerPayload = {
+        message: error instanceof Error ? error.message : String(error),
+      };
+      verificationMessage = buildSlipVerificationMessage(
+        verificationStatus,
+        providerPayload,
+        'ส่งสลิปไปตรวจสอบไม่สำเร็จ',
+      );
+      logger.error('verifyTopUpSlip failed', {
+        uid: request.auth.uid,
+        paymentGroupId,
+        storagePath,
+        message: verificationMessage,
+      });
+    }
+
+    const slipOkFeedbackId = await writeSlipOkFeedbackLog({
+      feedbackId: paymentGroupId,
+      customerUid: request.auth.uid,
+      orderIds: [],
+      paymentGroupId,
+      storagePath,
+      fileName,
+      contentType,
+      expectedCombinedAmount: expectedAmount,
+      verifiedSlipAmount,
+      verificationStatus,
+      verificationMessage,
+      responseCode,
+      providerPayload,
+      providerRawText,
+    });
+
+    const creditedAmount = Number.isFinite(verifiedSlipAmount) ? verifiedSlipAmount : 0;
+    const remainingAmount = Math.max(0, expectedAmount - creditedAmount);
+    const overpaidAmount = Math.max(0, creditedAmount - expectedAmount);
+
+    if (verificationStatus !== 'verified') {
+      return {
+        success: false,
+        status: verificationStatus,
+        message: verificationMessage,
+        expectedAmount,
+        verifiedAmount: creditedAmount,
+        remainingAmount,
+        overpaidAmount,
+        slipFeedbackId: slipOkFeedbackId,
+        paymentGroupId,
+      };
+    }
+
+    const creditDocId = `slipok_topup_${slipOkFeedbackId}`;
+    const creditRef = db.collection('credits').doc(creditDocId);
+
+    await db.runTransaction(async (tx) => {
+      const existing = await tx.get(creditRef);
+      if (existing.exists) {
+        return;
+      }
+      tx.set(
+        creditRef,
+        {
+          uid: request.auth.uid,
+          amount: creditedAmount,
+          timestamp: FieldValue.serverTimestamp(),
+          provider: 'slipok',
+          providerLabel: 'Slip OK',
+          status: 'verified',
+          creditedByCloudFunction: true,
+          slipFeedbackId: slipOkFeedbackId,
+          paymentGroupId,
+          storagePath,
+          expectedAmount,
+          verifiedAmount: creditedAmount,
+          remainingAmount,
+          overpaidAmount,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    });
+
+    return {
+      success: true,
+      status: verificationStatus,
+      message: verificationMessage,
+      expectedAmount,
+      verifiedAmount: creditedAmount,
+      remainingAmount,
+      overpaidAmount,
+      slipFeedbackId: slipOkFeedbackId,
+      paymentGroupId,
+      creditId: creditDocId,
+    };
+  },
+);
+
 async function resolveRecipientFcmToken(targetApp, recipientUid) {
   if (!recipientUid) return null;
 
@@ -2331,3 +2576,208 @@ exports.cancelCallInvite = functions
     await clearActiveCallInvite(callerId, calleeId);
     return { success: true };
   });
+
+// ----------------------------------------------------------------------------
+// Reassign orders when a rider closes their ready toggle.
+// Triggered by van3 client which clears driverId and sets needsReassign=true.
+// We pick the next nearest online-ready rider (excluding the previous one)
+// and update the order so it can be delivered again.
+// ----------------------------------------------------------------------------
+
+const REASSIGN_FRESH_LOCATION_MIN = 10;
+const REASSIGN_MAX_RADIUS_KM = 25;
+
+function _toNum(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = parseFloat(v);
+    return isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function _haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+async function _findNextNearestRider({
+  excludeUid,
+  shopLat,
+  shopLng,
+  isPassenger,
+}) {
+  const fieldName = isPassenger ? 'passengerReady' : 'onlineReady';
+  const snap = await db
+    .collection('riders')
+    .where(fieldName, '==', true)
+    .get();
+
+  if (snap.empty) return null;
+
+  const now = Date.now();
+  const candidates = [];
+  const fallback = [];
+  for (const doc of snap.docs) {
+    if (doc.id === excludeUid) continue;
+    const data = doc.data() || {};
+    const geo = data.currentLocation;
+    let lat = null;
+    let lng = null;
+    if (geo && typeof geo.latitude === 'number') {
+      lat = geo.latitude;
+      lng = geo.longitude;
+    } else {
+      lat = _toNum(data.latitude);
+      lng = _toNum(data.longitude);
+    }
+    if (lat == null || lng == null) continue;
+    if (lat === 0 && lng === 0) continue;
+
+    const distanceKm =
+      shopLat != null && shopLng != null
+        ? _haversineKm(shopLat, shopLng, lat, lng)
+        : 0;
+
+    const item = { uid: doc.id, distanceKm };
+    fallback.push(item);
+
+    const status = String(data.locationStatus || '').trim();
+    if (status === 'offline') continue;
+
+    const ts = data.locationUpdatedAt || data.updatedAt;
+    const ageMs =
+      ts && typeof ts.toMillis === 'function'
+        ? now - ts.toMillis()
+        : Number.POSITIVE_INFINITY;
+    if (ageMs > REASSIGN_FRESH_LOCATION_MIN * 60 * 1000) continue;
+    if (shopLat != null && distanceKm > REASSIGN_MAX_RADIUS_KM) continue;
+
+    candidates.push(item);
+  }
+
+  const list = candidates.length > 0 ? candidates : fallback;
+  if (list.length === 0) return null;
+  list.sort((a, b) => a.distanceKm - b.distanceKm);
+  return list[0];
+}
+
+exports.reassignOrderOnRiderClose = onDocumentUpdated(
+  {
+    region: DEFAULT_REGION,
+    document: 'orders/{orderId}',
+  },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+
+    // Trigger only on the transition into needsReassign=true.
+    const turnedOn =
+      after.needsReassign === true && before.needsReassign !== true;
+    if (!turnedOn) return;
+
+    // Don't re-pick if a driver was set again or the status moved on.
+    if (after.driverId) return;
+    const status = String(after.status || '').trim();
+    if (status !== 'awaiting_rider' && status !== 'pending') return;
+
+    const orderId = event.params.orderId;
+    const previousDriverId = String(after.previousDriverId || '').trim();
+    const orderType = String(after.orderType || '').trim();
+    const serviceType = String(after.serviceType || '').trim();
+    const isPassenger =
+      orderType === 'travel_passenger' || serviceType === 'travel_passenger';
+
+    const shopLocation = after.shopLocation || after.pickupLocation || {};
+    const shopLat =
+      _toNum(shopLocation.latitude) ??
+      _toNum(after.shopLatitude) ??
+      _toNum(after.pickupLatitude);
+    const shopLng =
+      _toNum(shopLocation.longitude) ??
+      _toNum(after.shopLongitude) ??
+      _toNum(after.pickupLongitude);
+
+    try {
+      const next = await _findNextNearestRider({
+        excludeUid: previousDriverId,
+        shopLat,
+        shopLng,
+        isPassenger,
+      });
+
+      if (!next) {
+        await event.data.after.ref.set(
+          {
+            needsReassign: false,
+            reassignFailedAt: FieldValue.serverTimestamp(),
+            reassignFailureReason: 'no_other_rider_available',
+          },
+          { merge: true },
+        );
+        logger.info(
+          `[reassign] no rider for order ${orderId} (excluded ${previousDriverId})`,
+        );
+        return;
+      }
+
+      await event.data.after.ref.set(
+        {
+          driverId: next.uid,
+          status: 'pending',
+          riderNotifyReady: true,
+          needsReassign: false,
+          reassignedAt: FieldValue.serverTimestamp(),
+          reassignedFromDriverId: previousDriverId || null,
+          assignedRiderAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      // Best-effort notification doc so existing pushAppNotification function
+      // delivers the order to the new rider.
+      try {
+        await db.collection('app_notifications').add({
+          type: 'order',
+          targetApp: 'van3_rider',
+          recipientUid: next.uid,
+          orderId,
+          action: 'order_reassigned',
+          sourceApp: after.sourceApp || 'van2_customer',
+          customerConfirmed: after.customerConfirmed === true,
+          riderNotifyReady: true,
+          title: 'งานใหม่ที่ได้รับมอบหมาย',
+          body: 'มีออเดอร์ที่ถูกส่งต่อถึงคุณ กรุณาตรวจสอบ',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      } catch (e) {
+        logger.warn(`[reassign] notify failed for ${orderId}: ${e}`);
+      }
+
+      logger.info(
+        `[reassign] order ${orderId} -> ${next.uid} (${next.distanceKm.toFixed(2)} km)`,
+      );
+    } catch (error) {
+      logger.error(`[reassign] failed for order ${orderId}: ${error}`);
+      try {
+        await event.data.after.ref.set(
+          {
+            needsReassign: false,
+            reassignFailedAt: FieldValue.serverTimestamp(),
+            reassignFailureReason:
+              error instanceof Error ? error.message : String(error),
+          },
+          { merge: true },
+        );
+      } catch (_) {
+        // ignore
+      }
+    }
+  },
+);

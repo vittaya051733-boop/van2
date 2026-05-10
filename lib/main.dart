@@ -28,8 +28,10 @@ import 'shop_qr_scanner_screen.dart';
 import 'storage_helper.dart';
 import 'travel_planner_screen.dart';
 
-const bool kAppCheckForceDebug =
-  bool.fromEnvironment('APP_CHECK_DEBUG', defaultValue: false);
+const bool kAppCheckForceDebug = bool.fromEnvironment(
+  'APP_CHECK_DEBUG',
+  defaultValue: false,
+);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,12 +53,12 @@ Future<void> main() async {
   try {
     await FirebaseAppCheck.instance
         .activate(
-        providerAndroid: useDebugAppCheck
-          ? const AndroidDebugProvider()
-          : const AndroidPlayIntegrityProvider(),
-        providerApple: useDebugAppCheck
-          ? const AppleDebugProvider()
-          : const AppleDeviceCheckProvider(),
+          providerAndroid: useDebugAppCheck
+              ? const AndroidDebugProvider()
+              : const AndroidPlayIntegrityProvider(),
+          providerApple: useDebugAppCheck
+              ? const AppleDebugProvider()
+              : const AppleDeviceCheckProvider(),
         )
         .timeout(const Duration(seconds: 5));
     await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
@@ -223,14 +225,11 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'แว๊นตลาด',
+      title: 'VANTALAD',
       debugShowCheckedModeBanner: false,
       navigatorKey: MyApp.navigatorKey,
       locale: const Locale('th', 'TH'),
-      supportedLocales: const <Locale>[
-        Locale('th', 'TH'),
-        Locale('en', 'US'),
-      ],
+      supportedLocales: const <Locale>[Locale('th', 'TH'), Locale('en', 'US')],
       localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
@@ -292,6 +291,11 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final logoBoxSize = (MediaQuery.sizeOf(context).shortestSide * 0.92)
+        .clamp(220.0, 660.0)
+        .toDouble();
+    final logoPadding = (logoBoxSize * 18 / 220).clamp(18.0, 54.0).toDouble();
+
     return Scaffold(
       body: Container(
         width: double.infinity,
@@ -300,12 +304,12 @@ class _SplashScreenState extends State<SplashScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             Container(
-              width: 220,
-              height: 220,
-              padding: const EdgeInsets.all(18),
+              width: logoBoxSize,
+              height: logoBoxSize,
+              padding: EdgeInsets.all(logoPadding),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(32),
+                borderRadius: BorderRadius.circular(logoBoxSize * 32 / 220),
                 boxShadow: const <BoxShadow>[
                   BoxShadow(
                     color: Color(0x1F000000),
@@ -314,7 +318,10 @@ class _SplashScreenState extends State<SplashScreen> {
                   ),
                 ],
               ),
-              child: Image.asset('assets/logo.png', fit: BoxFit.contain),
+              child: Image.asset(
+                'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                fit: BoxFit.contain,
+              ),
             ),
             const SizedBox(height: 24),
             Text(
@@ -440,7 +447,9 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
             _retryAutoDetectOnResume = true;
             _showSnackBar('กลับเข้าแอปแล้วระบบจะลองระบุตำแหน่งให้อัตโนมัติ');
           } else {
-            _showSnackBar('ไม่สามารถเปิดหน้าตั้งค่าตำแหน่งได้ กรุณาเปิด Location ในเครื่องด้วยตนเอง');
+            _showSnackBar(
+              'ไม่สามารถเปิดหน้าตั้งค่าตำแหน่งได้ กรุณาเปิด Location ในเครื่องด้วยตนเอง',
+            );
           }
         }
         return;
@@ -481,7 +490,9 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
             _retryAutoDetectOnResume = true;
             _showSnackBar('กลับเข้าแอปแล้วระบบจะลองระบุตำแหน่งให้อัตโนมัติ');
           } else {
-            _showSnackBar('ไม่สามารถเปิดหน้า App Settings ได้ กรุณาเปิดสิทธิ์ตำแหน่งในตั้งค่าแอปด้วยตนเอง');
+            _showSnackBar(
+              'ไม่สามารถเปิดหน้า App Settings ได้ กรุณาเปิดสิทธิ์ตำแหน่งในตั้งค่าแอปด้วยตนเอง',
+            );
           }
         }
         return;
@@ -666,7 +677,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
             children: <Widget>[
               Center(
                 child: Image.asset(
-                  'assets/logo.png',
+                  'assets/file_00000000be5472069245fc3bdb122dbb.png',
                   width: 120,
                   height: 120,
                   fit: BoxFit.contain,
@@ -878,7 +889,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isFetchingCurrentLocation = false;
   int _selectedBottomTab = 0;
   int _unreadChatCount = 0;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _unreadChatSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _unreadChatSubscription;
   _ActiveCatalog? _activeCatalog;
   final List<CartLineItem> _cartItems = <CartLineItem>[];
 
@@ -889,15 +901,27 @@ class _HomeScreenState extends State<HomeScreen> {
       assetPath: 'assets/rider.png',
       actionKey: 'travel',
     ),
-    _QuickActionItem(label: 'ร้านอาหาร', assetPath: 'assets/food.png', serviceType: 'ร้านอาหาร'),
-    _QuickActionItem(label: 'ตลาด', assetPath: 'assets/market.png', serviceType: 'ตลาด'),
+    _QuickActionItem(
+      label: 'ร้านอาหาร',
+      assetPath: 'assets/food.png',
+      serviceType: 'ร้านอาหาร',
+    ),
+    _QuickActionItem(
+      label: 'ตลาด',
+      assetPath: 'assets/market.png',
+      serviceType: 'ตลาด',
+    ),
     _QuickActionItem(
       label: 'ร้านค้า',
       badge: 'ดีล',
       assetPath: 'assets/shopping.png',
       serviceType: 'ร้านค้า',
     ),
-    _QuickActionItem(label: 'ร้านขายยา', assetPath: 'assets/pharmacy.png', serviceType: 'ร้านขายยา'),
+    _QuickActionItem(
+      label: 'ร้านขายยา',
+      assetPath: 'assets/pharmacy.png',
+      serviceType: 'ร้านขายยา',
+    ),
     _QuickActionItem(
       label: 'แผนที่',
       icon: Icons.map_outlined,
@@ -941,22 +965,23 @@ class _HomeScreenState extends State<HomeScreen> {
         .where('participants', arrayContains: user.uid)
         .snapshots()
         .listen((snapshot) {
-      var totalUnread = 0;
-      for (final doc in snapshot.docs) {
-        final unreadMap = doc.data()['unreadCounts'] as Map<String, dynamic>?;
-        final unreadValue = unreadMap?[user.uid];
-        if (unreadValue is int) {
-          totalUnread += unreadValue;
-        } else if (unreadValue is num) {
-          totalUnread += unreadValue.toInt();
-        }
-      }
+          var totalUnread = 0;
+          for (final doc in snapshot.docs) {
+            final unreadMap =
+                doc.data()['unreadCounts'] as Map<String, dynamic>?;
+            final unreadValue = unreadMap?[user.uid];
+            if (unreadValue is int) {
+              totalUnread += unreadValue;
+            } else if (unreadValue is num) {
+              totalUnread += unreadValue.toInt();
+            }
+          }
 
-      if (!mounted) {
-        return;
-      }
-      setState(() => _unreadChatCount = totalUnread);
-    });
+          if (!mounted) {
+            return;
+          }
+          setState(() => _unreadChatCount = totalUnread);
+        });
   }
 
   double? get _distanceKm {
@@ -1075,7 +1100,8 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Text('ยกเลิก'),
             ),
             FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
               child: const Text('ใช้พิกัดนี้'),
             ),
           ],
@@ -1090,7 +1116,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final resolvedInput = await _resolveSharedLocationInput(rawValue);
     final coordinates = _parseSharedCoordinates(resolvedInput);
     if (coordinates == null) {
-      _showSnackBar('ไม่พบพิกัดในลิงก์นี้ ลองแชร์แบบมีพิกัดหรือปักหมุดจากแผนที่แทน');
+      _showSnackBar(
+        'ไม่พบพิกัดในลิงก์นี้ ลองแชร์แบบมีพิกัดหรือปักหมุดจากแผนที่แทน',
+      );
       return;
     }
 
@@ -1120,7 +1148,10 @@ class _HomeScreenState extends State<HomeScreen> {
       return rawValue;
     }
 
-    final urlMatch = RegExp(r'https?://[^\s]+', caseSensitive: false).firstMatch(text);
+    final urlMatch = RegExp(
+      r'https?://[^\s]+',
+      caseSensitive: false,
+    ).firstMatch(text);
     final candidateUrl = urlMatch?.group(0) ?? text;
     final candidateUri = Uri.tryParse(candidateUrl);
     if (candidateUri == null || !candidateUri.hasScheme) {
@@ -1131,7 +1162,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final expandedUrl = await _expandShortUrl(candidateUri);
-    if (expandedUrl == null || expandedUrl.isEmpty || expandedUrl == candidateUrl) {
+    if (expandedUrl == null ||
+        expandedUrl.isEmpty ||
+        expandedUrl == candidateUrl) {
       return rawValue;
     }
     return '$rawValue\n$expandedUrl';
@@ -1152,13 +1185,13 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await http
           .get(
             uri,
-            headers: const <String, String>{
-              'User-Agent': 'Mozilla/5.0',
-            },
+            headers: const <String, String>{'User-Agent': 'Mozilla/5.0'},
           )
           .timeout(const Duration(seconds: 8));
       final finalUrl = response.request?.url.toString();
-      if (finalUrl != null && finalUrl.isNotEmpty && finalUrl != uri.toString()) {
+      if (finalUrl != null &&
+          finalUrl.isNotEmpty &&
+          finalUrl != uri.toString()) {
         return _sanitizeSharedUrl(finalUrl);
       }
 
@@ -1264,7 +1297,15 @@ class _HomeScreenState extends State<HomeScreen> {
         enqueue(value);
       }
 
-      for (final key in <String>['q', 'query', 'll', 'daddr', 'destination', 'text', 'u']) {
+      for (final key in <String>[
+        'q',
+        'query',
+        'll',
+        'daddr',
+        'destination',
+        'text',
+        'u',
+      ]) {
         enqueue(uri.queryParameters[key]);
       }
     }
@@ -1308,7 +1349,10 @@ class _HomeScreenState extends State<HomeScreen> {
         r'(?:lng|lon|long|longitude)\s*[:=]\s*(-?\d+(?:\.\d+)?)\D+lat(?:itude)?\s*[:=]\s*(-?\d+(?:\.\d+)?)',
         caseSensitive: false,
       ),
-      RegExp(r'geo:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)', caseSensitive: false),
+      RegExp(
+        r'geo:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)',
+        caseSensitive: false,
+      ),
       RegExp(r'@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)'),
       RegExp(r'!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)', caseSensitive: false),
       RegExp(r'(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)'),
@@ -1337,7 +1381,10 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
-  (double, double)? _toValidCoordinates(String? latitudeRaw, String? longitudeRaw) {
+  (double, double)? _toValidCoordinates(
+    String? latitudeRaw,
+    String? longitudeRaw,
+  ) {
     final latitude = double.tryParse(latitudeRaw ?? '');
     final longitude = double.tryParse(longitudeRaw ?? '');
     if (!_isValidCoordinates(latitude, longitude)) {
@@ -1350,7 +1397,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (latitude == null || longitude == null) {
       return false;
     }
-    return latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+    return latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180;
   }
 
   Future<bool> _ensureLocationPermission() async {
@@ -1623,19 +1673,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final paymentGroupId = 'PAY-${DateTime.now().millisecondsSinceEpoch}';
     final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
-    final storagePath = 'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
+    final storagePath =
+        'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
 
-    final uploadTask = await StorageHelper.instance.ref(storagePath).putData(
-      request.bytes,
-      SettableMetadata(
-        contentType: request.contentType ?? 'image/jpeg',
-        customMetadata: <String, String>{
-          'uploadedBy': user.uid,
-          'paymentGroupId': paymentGroupId,
-          'orderIds': creation.orderIds.join(','),
-        },
-      ),
-    );
+    final uploadTask = await StorageHelper.instance
+        .ref(storagePath)
+        .putData(
+          request.bytes,
+          SettableMetadata(
+            contentType: request.contentType ?? 'image/jpeg',
+            customMetadata: <String, String>{
+              'uploadedBy': user.uid,
+              'paymentGroupId': paymentGroupId,
+              'orderIds': creation.orderIds.join(','),
+            },
+          ),
+        );
     final downloadUrl = await uploadTask.ref.getDownloadURL();
 
     await _attachSlipToOrders(
@@ -1650,8 +1703,9 @@ class _HomeScreenState extends State<HomeScreen> {
       combinedExpectedAmount: creation.combinedGrandTotal,
     );
 
-    final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-        .httpsCallable('verifyOrderPaymentSlip');
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('verifyOrderPaymentSlip');
     final response = await callable.call(<String, dynamic>{
       'orderIds': creation.orderIds,
       'storagePath': storagePath,
@@ -1661,7 +1715,9 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     final payload = response.data;
-    final data = payload is Map ? Map<String, dynamic>.from(payload) : const <String, dynamic>{};
+    final data = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : const <String, dynamic>{};
     final status = (data['status'] as String?)?.trim() ?? 'submitted';
     final message = (data['message'] as String?)?.trim();
 
@@ -1700,22 +1756,26 @@ class _HomeScreenState extends State<HomeScreen> {
       throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
     }
 
-    final paymentGroupId = 'TRAVEL-PAY-${DateTime.now().millisecondsSinceEpoch}';
+    final paymentGroupId =
+        'TRAVEL-PAY-${DateTime.now().millisecondsSinceEpoch}';
     final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
-    final storagePath = 'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
+    final storagePath =
+        'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
 
-    final uploadTask = await StorageHelper.instance.ref(storagePath).putData(
-      request.bytes,
-      SettableMetadata(
-        contentType: request.contentType ?? 'image/jpeg',
-        customMetadata: <String, String>{
-          'uploadedBy': user.uid,
-          'paymentGroupId': paymentGroupId,
-          'orderIds': creation.orderIds.join(','),
-          'orderType': 'travel_passenger',
-        },
-      ),
-    );
+    final uploadTask = await StorageHelper.instance
+        .ref(storagePath)
+        .putData(
+          request.bytes,
+          SettableMetadata(
+            contentType: request.contentType ?? 'image/jpeg',
+            customMetadata: <String, String>{
+              'uploadedBy': user.uid,
+              'paymentGroupId': paymentGroupId,
+              'orderIds': creation.orderIds.join(','),
+              'orderType': 'travel_passenger',
+            },
+          ),
+        );
     final downloadUrl = await uploadTask.ref.getDownloadURL();
 
     await _attachSlipToOrders(
@@ -1730,8 +1790,9 @@ class _HomeScreenState extends State<HomeScreen> {
       combinedExpectedAmount: creation.combinedGrandTotal,
     );
 
-    final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-        .httpsCallable('verifyOrderPaymentSlip');
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('verifyOrderPaymentSlip');
     final response = await callable.call(<String, dynamic>{
       'orderIds': creation.orderIds,
       'storagePath': storagePath,
@@ -1741,7 +1802,9 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     final payload = response.data;
-    final data = payload is Map ? Map<String, dynamic>.from(payload) : const <String, dynamic>{};
+    final data = payload is Map
+        ? Map<String, dynamic>.from(payload)
+        : const <String, dynamic>{};
     final status = (data['status'] as String?)?.trim() ?? 'submitted';
     final message = (data['message'] as String?)?.trim();
 
@@ -1777,35 +1840,32 @@ class _HomeScreenState extends State<HomeScreen> {
     final ordersRef = FirebaseFirestore.instance.collection('orders');
 
     for (final orderId in orderIds) {
-      await ordersRef.doc(orderId).set(
-        <String, dynamic>{
-          'paymentGroupId': paymentGroupId,
-          'paymentSubmittedAt': FieldValue.serverTimestamp(),
-          'paymentStatus': 'awaiting_slip_review',
-          'paymentStatusLabel': 'รอตรวจสลิป',
-          'paymentSlip': <String, dynamic>{
-            'storagePath': storagePath,
-            'downloadUrl': downloadUrl,
-            'fileName': fileName,
-            'contentType': contentType,
-            'sizeBytes': sizeBytes,
-            'uploadedBy': uploadedBy,
-            'uploadedAt': FieldValue.serverTimestamp(),
-          },
-          'paymentVerification': <String, dynamic>{
-            'provider': 'slipok',
-            'providerLabel': 'Slip OK',
-            'status': 'processing',
-            'statusLabel': 'กำลังส่งตรวจสลิป',
-            'requestedAt': FieldValue.serverTimestamp(),
-            'paymentGroupId': paymentGroupId,
-            'expectedCombinedAmount': combinedExpectedAmount,
-            'apiEndpoint': 'https://api.slipok.com/api/line/apikey/64492',
-          },
-          'updatedAt': FieldValue.serverTimestamp(),
+      await ordersRef.doc(orderId).set(<String, dynamic>{
+        'paymentGroupId': paymentGroupId,
+        'paymentSubmittedAt': FieldValue.serverTimestamp(),
+        'paymentStatus': 'awaiting_slip_review',
+        'paymentStatusLabel': 'รอตรวจสลิป',
+        'paymentSlip': <String, dynamic>{
+          'storagePath': storagePath,
+          'downloadUrl': downloadUrl,
+          'fileName': fileName,
+          'contentType': contentType,
+          'sizeBytes': sizeBytes,
+          'uploadedBy': uploadedBy,
+          'uploadedAt': FieldValue.serverTimestamp(),
         },
-        SetOptions(merge: true),
-      );
+        'paymentVerification': <String, dynamic>{
+          'provider': 'slipok',
+          'providerLabel': 'Slip OK',
+          'status': 'processing',
+          'statusLabel': 'กำลังส่งตรวจสลิป',
+          'requestedAt': FieldValue.serverTimestamp(),
+          'paymentGroupId': paymentGroupId,
+          'expectedCombinedAmount': combinedExpectedAmount,
+          'apiEndpoint': 'https://api.slipok.com/api/line/apikey/64492',
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       await ordersRef.doc(orderId).collection('timeline').add(<String, dynamic>{
         'event': 'payment_slip_submitted',
@@ -1819,7 +1879,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<({List<String> orderIds, double combinedGrandTotal})> _createCheckoutOrders({
+  Future<({List<String> orderIds, double combinedGrandTotal})>
+  _createCheckoutOrders({
     required User user,
     required String paymentMethod,
     required String paymentMethodLabel,
@@ -1870,21 +1931,21 @@ class _HomeScreenState extends State<HomeScreen> {
         );
 
         final products = items
-            .map(
-              (item) {
-                final imageUrl = item.imageUrl?.trim();
-                return <String, dynamic>{
-                  'productId': item.productId,
-                  'name': item.productName,
-                  'quantity': item.quantity,
-                  'unitPrice': item.unitPrice,
-                  'selectedToppings': item.selectedToppings,
-                  'lineTotal': item.unitPrice * item.quantity,
-                  if (imageUrl != null && imageUrl.isNotEmpty) 'imageUrl': imageUrl,
-                  if (imageUrl != null && imageUrl.isNotEmpty) 'productImage': imageUrl,
-                };
-              },
-            )
+            .map((item) {
+              final imageUrl = item.imageUrl?.trim();
+              return <String, dynamic>{
+                'productId': item.productId,
+                'name': item.productName,
+                'quantity': item.quantity,
+                'unitPrice': item.unitPrice,
+                'selectedToppings': item.selectedToppings,
+                'lineTotal': item.unitPrice * item.quantity,
+                if (imageUrl != null && imageUrl.isNotEmpty)
+                  'imageUrl': imageUrl,
+                if (imageUrl != null && imageUrl.isNotEmpty)
+                  'productImage': imageUrl,
+              };
+            })
             .toList(growable: false);
 
         final firstItem = items.first;
@@ -1908,23 +1969,23 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         final initialOrderStatus = assignedRider == null
-          ? (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review')
-          : (notifyRider ? 'pending' : 'awaiting_payment_slip_review');
+            ? (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review')
+            : (notifyRider ? 'pending' : 'awaiting_payment_slip_review');
         final initialStatusLabel = assignedRider == null
-          ? (notifyRider
-            ? 'awaiting_nearest_rider'
-            : 'awaiting_payment_slip_review')
-          : (notifyRider
-            ? 'pending_customer_confirmation'
-            : 'awaiting_payment_slip_review');
+            ? (notifyRider
+                  ? 'awaiting_nearest_rider'
+                  : 'awaiting_payment_slip_review')
+            : (notifyRider
+                  ? 'pending_customer_confirmation'
+                  : 'awaiting_payment_slip_review');
 
         try {
           final shouldAssignRiderImmediately = notifyRider;
           await docRef.set(<String, dynamic>{
             'orderId': docRef.id,
             'orderCode': orderCode,
-          'status': initialOrderStatus,
-          'statusLabel': initialStatusLabel,
+            'status': initialOrderStatus,
+            'statusLabel': initialStatusLabel,
             'customerConfirmed': true,
             'customerConfirmedAt': FieldValue.serverTimestamp(),
             'riderNotifyReady': riderNotifyReady,
@@ -1944,10 +2005,13 @@ class _HomeScreenState extends State<HomeScreen> {
             'shopOwnerId': shopId,
             'shopId': shopId,
             'shopName': firstItem.shopName,
-            'driverId': shouldAssignRiderImmediately ? assignedRider?.riderId : null,
+            'driverId': shouldAssignRiderImmediately
+                ? assignedRider?.riderId
+                : null,
             'driverName': null,
             'driverPhone': null,
-            'assignedRiderAt': !shouldAssignRiderImmediately || assignedRider == null
+            'assignedRiderAt':
+                !shouldAssignRiderImmediately || assignedRider == null
                 ? null
                 : FieldValue.serverTimestamp(),
             'customerLocation': <String, dynamic>{
@@ -1993,42 +2057,43 @@ class _HomeScreenState extends State<HomeScreen> {
           });
 
           final timelineRef = docRef.collection('timeline').doc();
-          try {
-            await timelineRef.set(<String, dynamic>{
-              'event': 'order_created',
-              'eventLabel': createdEventLabel,
-              'actorId': user.uid,
-              'actorRole': 'customer',
-              'orderId': docRef.id,
-              'orderCode': orderCode,
-              'status': initialOrderStatus,
-              'timestamp': FieldValue.serverTimestamp(),
-            });
-          } catch (_) {
-            // Keep the order document even if optional timeline write fails.
-          }
+          // Fire-and-forget: ไม่ต้องรอ timeline write เพราะออเดอร์หลักถูกสร้างแล้ว
+          unawaited(timelineRef
+              .set(<String, dynamic>{
+                'event': 'order_created',
+                'eventLabel': createdEventLabel,
+                'actorId': user.uid,
+                'actorRole': 'customer',
+                'orderId': docRef.id,
+                'orderCode': orderCode,
+                'status': initialOrderStatus,
+                'timestamp': FieldValue.serverTimestamp(),
+              })
+              .catchError((_) {}));
 
           if (notifyRider && assignedRider != null) {
-            try {
-              await FirebaseFirestore.instance.collection('app_notifications').add({
-                'targetApp': 'van3',
-                'recipientUid': assignedRider.riderId,
-                'orderId': docRef.id,
-                'title': 'มีคำสั่งซื้อใหม่',
-                'body': orderCode.isNotEmpty
-                    ? 'ออเดอร์ $orderCode จาก ${firstItem.shopName}'
-                    : 'มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}',
-                'read': false,
-                'createdAt': FieldValue.serverTimestamp(),
-                'source': 'van2_customer',
-                'sourceApp': 'van2_customer',
-                'action': 'order_created_customer_confirmed',
-                'customerConfirmed': true,
-                'riderNotifyReady': riderNotifyReady,
-              });
-            } catch (_) {
-              // Keep the order document even if rider notification creation fails.
-            }
+            // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว FCM แค่สำรอง ไม่ต้องรอ
+            unawaited(FirebaseFirestore.instance
+                .collection('app_notifications')
+                .add({
+                  'targetApp': 'van3',
+                  'recipientUid': assignedRider.riderId,
+                  'orderId': docRef.id,
+                  'title': 'มีคำสั่งซื้อใหม่',
+                  'body': orderCode.isNotEmpty
+                      ? 'ออเดอร์ $orderCode จาก ${firstItem.shopName}'
+                      : 'มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}',
+                  'read': false,
+                  'createdAt': FieldValue.serverTimestamp(),
+                  'source': 'van2_customer',
+                  'sourceApp': 'van2_customer',
+                  'action': 'order_created_customer_confirmed',
+                  'customerConfirmed': true,
+                  'riderNotifyReady': riderNotifyReady,
+                })
+                .catchError((_) => FirebaseFirestore.instance
+                    .collection('app_notifications')
+                    .doc()));
           }
 
           createdOrderIds.add(docRef.id);
@@ -2039,14 +2104,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (createdOrderIds.isEmpty) {
-        final failedLabel = failedShops.isEmpty ? '' : ' ร้านที่ล้มเหลว: ${failedShops.join(', ')}';
-        throw Exception('ไม่สามารถสร้างออเดอร์ได้$failedLabel ${lastError ?? ''}'.trim());
+        final failedLabel = failedShops.isEmpty
+            ? ''
+            : ' ร้านที่ล้มเหลว: ${failedShops.join(', ')}';
+        throw Exception(
+          'ไม่สามารถสร้างออเดอร์ได้$failedLabel ${lastError ?? ''}'.trim(),
+        );
       }
 
       if (mounted && shopsWithoutRider.isNotEmpty) {
-        _showSnackBar(
-          'ยังไม่พบไรเดอร์: ${shopsWithoutRider.join(', ')}',
-        );
+        _showSnackBar('ยังไม่พบไรเดอร์: ${shopsWithoutRider.join(', ')}');
       }
 
       if (mounted) {
@@ -2064,7 +2131,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<({List<String> orderIds, double combinedGrandTotal})> _createTravelOrder({
+  Future<({List<String> orderIds, double combinedGrandTotal})>
+  _createTravelOrder({
     required User user,
     required TravelPlannerResult request,
     required String paymentMethod,
@@ -2097,8 +2165,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ? (notifyRider ? 'pending' : 'awaiting_payment_slip_review')
         : (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review');
     final initialStatusLabel = hasAssignedRider
-        ? (notifyRider ? 'pending_customer_confirmation' : 'awaiting_payment_slip_review')
-        : (notifyRider ? 'awaiting_nearest_rider' : 'awaiting_payment_slip_review');
+        ? (notifyRider
+              ? 'pending_customer_confirmation'
+              : 'awaiting_payment_slip_review')
+        : (notifyRider
+              ? 'awaiting_nearest_rider'
+              : 'awaiting_payment_slip_review');
     final shouldAssignRiderImmediately = notifyRider;
 
     await orderRef.set(<String, dynamic>{
@@ -2208,42 +2280,44 @@ class _HomeScreenState extends State<HomeScreen> {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    try {
-      await orderRef.collection('timeline').add(<String, dynamic>{
-        'event': 'order_created',
-        'eventLabel': createdEventLabel,
-        'actorId': user.uid,
-        'actorRole': 'customer',
-        'orderId': orderRef.id,
-        'orderCode': orderCode,
-        'status': initialOrderStatus,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    } catch (_) {
-      // Keep the travel order even if optional timeline write fails.
-    }
+    // Fire-and-forget: timeline ไม่บล็อก user flow
+    unawaited(orderRef
+        .collection('timeline')
+        .add(<String, dynamic>{
+          'event': 'order_created',
+          'eventLabel': createdEventLabel,
+          'actorId': user.uid,
+          'actorRole': 'customer',
+          'orderId': orderRef.id,
+          'orderCode': orderCode,
+          'status': initialOrderStatus,
+          'timestamp': FieldValue.serverTimestamp(),
+        })
+        .catchError((_) => orderRef.collection('timeline').doc()));
 
     if (notifyRider && assignedRider != null) {
-      try {
-        await FirebaseFirestore.instance.collection('app_notifications').add({
-          'targetApp': 'van3',
-          'recipientUid': assignedRider.riderId,
-          'orderId': orderRef.id,
-          'title': 'มีคำขอเดินทางใหม่',
-          'body': orderCode.isNotEmpty
-              ? 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
-              : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
-          'read': false,
-          'createdAt': FieldValue.serverTimestamp(),
-          'source': 'van2_customer',
-          'sourceApp': 'van2_customer',
-          'action': 'travel_order_created_customer_confirmed',
-          'customerConfirmed': true,
-          'riderNotifyReady': riderNotifyReady,
-        });
-      } catch (_) {
-        // Keep the order document even if rider notification creation fails.
-      }
+      // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว
+      unawaited(FirebaseFirestore.instance
+          .collection('app_notifications')
+          .add({
+            'targetApp': 'van3',
+            'recipientUid': assignedRider.riderId,
+            'orderId': orderRef.id,
+            'title': 'มีคำขอเดินทางใหม่',
+            'body': orderCode.isNotEmpty
+                ? 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
+                : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
+            'read': false,
+            'createdAt': FieldValue.serverTimestamp(),
+            'source': 'van2_customer',
+            'sourceApp': 'van2_customer',
+            'action': 'travel_order_created_customer_confirmed',
+            'customerConfirmed': true,
+            'riderNotifyReady': riderNotifyReady,
+          })
+          .catchError((_) => FirebaseFirestore.instance
+              .collection('app_notifications')
+              .doc()));
     }
 
     if (mounted && !hasAssignedRider) {
@@ -2318,7 +2392,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
         if (snapshot.docs.length == 1) {
           return _RiderSearchResult(
-            rider: _RiderDistance(riderId: snapshot.docs.first.id, distanceKm: 0),
+            rider: _RiderDistance(
+              riderId: snapshot.docs.first.id,
+              distanceKm: 0,
+            ),
             searchedRadiusKm: 0,
             onlineRiderCount: 1,
             eligibleRiderCount: 1,
@@ -2356,8 +2433,9 @@ class _HomeScreenState extends State<HomeScreen> {
           .collection('riders')
           .where('onlineReady', isEqualTo: true)
           .get();
-        final singleOnlineRiderId =
-          snapshot.docs.length == 1 ? snapshot.docs.first.id : null;
+      final singleOnlineRiderId = snapshot.docs.length == 1
+          ? snapshot.docs.first.id
+          : null;
 
       final candidates = <_RiderDistance>[];
       final fallbackCandidates = <_RiderDistance>[];
@@ -2399,7 +2477,8 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         fallbackCandidates.add(riderDistance);
 
-        final locationStatus = (data['locationStatus'] as String?)?.trim() ?? '';
+        final locationStatus =
+            (data['locationStatus'] as String?)?.trim() ?? '';
         final locationUpdatedAtRaw = data['locationUpdatedAt'];
         final updatedAtRaw = data['updatedAt'];
         final locationUpdatedAt = locationUpdatedAtRaw is Timestamp
@@ -2416,14 +2495,14 @@ class _HomeScreenState extends State<HomeScreen> {
           continue;
         }
 
-        final ageMinutes = DateTime.now().difference(locationUpdatedAt).inMinutes;
+        final ageMinutes = DateTime.now()
+            .difference(locationUpdatedAt)
+            .inMinutes;
         if (ageMinutes > freshLocationThresholdMinutes) {
           addExcludedReason('stale_location');
           continue;
         }
-        candidates.add(
-          riderDistance,
-        );
+        candidates.add(riderDistance);
       }
 
       if (candidates.isEmpty) {
@@ -2433,7 +2512,9 @@ class _HomeScreenState extends State<HomeScreen> {
             searchedRadiusKm: 10,
             onlineRiderCount: snapshot.docs.length,
             eligibleRiderCount: 1,
-            excludedRiderCount: snapshot.docs.length > 1 ? snapshot.docs.length - 1 : 0,
+            excludedRiderCount: snapshot.docs.length > 1
+                ? snapshot.docs.length - 1
+                : 0,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
             reason: 'single_online_fallback',
           );
@@ -2465,10 +2546,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       for (var radiusKm = 2; radiusKm <= 10; radiusKm += 2) {
-        final inRadius = candidates
-            .where((candidate) => candidate.distanceKm <= radiusKm)
-            .toList(growable: false)
-          ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+        final inRadius =
+            candidates
+                .where((candidate) => candidate.distanceKm <= radiusKm)
+                .toList(growable: false)
+              ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
 
         if (inRadius.isNotEmpty) {
           return _RiderSearchResult(
@@ -2507,7 +2589,6 @@ class _HomeScreenState extends State<HomeScreen> {
         excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
         reason: 'nearest_out_of_radius_fallback',
       );
-
     } catch (e) {
       return _RiderSearchResult(
         rider: null,
@@ -2532,7 +2613,9 @@ class _HomeScreenState extends State<HomeScreen> {
           .collection('riders')
           .where('passengerReady', isEqualTo: true)
           .get();
-      final singleOnlineRiderId = snapshot.docs.length == 1 ? snapshot.docs.first.id : null;
+      final singleOnlineRiderId = snapshot.docs.length == 1
+          ? snapshot.docs.first.id
+          : null;
 
       final candidates = <_RiderDistance>[];
       final fallbackCandidates = <_RiderDistance>[];
@@ -2551,8 +2634,12 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         final geo = data['currentLocation'];
-        final lat = geo is GeoPoint ? geo.latitude : _toDouble(data['latitude']);
-        final lng = geo is GeoPoint ? geo.longitude : _toDouble(data['longitude']);
+        final lat = geo is GeoPoint
+            ? geo.latitude
+            : _toDouble(data['latitude']);
+        final lng = geo is GeoPoint
+            ? geo.longitude
+            : _toDouble(data['longitude']);
 
         if (lat == null || lng == null) {
           addExcludedReason('missing_coordinates');
@@ -2564,11 +2651,20 @@ class _HomeScreenState extends State<HomeScreen> {
           continue;
         }
 
-        final meters = Geolocator.distanceBetween(pickupLatitude, pickupLongitude, lat, lng);
-        final riderDistance = _RiderDistance(riderId: doc.id, distanceKm: meters / 1000.0);
+        final meters = Geolocator.distanceBetween(
+          pickupLatitude,
+          pickupLongitude,
+          lat,
+          lng,
+        );
+        final riderDistance = _RiderDistance(
+          riderId: doc.id,
+          distanceKm: meters / 1000.0,
+        );
         fallbackCandidates.add(riderDistance);
 
-        final locationStatus = (data['locationStatus'] as String?)?.trim() ?? '';
+        final locationStatus =
+            (data['locationStatus'] as String?)?.trim() ?? '';
         final locationUpdatedAtRaw = data['locationUpdatedAt'];
         final updatedAtRaw = data['updatedAt'];
         final locationUpdatedAt = locationUpdatedAtRaw is Timestamp
@@ -2585,7 +2681,9 @@ class _HomeScreenState extends State<HomeScreen> {
           continue;
         }
 
-        final ageMinutes = DateTime.now().difference(locationUpdatedAt).inMinutes;
+        final ageMinutes = DateTime.now()
+            .difference(locationUpdatedAt)
+            .inMinutes;
         if (ageMinutes > freshLocationThresholdMinutes) {
           addExcludedReason('stale_location');
           continue;
@@ -2601,7 +2699,9 @@ class _HomeScreenState extends State<HomeScreen> {
             searchedRadiusKm: 10,
             onlineRiderCount: snapshot.docs.length,
             eligibleRiderCount: 1,
-            excludedRiderCount: snapshot.docs.length > 1 ? snapshot.docs.length - 1 : 0,
+            excludedRiderCount: snapshot.docs.length > 1
+                ? snapshot.docs.length - 1
+                : 0,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
             reason: 'single_passenger_ready_fallback',
           );
@@ -2633,10 +2733,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       for (var radiusKm = 2; radiusKm <= 10; radiusKm += 2) {
-        final inRadius = candidates
-            .where((candidate) => candidate.distanceKm <= radiusKm)
-            .toList(growable: false)
-          ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+        final inRadius =
+            candidates
+                .where((candidate) => candidate.distanceKm <= radiusKm)
+                .toList(growable: false)
+              ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
 
         if (inRadius.isNotEmpty) {
           return _RiderSearchResult(
@@ -2650,7 +2751,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      final nearest = [...candidates]..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+      final nearest = [...candidates]
+        ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
       return _RiderSearchResult(
         rider: nearest.first,
         searchedRadiusKm: 10,
@@ -2706,7 +2808,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   bool _isValidRiderCoordinates(double latitude, double longitude) {
-    return latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
+    return latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180;
   }
 
   String _describeRiderSearchFailure(_RiderSearchResult result) {
@@ -2717,11 +2822,16 @@ class _HomeScreenState extends State<HomeScreen> {
       'no_eligible_online_riders' => 'ไรเดอร์ออนไลน์แต่พิกัดยังไม่พร้อม',
       'no_rider_within_10km' => 'ไม่พบไรเดอร์ในรัศมี 10 กม.',
       'single_online_fallback' => 'เลือกไรเดอร์ออนไลน์คนเดียวแบบสำรอง',
-      'single_online_no_shop_coords_fallback' => 'เลือกไรเดอร์ออนไลน์คนเดียว (ร้านยังไม่มีพิกัด)',
-      'single_online_no_location_fallback' => 'เลือกไรเดอร์ออนไลน์คนเดียว (พิกัดไรเดอร์ยังไม่ครบ)',
-      'single_online_out_of_radius_fallback' => 'เลือกไรเดอร์ออนไลน์คนเดียว (อยู่นอกรัศมี)',
-      'nearest_out_of_radius_fallback' => 'เลือกรายที่ใกล้ที่สุดแม้อยู่นอกรัศมี',
-      _ when reason.startsWith('rider_query_failed:') => 'ค้นหาไรเดอร์ไม่สำเร็จ',
+      'single_online_no_shop_coords_fallback' =>
+        'เลือกไรเดอร์ออนไลน์คนเดียว (ร้านยังไม่มีพิกัด)',
+      'single_online_no_location_fallback' =>
+        'เลือกไรเดอร์ออนไลน์คนเดียว (พิกัดไรเดอร์ยังไม่ครบ)',
+      'single_online_out_of_radius_fallback' =>
+        'เลือกไรเดอร์ออนไลน์คนเดียว (อยู่นอกรัศมี)',
+      'nearest_out_of_radius_fallback' =>
+        'เลือกรายที่ใกล้ที่สุดแม้อยู่นอกรัศมี',
+      _ when reason.startsWith('rider_query_failed:') =>
+        'ค้นหาไรเดอร์ไม่สำเร็จ',
       _ => reason,
     };
 
@@ -2754,19 +2864,27 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    unawaited(_runProtectedAction(() {
-      setState(() {
-        _selectedBottomTab = index;
-        _activeCatalog = null;
-      });
+    unawaited(
+      _runProtectedAction(() {
+        setState(() {
+          _selectedBottomTab = index;
+          _activeCatalog = null;
+        });
 
-      if (index == 1 || index == 2 || index == 3 || index == 4) {
-        return;
-      }
+        if (index == 1 || index == 2 || index == 3 || index == 4) {
+          return;
+        }
 
-      const labels = <String>['โฮม', 'ตะกร้า', 'โรดแมป', 'ข้อความ', 'ตั้งค่า'];
-      _showSnackBar('หน้า ${labels[index]} กำลังพัฒนา');
-    }));
+        const labels = <String>[
+          'โฮม',
+          'ตะกร้า',
+          'โรดแมป',
+          'ข้อความ',
+          'ตั้งค่า',
+        ];
+        _showSnackBar('หน้า ${labels[index]} กำลังพัฒนา');
+      }),
+    );
   }
 
   @override
@@ -2777,58 +2895,61 @@ class _HomeScreenState extends State<HomeScreen> {
       (totalQuantity, item) => totalQuantity + item.quantity,
     );
     final body = switch (_selectedBottomTab) {
-      0 => _activeCatalog == null
-          ? _buildHomeBody(distanceKm)
-          : CategoryCatalogScreen(
-              title: _activeCatalog!.title,
-              serviceType: _activeCatalog!.serviceType,
-              shopIdFilter: _activeCatalog!.shopIdFilter,
-              customerLatitude: _userLocation.latitude,
-              customerLongitude: _userLocation.longitude,
-              onConfirmOrder: _addToCart,
-              embedded: true,
-              onBack: () => setState(() => _activeCatalog = null),
-            ),
+      0 =>
+        _activeCatalog == null
+            ? _buildHomeBody(distanceKm)
+            : CategoryCatalogScreen(
+                title: _activeCatalog!.title,
+                serviceType: _activeCatalog!.serviceType,
+                shopIdFilter: _activeCatalog!.shopIdFilter,
+                customerLatitude: _userLocation.latitude,
+                customerLongitude: _userLocation.longitude,
+                onConfirmOrder: _addToCart,
+                embedded: true,
+                onBack: () => setState(() => _activeCatalog = null),
+              ),
       1 => CartScreen(
-          cartItems: _cartItems,
-          customerLatitude: _userLocation.latitude,
-          customerLongitude: _userLocation.longitude,
-          customerLocationLabel: _userLocation.title,
-          onRemoveItem: _removeCartItem,
-          onPickCustomerLocation: () {
-            unawaited(_pickCartCustomerLocation());
-          },
-          onApplySharedLocation: () {
-            unawaited(_applySharedLocationToCart());
-          },
-          onConfirmCashOnDelivery: _confirmCashOnDeliveryOrder,
-          onSubmitPromptPaySlip: _submitPromptPaySlipOrder,
-          onOpenOrderRoadmap: _openOrderRoadmap,
-        ),
+        cartItems: _cartItems,
+        customerLatitude: _userLocation.latitude,
+        customerLongitude: _userLocation.longitude,
+        customerLocationLabel: _userLocation.title,
+        onRemoveItem: _removeCartItem,
+        onPickCustomerLocation: () {
+          unawaited(_pickCartCustomerLocation());
+        },
+        onApplySharedLocation: () {
+          unawaited(_applySharedLocationToCart());
+        },
+        onConfirmCashOnDelivery: _confirmCashOnDeliveryOrder,
+        onSubmitPromptPaySlip: _submitPromptPaySlipOrder,
+        onOpenOrderRoadmap: _openOrderRoadmap,
+      ),
       2 => OrderRoadmapScreen(),
       3 => const ChatScreen(),
       _ => SettingsScreen(
-          onLoggedOut: () {
-            if (!mounted) {
-              return;
-            }
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute<void>(
-                builder: (_) => LoginScreen(
-                  categoryLabel: 'แว๊นตลาด',
-                  firebaseEnabled: Firebase.apps.isNotEmpty,
-                  onLoggedIn: (loginContext) {
-                    Navigator.of(loginContext).pushAndRemoveUntil(
-                      MaterialPageRoute<void>(builder: (_) => const SplashScreen()),
-                      (route) => false,
-                    );
-                  },
-                ),
+        onLoggedOut: () {
+          if (!mounted) {
+            return;
+          }
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute<void>(
+              builder: (_) => LoginScreen(
+                categoryLabel: 'แว๊นตลาด',
+                firebaseEnabled: Firebase.apps.isNotEmpty,
+                onLoggedIn: (loginContext) {
+                  Navigator.of(loginContext).pushAndRemoveUntil(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SplashScreen(),
+                    ),
+                    (route) => false,
+                  );
+                },
               ),
-              (route) => false,
-            );
-          },
-        ),
+            ),
+            (route) => false,
+          );
+        },
+      ),
     };
 
     return Scaffold(
@@ -2857,7 +2978,9 @@ class _HomeScreenState extends State<HomeScreen> {
               }
               return const IconThemeData(color: Color(0xFFFFF2D6));
             }),
-            labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>((states) {
+            labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>((
+              states,
+            ) {
               if (states.contains(WidgetState.selected)) {
                 return const TextStyle(
                   color: Colors.white,
@@ -2922,294 +3045,290 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildHomeBody(double? distanceKm) {
     return CustomScrollView(
-        slivers: <Widget>[
-          SliverToBoxAdapter(
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: <Color>[
-                    Color(0xFFFFC247),
-                    Color(0xFFFF8A1E),
-                    Color(0xFFE55A00),
-                  ],
-                  stops: <double>[0.0, 0.52, 1.0],
-                ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(28),
-                  bottomRight: Radius.circular(28),
-                ),
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Color(0x33E55A00),
-                    blurRadius: 24,
-                    offset: Offset(0, 10),
-                  ),
+      slivers: <Widget>[
+        SliverToBoxAdapter(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: <Color>[
+                  Color(0xFFFFC247),
+                  Color(0xFFFF8A1E),
+                  Color(0xFFE55A00),
                 ],
+                stops: <double>[0.0, 0.52, 1.0],
               ),
-              child: Stack(
-                children: <Widget>[
-                  Positioned(
-                    top: 6,
-                    right: 18,
-                    child: Icon(
-                      Icons.auto_awesome,
-                      color: Color(0xFFFFF2C7),
-                      size: 22,
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(28),
+                bottomRight: Radius.circular(28),
+              ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Color(0x33E55A00),
+                  blurRadius: 24,
+                  offset: Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Stack(
+              children: <Widget>[
+                Positioned(
+                  top: 6,
+                  right: 18,
+                  child: Icon(
+                    Icons.auto_awesome,
+                    color: Color(0xFFFFF2C7),
+                    size: 22,
+                  ),
+                ),
+                Positioned(
+                  top: 34,
+                  right: 54,
+                  child: Icon(
+                    Icons.auto_awesome,
+                    color: Color(0xFFFFE3A3),
+                    size: 12,
+                  ),
+                ),
+                Positioned(
+                  top: -28,
+                  right: -6,
+                  child: Container(
+                    width: 126,
+                    height: 126,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0x26FFFFFF),
                     ),
                   ),
-                  Positioned(
-                    top: 34,
-                    right: 54,
-                    child: Icon(
-                      Icons.auto_awesome,
-                      color: Color(0xFFFFE3A3),
-                      size: 12,
+                ),
+                Positioned(
+                  top: 92,
+                  left: -18,
+                  child: Container(
+                    width: 84,
+                    height: 84,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0x18FFFFFF),
                     ),
                   ),
-                  Positioned(
-                    top: -28,
-                    right: -6,
-                    child: Container(
-                      width: 126,
-                      height: 126,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0x26FFFFFF),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 92,
-                    left: -18,
-                    child: Container(
-                      width: 84,
-                      height: 84,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0x18FFFFFF),
-                      ),
-                    ),
-                  ),
-                  SafeArea(
-                    bottom: false,
-                    child: Column(
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            _HeaderCircleButton(
-                              icon: Icons.qr_code_scanner_rounded,
-                              onTap: _openShopQrScanner,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Container(
-                                height: 54,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 18,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(28),
-                                ),
-                                child: Row(
-                                  children: <Widget>[
-                                    const Icon(
-                                      Icons.search,
-                                      color: Color(0xFF6B7280),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(
-                                        'ค้นหาในแอพ แว๊นตลาด',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium
-                                            ?.copyWith(
-                                              color: const Color(0xFF6B7280),
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            _HeaderAvatarBadge(
-                              label: 'G',
-                              backgroundColor: const Color(0xFFFFC928),
-                              foregroundColor: const Color(0xFF7A4B00),
-                            ),
-                            const SizedBox(width: 10),
-                            const _HeaderAvatarBadge(
-                              icon: Icons.person,
-                              backgroundColor: Color(0xFF58BFC1),
-                              foregroundColor: Colors.white,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 18),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0x26FFF7EE),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0x4DFFF3DB)),
+                ),
+                SafeArea(
+                  bottom: false,
+                  child: Column(
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          _HeaderCircleButton(
+                            icon: Icons.qr_code_scanner_rounded,
+                            onTap: _openShopQrScanner,
                           ),
-                          child: Row(
-                            children: <Widget>[
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    const Text(
-                                      'ตำแหน่งของคุณ',
-                                      style: TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _userLocation.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Container(
+                              height: 54,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(28),
+                              ),
+                              child: Row(
+                                children: <Widget>[
+                                  const Icon(
+                                    Icons.search,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      'ค้นหาในแอพ แว๊นตลาด',
                                       style: Theme.of(context)
                                           .textTheme
                                           .titleMedium
                                           ?.copyWith(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w700,
+                                            color: const Color(0xFF6B7280),
+                                            fontWeight: FontWeight.w500,
                                           ),
                                     ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              FilledButton(
-                                onPressed: _isFetchingCurrentLocation
-                                    ? null
-                                    : _setCurrentLocation,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: const Color(0xFFB64700),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
                                   ),
-                                ),
-                                child: _isFetchingCurrentLocation
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Text('อัปเดตพิกัด'),
+                                ],
                               ),
-                            ],
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
-            sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate((
-                BuildContext context,
-                int index,
-              ) {
-                final item = _quickActions[index];
-                return _DashboardTile(
-                  item: item,
-                  onTap: () => _handleQuickActionTap(item),
-                );
-              }, childCount: _quickActions.length),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.82,
-              ),
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
-            sliver: SliverToBoxAdapter(
-              child: Column(
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: _InfoCard(
-                          title: 'ตำแหน่งล่าสุด',
-                          primary: _userLocation.title,
-                          secondary:
-                              _userLocation.subtitle ??
-                              'Lat ${_userLocation.latitude.toStringAsFixed(4)} • Lng ${_userLocation.longitude.toStringAsFixed(4)}',
-                          trailing: const _SquareImagePlaceholder(size: 46),
-                        ),
+                          const SizedBox(width: 12),
+                          _HeaderAvatarBadge(
+                            label: 'G',
+                            backgroundColor: const Color(0xFFFFC928),
+                            foregroundColor: const Color(0xFF7A4B00),
+                          ),
+                          const SizedBox(width: 10),
+                          const _HeaderAvatarBadge(
+                            icon: Icons.person,
+                            backgroundColor: Color(0xFF58BFC1),
+                            foregroundColor: Colors.white,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _InfoCard(
-                          title: 'ระยะทางถึงจุดหมาย',
-                          primary: distanceKm == null
-                              ? '-'
-                              : '${distanceKm.toStringAsFixed(1)} กม.',
-                          secondary: _destinationLocation.title,
-                          trailing: Container(
-                            width: 46,
-                            height: 46,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFFFF1C2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Center(
-                              child: Text(
-                                'G',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFFE8A400),
-                                ),
+                      const SizedBox(height: 18),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0x26FFF7EE),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: const Color(0x4DFFF3DB)),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  const Text(
+                                    'ตำแหน่งของคุณ',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _userLocation.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
+                            const SizedBox(width: 12),
+                            FilledButton(
+                              onPressed: _isFetchingCurrentLocation
+                                  ? null
+                                  : _setCurrentLocation,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: const Color(0xFFB64700),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: _isFetchingCurrentLocation
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Text('อัปเดตพิกัด'),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  TravelSummaryCard(
-                    pickup: _userLocation,
-                    destination: _destinationLocation,
-                    distanceKm: distanceKm,
-                    rideSelection: _travelRideSelection,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-        ],
-      );
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+          sliver: SliverGrid(
+            delegate: SliverChildBuilderDelegate((
+              BuildContext context,
+              int index,
+            ) {
+              final item = _quickActions[index];
+              return _DashboardTile(
+                item: item,
+                onTap: () => _handleQuickActionTap(item),
+              );
+            }, childCount: _quickActions.length),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.82,
+            ),
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+          sliver: SliverToBoxAdapter(
+            child: Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: _InfoCard(
+                        title: 'ตำแหน่งล่าสุด',
+                        primary: _userLocation.title,
+                        secondary:
+                            _userLocation.subtitle ??
+                            'Lat ${_userLocation.latitude.toStringAsFixed(4)} • Lng ${_userLocation.longitude.toStringAsFixed(4)}',
+                        trailing: const _SquareImagePlaceholder(size: 46),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _InfoCard(
+                        title: 'ระยะทางถึงจุดหมาย',
+                        primary: distanceKm == null
+                            ? '-'
+                            : '${distanceKm.toStringAsFixed(1)} กม.',
+                        secondary: _destinationLocation.title,
+                        trailing: Container(
+                          width: 46,
+                          height: 46,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFFFF1C2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Text(
+                              'G',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFFE8A400),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TravelSummaryCard(
+                  pickup: _userLocation,
+                  destination: _destinationLocation,
+                  distanceKm: distanceKm,
+                  rideSelection: _travelRideSelection,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
-
 }
 
 class _RiderDistance {
-  const _RiderDistance({
-    required this.riderId,
-    required this.distanceKm,
-  });
+  const _RiderDistance({required this.riderId, required this.distanceKm});
 
   final String riderId;
   final double distanceKm;
@@ -3286,10 +3405,7 @@ class _CartNavIcon extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: <Widget>[
-          Align(
-            alignment: Alignment.center,
-            child: Icon(icon),
-          ),
+          Align(alignment: Alignment.center, child: Icon(icon)),
           Positioned(
             top: -4,
             right: -10,
@@ -3600,4 +3716,3 @@ class _InfoCard extends StatelessWidget {
     );
   }
 }
-

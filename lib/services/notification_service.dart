@@ -661,7 +661,7 @@ class NotificationService {
       _backgroundReturnChannelId = channelId;
       _shouldReturnAppToBackground = true;
     }
-    navigatorState!.push(
+    navigatorState.push(
       MaterialPageRoute(
         fullscreenDialog: true,
         builder: (_) => CallScreen(
@@ -802,7 +802,7 @@ class NotificationService {
       'calleeFCMToken': calleeFCMToken,
       'callType': callType,
     });
-    print('Call result: ${result.data}');
+    debugPrint('Call result: ${result.data}');
   }
 
   Future<void> cancelCallInvite({

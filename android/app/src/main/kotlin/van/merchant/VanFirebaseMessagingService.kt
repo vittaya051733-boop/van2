@@ -40,7 +40,7 @@ class VanFirebaseMessagingService : FlutterFirebaseMessagingService() {
         val callerPhoto = data["callerPhotoUrl"]
         val isVideo = data["callType"] == "video" || data["isVideo"].equals("true", true)
 
-        val incomingActivityIntent = IncomingCallActivityIntentBuilder.build(
+        val incomingActivityIntent = MainActivityIntentBuilder.build(
             context = this,
             channelId = channelId,
             appId = appId,
@@ -230,13 +230,15 @@ private object MainActivityIntentBuilder {
         callerId: String?,
         callerName: String,
         callerPhoto: String?,
-        isVideo: Boolean
+        isVideo: Boolean,
+        appId: String? = null,
     ) = android.content.Intent(context, MainActivity::class.java).apply {
         action = MainActivity.ACTION_SHOW_INCOMING_CALL
         flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
             android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
             android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
         putExtra(MainActivity.EXTRA_CHANNEL_ID, channelId)
+        putExtra(MainActivity.EXTRA_APP_ID, appId)
         putExtra(MainActivity.EXTRA_CALL_TOKEN, token)
         putExtra(MainActivity.EXTRA_CALLER_ID, callerId.orEmpty())
         putExtra(MainActivity.EXTRA_CALLER_NAME, callerName)

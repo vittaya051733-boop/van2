@@ -55,12 +55,12 @@ service cloud.firestore {
           && data != null
           && (
             (data.customerId != null && data.customerId == uid())
+            || (data.driverId != null && data.driverId == uid())
             || (
               !isUnverifiedPromptPayOrder(data)
               && (
                 (data.shopId != null && data.shopId == uid())
                 || (data.shopOwnerId != null && data.shopOwnerId == uid())
-                || (data.driverId != null && data.driverId == uid())
               )
             )
           );
@@ -164,9 +164,13 @@ service cloud.firestore {
       allow list: if false;
     }
 
-    // เอกสารลงทะเบียนร้านค้า (รองรับทั้ง docId=uid และ query ด้วย email หลังล็อกอิน)
+    // เอกสารลงทะเบียนร้านค้า
+    // - get (single doc): อนุญาตทุกผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์: รูปร้าน พิกัด ฯลฯ)
+    // - list/query: เฉพาะเจ้าของ (docId==uid, ownerId==uid, หรือตรงกับ email)
     match /{collection}/{docId} {
-      allow read: if isRegistrationCollection(collection)
+      allow get: if isRegistrationCollection(collection) && signedIn();
+
+      allow list: if isRegistrationCollection(collection)
           && signedIn()
           && (
             docId == uid()

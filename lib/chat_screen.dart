@@ -346,7 +346,11 @@ class _EmptyState extends StatelessWidget {
 }
 
 class AddFriendSheet extends StatefulWidget {
-  const AddFriendSheet({required this.friendService, required this.ownerId});
+  const AddFriendSheet({
+    super.key,
+    required this.friendService,
+    required this.ownerId,
+  });
 
   final FriendService friendService;
   final String ownerId;

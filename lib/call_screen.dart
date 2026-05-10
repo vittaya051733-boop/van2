@@ -35,6 +35,11 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  // Connection-stuck guards: end the call automatically if Agora cannot
+  // establish a remote connection within these windows.
+  static const Duration _joinChannelTimeout = Duration(seconds: 15);
+  static const Duration _remoteConnectTimeout = Duration(seconds: 30);
+
   RtcEngine? _engine;
   bool _joined = false;
   int? _remoteUid;
@@ -50,7 +55,10 @@ class _CallScreenState extends State<CallScreen> {
   DateTime? _callStart;
   bool _resultSent = false;
   Timer? _durationTimer;
+  Timer? _joinChannelTimer;
+  Timer? _remoteConnectTimer;
   bool _cancelSignalSent = false;
+  String? _connectStatusOverride;
 
   AudioPlayer? _ringbackPlayer;
   String? _fatalError;
@@ -144,20 +152,25 @@ class _CallScreenState extends State<CallScreen> {
       engine.registerEventHandler(
       RtcEngineEventHandler(
         onJoinChannelSuccess: (connection, elapsed) {
-          print('Agora: onJoinChannelSuccess channel=${connection.channelId} uid=${connection.localUid}');
+          debugPrint('Agora: onJoinChannelSuccess channel=${connection.channelId} uid=${connection.localUid}');
+          _joinChannelTimer?.cancel();
           if (!mounted) return;
           setState(() {
             _joined = true;
+            _connectStatusOverride = null;
           });
+          _armRemoteConnectTimer();
         },
         onUserJoined: (connection, remoteUid, elapsed) {
           if (connection.channelId != _activeChannelId) return;
-          print('Agora: onUserJoined remoteUid=$remoteUid in channel ${connection.channelId}');
+          debugPrint('Agora: onUserJoined remoteUid=$remoteUid in channel ${connection.channelId}');
           if (!mounted) return;
+          _remoteConnectTimer?.cancel();
           setState(() {
             _remoteUid = remoteUid;
             _remoteConnected = true;
             _callStart = DateTime.now();
+            _connectStatusOverride = null;
           });
           unawaited(_updateCallSessionStatus('connected', extra: {
             'connectedAt': FieldValue.serverTimestamp(),
@@ -167,7 +180,7 @@ class _CallScreenState extends State<CallScreen> {
           _stopRingback(); // หยุดเสียงรอสายเมื่ออีกฝ่ายรับสาย
         },
         onUserOffline: (connection, remoteUid, reason) {
-          print('Agora: onUserOffline remoteUid=$remoteUid reason=$reason');
+          debugPrint('Agora: onUserOffline remoteUid=$remoteUid reason=$reason');
           if (!mounted) return;
           setState(() {
             _remoteUid = null;
@@ -176,12 +189,27 @@ class _CallScreenState extends State<CallScreen> {
           _stopDurationTicker();
           _endCall(remoteEnded: true);
         },
-        onError: (err, msg) {
-          print('Agora: onError code=$err msg=$msg');
-          if (err == ErrorCodeType.errInvalidToken) {
-            if (!mounted) return;
+        onConnectionStateChanged: (connection, state, reason) {
+          debugPrint('Agora: connectionState=$state reason=$reason');
+          if (!mounted) return;
+          if (state == ConnectionStateType.connectionStateReconnecting) {
+            setState(() => _connectStatusOverride = 'กำลังเชื่อมต่อใหม่...');
+          } else if (state == ConnectionStateType.connectionStateFailed) {
             setState(() {
-              _fatalError = 'Agora token ไม่ถูกต้องหรือไม่ตรงกับ App ID';
+              _fatalError = 'การเชื่อมต่อล้มเหลว กรุณาลองใหม่อีกครั้ง';
+            });
+            unawaited(_endCall());
+          } else if (state == ConnectionStateType.connectionStateConnected) {
+            setState(() => _connectStatusOverride = null);
+          }
+        },
+        onError: (err, msg) {
+          debugPrint('Agora: onError code=$err msg=$msg');
+          if (!mounted) return;
+          if (err == ErrorCodeType.errInvalidToken ||
+              err == ErrorCodeType.errTokenExpired) {
+            setState(() {
+              _fatalError = 'Agora token ไม่ถูกต้องหรือหมดอายุ';
             });
             unawaited(_endCall(declined: true));
           }
@@ -206,6 +234,7 @@ class _CallScreenState extends State<CallScreen> {
           publishMicrophoneTrack: true,
         ),
       );
+      _armJoinChannelTimer();
       if (!mounted) {
         await engine.leaveChannel();
         await engine.release();
@@ -215,7 +244,7 @@ class _CallScreenState extends State<CallScreen> {
         _engine = engine;
       });
     } catch (error) {
-      print('Agora init error: $error');
+      debugPrint('Agora init error: $error');
       if (!mounted) {
         if (engine != null) {
           await engine.release();
@@ -352,6 +381,8 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _stopRingback();
     _stopDurationTicker();
+    _joinChannelTimer?.cancel();
+    _remoteConnectTimer?.cancel();
     _sessionSubscription?.cancel();
     _sessionSubscription = null;
     _engine?.leaveChannel();
@@ -397,10 +428,12 @@ class _CallScreenState extends State<CallScreen> {
         body: _buildIncomingContent(),
       );
     }
-    return WillPopScope(
-      onWillPop: () async {
-        _endCall();
-        return false;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          _endCall();
+        }
       },
       child: Scaffold(
         backgroundColor: widget.isVideo ? Colors.black : const Color(0xFFF5F5F7),
@@ -433,6 +466,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _buildIncomingContent() {
+    final displayName = widget.targetProfile.displayName.trim();
+    final displayInitial =
+        displayName.isNotEmpty ? displayName.characters.first.toUpperCase() : '?';
     return Container(
       width: double.infinity,
       decoration: const BoxDecoration(
@@ -468,7 +504,7 @@ class _CallScreenState extends State<CallScreen> {
                   ? CachedAppImage(imageUrl: widget.targetProfile.photoUrl!, fit: BoxFit.cover)
                     : Center(
                         child: Text(
-                          widget.targetProfile.displayName.characters.first.toUpperCase(),
+                          displayInitial,
                           style: const TextStyle(fontSize: 64, color: Colors.white70, fontWeight: FontWeight.w600),
                         ),
                       ),
@@ -581,7 +617,7 @@ class _CallScreenState extends State<CallScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.15),
+                        color: Colors.white.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(48),
                       ),
                       child: Text(
@@ -610,6 +646,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _buildCallingStatus() {
+    final displayName = widget.targetProfile.displayName.trim();
+    final displayInitial =
+        displayName.isNotEmpty ? displayName.characters.first.toUpperCase() : '?';
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -622,7 +661,7 @@ class _CallScreenState extends State<CallScreen> {
               ? CachedAppImage(imageUrl: widget.targetProfile.photoUrl!, fit: BoxFit.cover)
                 : Center(
                     child: Text(
-                      widget.targetProfile.displayName.characters.first.toUpperCase(),
+                      displayInitial,
                       style: const TextStyle(fontSize: 64, color: Colors.white70, fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -752,6 +791,8 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   String _statusText({required bool isVideo}) {
+    final override = _connectStatusOverride;
+    if (override != null && override.isNotEmpty) return override;
     if (!_joined) return 'กำลังเชื่อมต่อ...';
     if (!_remoteConnected) {
       if (_remoteAccepted) {
@@ -760,6 +801,32 @@ class _CallScreenState extends State<CallScreen> {
       return isVideo ? 'กำลังโทรหา (วิดีโอ)' : 'กำลังโทรหา';
     }
     return 'กำลังสนทนากับ';
+  }
+
+  void _armJoinChannelTimer() {
+    _joinChannelTimer?.cancel();
+    _joinChannelTimer = Timer(_joinChannelTimeout, () {
+      if (!mounted || _joined) return;
+      debugPrint('Agora: joinChannel timeout after ${_joinChannelTimeout.inSeconds}s');
+      setState(() {
+        _fatalError = 'เชื่อมต่อบริการโทรไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+      });
+      unawaited(_endCall());
+    });
+  }
+
+  void _armRemoteConnectTimer() {
+    _remoteConnectTimer?.cancel();
+    _remoteConnectTimer = Timer(_remoteConnectTimeout, () {
+      if (!mounted || _remoteConnected) return;
+      debugPrint('Agora: remote connect timeout after ${_remoteConnectTimeout.inSeconds}s');
+      setState(() {
+        _fatalError = widget.isIncoming
+            ? 'ไม่สามารถเชื่อมต่อกับผู้โทรได้'
+            : 'ปลายทางไม่ตอบรับการโทร';
+      });
+      unawaited(_endCall());
+    });
   }
 
   String _formatDuration(Duration duration) {

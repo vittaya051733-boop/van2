@@ -113,7 +113,7 @@ class _PopupContentState extends State<_PopupContent>
                 width: width,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.85),
+                  color: Colors.black.withValues(alpha: 0.85),
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: const [
                     BoxShadow(

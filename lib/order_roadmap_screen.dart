@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -24,7 +26,10 @@ class OrderRoadmapScreen extends StatelessWidget {
     final uniqueOrderIds = orderIds.toSet().toList(growable: false);
 
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         title: const Text('Roadmap การจัดส่ง'),
       ),
       body: uniqueOrderIds.isNotEmpty
@@ -341,39 +346,43 @@ class _OrderRoadmapCard extends StatelessWidget {
                   },
                 ),
                 const SizedBox(height: 10),
-                _TimelineStepTile(
-                  label: 'ระบบค้นหาไรเดอร์ใกล้สุด',
-                  status: roadmap.riderSearchStarted,
-                ),
-                _TimelineStepTile(
-                  label: 'แมตช์ไรเดอร์สำเร็จ',
-                  status: roadmap.riderMatched,
+                _AwaitingRiderBanner(
+                  orderId: orderId,
+                  data: data,
+                  firestore: firestore,
                 ),
                 _TimelineStepTile(
                   label: 'ไรเดอร์รับออเดอร์',
                   status: roadmap.riderAccepted,
+                  leadingIcon: Icons.assignment_turned_in_outlined,
                 ),
                 _TimelineStepTile(
-                  label: isTravelOrder
-                      ? 'ไรเดอร์กำลังไปจุดรับผู้โดยสาร'
-                      : 'ไรเดอร์กำลังไปรับสินค้าที่ร้าน',
-                  status: roadmap.riderToShop,
-                ),
-                _TimelineStepTile(
-                  label: isTravelOrder ? 'กำลังรอผู้โดยสารขึ้นรถ' : 'ร้านกำลังทำสินค้า',
+                  label: isTravelOrder ? 'กำลังรอผู้โดยสารขึ้นรถ' : 'ร้านค้ารับออเดอร์',
                   status: roadmap.shopPreparing,
+                  leadingIcon: isTravelOrder
+                      ? Icons.airline_seat_recline_normal_outlined
+                      : Icons.storefront_outlined,
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder ? 'ไรเดอร์ถึงจุดรับแล้ว' : 'ไรเดอร์สแกนรับสินค้า',
                   status: roadmap.riderScannedPickup,
+                  leadingIcon: isTravelOrder
+                      ? Icons.location_on_outlined
+                      : Icons.qr_code_scanner_outlined,
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder ? 'กำลังเดินทางไปจุดส่ง' : 'ไรเดอร์กำลังไปส่ง',
                   status: roadmap.delivering,
+                  leadingIcon: isTravelOrder
+                      ? Icons.directions_car_outlined
+                      : Icons.delivery_dining_outlined,
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder ? 'ถึงจุดหมายแล้ว' : 'ส่งถึงลูกค้าแล้ว',
                   status: roadmap.delivered,
+                  leadingIcon: isTravelOrder
+                      ? Icons.flag_outlined
+                      : Icons.task_alt_outlined,
                   isLast: true,
                 ),
               ],
@@ -1125,12 +1134,13 @@ class _TimelineStepTile extends StatelessWidget {
     required this.label,
     required this.status,
     this.isLast = false,
+    this.leadingIcon,
   });
 
   final String label;
   final bool status;
   final bool isLast;
-
+  final IconData? leadingIcon;
   @override
   Widget build(BuildContext context) {
     final color = status ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF);
@@ -1154,6 +1164,13 @@ class _TimelineStepTile extends StatelessWidget {
           ],
         ),
         const SizedBox(width: 10),
+        if (leadingIcon != null) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(leadingIcon, size: 18, color: color),
+          ),
+          const SizedBox(width: 8),
+        ],
         Expanded(
           child: Padding(
             padding: const EdgeInsets.only(top: 1),
@@ -1191,4 +1208,334 @@ class _OrderRoadmapState {
   final bool riderScannedPickup;
   final bool delivering;
   final bool delivered;
+}
+
+class _AwaitingRiderBanner extends StatefulWidget {
+  const _AwaitingRiderBanner({
+    required this.orderId,
+    required this.data,
+    required this.firestore,
+  });
+
+  final String orderId;
+  final Map<String, dynamic> data;
+  final FirebaseFirestore firestore;
+
+  @override
+  State<_AwaitingRiderBanner> createState() => _AwaitingRiderBannerState();
+}
+
+class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
+  static const Duration _noAcceptedRiderThreshold = Duration(minutes: 15);
+  static const Duration _customerExtraWaitDuration = Duration(minutes: 15);
+
+  Timer? _refreshTimer;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  DateTime? _readTimestamp(Object? value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    if (value is DateTime) {
+      return value;
+    }
+    return null;
+  }
+
+  DateTime? _riderWaitStartedAt() {
+    return _readTimestamp(widget.data['customerWaitRequestedAt']) ??
+        _readTimestamp(widget.data['reassignedAt']) ??
+        _readTimestamp(widget.data['assignedRiderAt']) ??
+        _readTimestamp(widget.data['customerConfirmedAt']) ??
+        _readTimestamp(widget.data['createdAt']);
+  }
+
+  bool get _isStale {
+    final status = (widget.data['status'] as String?)?.trim() ?? '';
+    final driverId = (widget.data['driverId'] as String?)?.trim() ?? '';
+    final reassignFailed = (widget.data['reassignFailureReason'] as String?)?.trim();
+    final acceptedAt = _readTimestamp(widget.data['acceptedAt']);
+
+    if (_isWaiting) {
+      return true;
+    }
+
+    // Show when reassignment explicitly failed.
+    if (reassignFailed != null && reassignFailed.isNotEmpty) {
+      return true;
+    }
+
+    if (acceptedAt != null) {
+      return false;
+    }
+
+    final waitStartedAt = _riderWaitStartedAt();
+    if (waitStartedAt == null) {
+      return false;
+    }
+
+    final age = DateTime.now().difference(waitStartedAt);
+    if (age < _noAcceptedRiderThreshold) {
+      return false;
+    }
+
+    // No rider matched at all, or a rider was assigned but has not accepted yet.
+    if (status == 'awaiting_rider' && driverId.isEmpty) {
+      return true;
+    }
+    if (status == 'pending' && driverId.isNotEmpty) {
+      return true;
+    }
+    return false;
+  }
+
+  bool get _isWaiting {
+    final waitUntil = widget.data['customerWaitUntil'];
+    if (waitUntil is Timestamp) {
+      return waitUntil.toDate().isAfter(DateTime.now());
+    }
+    return false;
+  }
+
+  Future<void> _wait15Min() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final until = DateTime.now().add(_customerExtraWaitDuration);
+      await widget.firestore.collection('orders').doc(widget.orderId).set({
+        'customerWaitUntil': Timestamp.fromDate(until),
+        'customerWaitRequestedAt': FieldValue.serverTimestamp(),
+        'customerNoRiderChoice': 'wait_15_min',
+        'reassignFailureReason': FieldValue.delete(),
+        'needsReassign': true,
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('รอเพิ่ม 15 นาที ระบบจะหาไรเดอร์ให้ใหม่')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('บันทึกการรอไม่สำเร็จ: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _requestRefund() async {
+    if (_busy) return;
+    final accountNumberController = TextEditingController();
+    final accountNameController = TextEditingController();
+    final bankNameController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    Map<String, String>? refundInfo;
+    try {
+      refundInfo = await showDialog<Map<String, String>>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('ขอคืนเงิน'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: accountNumberController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'หมายเลขบัญชี',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่หมายเลขบัญชี';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: accountNameController,
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'ชื่อเจ้าของบัญชี',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่ชื่อเจ้าของบัญชี';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: bankNameController,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'ชื่อธนาคาร',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่ชื่อธนาคาร';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('ยกเลิก'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() != true) return;
+                Navigator.pop(ctx, {
+                  'refundBankAccountNumber': accountNumberController.text.trim(),
+                  'refundAccountName': accountNameController.text.trim(),
+                  'refundBankName': bankNameController.text.trim(),
+                });
+              },
+              child: const Text('ยืนยันคืนเงิน'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      accountNumberController.dispose();
+      accountNameController.dispose();
+      bankNameController.dispose();
+    }
+
+    if (refundInfo == null) return;
+    setState(() => _busy = true);
+    try {
+      await widget.firestore.collection('orders').doc(widget.orderId).set({
+        'status': 'refund',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelReason': 'no_rider_available_refund_requested',
+        'refundRequested': true,
+        'refundRequestedAt': FieldValue.serverTimestamp(),
+        'refundRequestedBy': FirebaseAuth.instance.currentUser?.uid,
+        'refundStatus': 'requested',
+        ...refundInfo,
+        'customerNoRiderChoice': 'refund',
+        'needsReassign': false,
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('ส่งคำขอคืนเงินแล้ว ทีมงานจะดำเนินการให้')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ส่งคำขอคืนเงินไม่สำเร็จ: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isStale) return const SizedBox.shrink();
+
+    final waiting = _isWaiting;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        border: Border.all(color: const Color(0xFFFB923C)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.access_time_rounded,
+                  color: Color(0xFFEA580C), size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  waiting
+                      ? 'กำลังรอไรเดอร์ใหม่ ระบบจะลองหาให้ภายใน 15 นาที'
+                      : 'ยังไม่มีไรเดอร์รับงานภายใน 15 นาที',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF9A3412),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            waiting
+                ? 'หากยังไม่ได้ไรเดอร์ภายในเวลาที่กำหนด คุณสามารถขอคืนเงินได้'
+                : 'คุณสามารถเลือกรอเพิ่มอีก 15 นาที หรือขอคืนเงินได้',
+            style: const TextStyle(color: Color(0xFF7C2D12), fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy || waiting ? null : _wait15Min,
+                  icon: const Icon(Icons.timer_outlined),
+                  label: Text(waiting ? 'รออยู่...' : 'รออีก 15 นาที'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFDC2626),
+                  ),
+                  onPressed: _busy ? null : _requestRefund,
+                  icon: const Icon(Icons.payments_outlined),
+                  label: const Text('ขอคืนเงิน'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }

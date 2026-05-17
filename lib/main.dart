@@ -984,16 +984,6 @@ class _HomeScreenState extends State<HomeScreen> {
         });
   }
 
-  double? get _distanceKm {
-    final meters = Geolocator.distanceBetween(
-      _userLocation.latitude,
-      _userLocation.longitude,
-      _destinationLocation.latitude,
-      _destinationLocation.longitude,
-    );
-    return meters / 1000;
-  }
-
   Future<void> _setCurrentLocation() async {
     setState(() => _isFetchingCurrentLocation = true);
 
@@ -1578,6 +1568,7 @@ class _HomeScreenState extends State<HomeScreen> {
           selectedToppings: selection.selectedToppings,
           quantity: selection.quantity,
           availableStock: selection.availableStock,
+          preparationTimeMinutes: selection.preparationTimeMinutes,
         ),
       );
     });
@@ -1918,6 +1909,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final docRef = ordersRef.doc();
         final now = DateTime.now();
+        final paymentExpiresAt = paymentMethod == 'promptpay_qr'
+          ? Timestamp.fromDate(now.add(const Duration(minutes: 30)))
+          : null;
         final orderCode =
             'ORD-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${docRef.id.substring(0, 6).toUpperCase()}';
         final subtotal = items.fold<double>(
@@ -1930,6 +1924,14 @@ class _HomeScreenState extends State<HomeScreen> {
           (qtyAcc, item) => qtyAcc + item.quantity,
         );
 
+        final preparationTimeMinutes = items.fold<int>(
+          10,
+          (maxMinutes, item) => item.preparationTimeMinutes > maxMinutes
+              ? item.preparationTimeMinutes
+              : maxMinutes,
+        );
+        final preparingDuration = preparationTimeMinutes * 60 * 1000;
+
         final products = items
             .map((item) {
               final imageUrl = item.imageUrl?.trim();
@@ -1938,6 +1940,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 'name': item.productName,
                 'quantity': item.quantity,
                 'unitPrice': item.unitPrice,
+                'preparationTimeMinutes': item.preparationTimeMinutes,
+                'preparingDuration': item.preparationTimeMinutes * 60 * 1000,
                 'selectedToppings': item.selectedToppings,
                 'lineTotal': item.unitPrice * item.quantity,
                 if (imageUrl != null && imageUrl.isNotEmpty)
@@ -1993,6 +1997,11 @@ class _HomeScreenState extends State<HomeScreen> {
             'paymentMethodLabel': paymentMethodLabel,
             'paymentStatus': paymentStatus,
             'paymentStatusLabel': paymentStatusLabel,
+            if (paymentExpiresAt != null) ...<String, dynamic>{
+              'paymentExpiresAt': paymentExpiresAt,
+              'paymentExpiresInMinutes': 30,
+              'stockHoldStatus': 'pending',
+            },
             'sourceApp': 'van2_customer',
             'customerId': user.uid,
             'customerEmail': user.email,
@@ -2026,6 +2035,8 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             'itemCount': items.length,
             'totalQuantity': totalQuantity,
+            'preparationTimeMinutes': preparationTimeMinutes,
+            'preparingDuration': preparingDuration,
             'products': products,
             'totalPrice': subtotal,
             'subtotal': subtotal,
@@ -2058,42 +2069,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
           final timelineRef = docRef.collection('timeline').doc();
           // Fire-and-forget: ไม่ต้องรอ timeline write เพราะออเดอร์หลักถูกสร้างแล้ว
-          unawaited(timelineRef
-              .set(<String, dynamic>{
-                'event': 'order_created',
-                'eventLabel': createdEventLabel,
-                'actorId': user.uid,
-                'actorRole': 'customer',
-                'orderId': docRef.id,
-                'orderCode': orderCode,
-                'status': initialOrderStatus,
-                'timestamp': FieldValue.serverTimestamp(),
-              })
-              .catchError((_) {}));
+          unawaited(
+            timelineRef
+                .set(<String, dynamic>{
+                  'event': 'order_created',
+                  'eventLabel': createdEventLabel,
+                  'actorId': user.uid,
+                  'actorRole': 'customer',
+                  'orderId': docRef.id,
+                  'orderCode': orderCode,
+                  'status': initialOrderStatus,
+                  'timestamp': FieldValue.serverTimestamp(),
+                })
+                .catchError((_) {}),
+          );
 
           if (notifyRider && assignedRider != null) {
             // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว FCM แค่สำรอง ไม่ต้องรอ
-            unawaited(FirebaseFirestore.instance
-                .collection('app_notifications')
-                .add({
-                  'targetApp': 'van3',
-                  'recipientUid': assignedRider.riderId,
-                  'orderId': docRef.id,
-                  'title': 'มีคำสั่งซื้อใหม่',
-                  'body': orderCode.isNotEmpty
-                      ? 'ออเดอร์ $orderCode จาก ${firstItem.shopName}'
-                      : 'มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}',
-                  'read': false,
-                  'createdAt': FieldValue.serverTimestamp(),
-                  'source': 'van2_customer',
-                  'sourceApp': 'van2_customer',
-                  'action': 'order_created_customer_confirmed',
-                  'customerConfirmed': true,
-                  'riderNotifyReady': riderNotifyReady,
-                })
-                .catchError((_) => FirebaseFirestore.instance
-                    .collection('app_notifications')
-                    .doc()));
+            unawaited(
+              FirebaseFirestore.instance
+                  .collection('app_notifications')
+                  .add({
+                    'targetApp': 'van3',
+                    'recipientUid': assignedRider.riderId,
+                    'orderId': docRef.id,
+                    'title': 'มีคำสั่งซื้อใหม่',
+                    'body': orderCode.isNotEmpty
+                        ? 'ออเดอร์ $orderCode จาก ${firstItem.shopName}'
+                        : 'มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}',
+                    'read': false,
+                    'createdAt': FieldValue.serverTimestamp(),
+                    'source': 'van2_customer',
+                    'sourceApp': 'van2_customer',
+                    'action': 'order_created_customer_confirmed',
+                    'customerConfirmed': true,
+                    'riderNotifyReady': riderNotifyReady,
+                  })
+                  .catchError(
+                    (_) => FirebaseFirestore.instance
+                        .collection('app_notifications')
+                        .doc(),
+                  ),
+            );
           }
 
           createdOrderIds.add(docRef.id);
@@ -2281,43 +2298,49 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     // Fire-and-forget: timeline ไม่บล็อก user flow
-    unawaited(orderRef
-        .collection('timeline')
-        .add(<String, dynamic>{
-          'event': 'order_created',
-          'eventLabel': createdEventLabel,
-          'actorId': user.uid,
-          'actorRole': 'customer',
-          'orderId': orderRef.id,
-          'orderCode': orderCode,
-          'status': initialOrderStatus,
-          'timestamp': FieldValue.serverTimestamp(),
-        })
-        .catchError((_) => orderRef.collection('timeline').doc()));
+    unawaited(
+      orderRef
+          .collection('timeline')
+          .add(<String, dynamic>{
+            'event': 'order_created',
+            'eventLabel': createdEventLabel,
+            'actorId': user.uid,
+            'actorRole': 'customer',
+            'orderId': orderRef.id,
+            'orderCode': orderCode,
+            'status': initialOrderStatus,
+            'timestamp': FieldValue.serverTimestamp(),
+          })
+          .catchError((_) => orderRef.collection('timeline').doc()),
+    );
 
     if (notifyRider && assignedRider != null) {
       // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว
-      unawaited(FirebaseFirestore.instance
-          .collection('app_notifications')
-          .add({
-            'targetApp': 'van3',
-            'recipientUid': assignedRider.riderId,
-            'orderId': orderRef.id,
-            'title': 'มีคำขอเดินทางใหม่',
-            'body': orderCode.isNotEmpty
-                ? 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
-                : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
-            'read': false,
-            'createdAt': FieldValue.serverTimestamp(),
-            'source': 'van2_customer',
-            'sourceApp': 'van2_customer',
-            'action': 'travel_order_created_customer_confirmed',
-            'customerConfirmed': true,
-            'riderNotifyReady': riderNotifyReady,
-          })
-          .catchError((_) => FirebaseFirestore.instance
-              .collection('app_notifications')
-              .doc()));
+      unawaited(
+        FirebaseFirestore.instance
+            .collection('app_notifications')
+            .add({
+              'targetApp': 'van3',
+              'recipientUid': assignedRider.riderId,
+              'orderId': orderRef.id,
+              'title': 'มีคำขอเดินทางใหม่',
+              'body': orderCode.isNotEmpty
+                  ? 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
+                  : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
+              'read': false,
+              'createdAt': FieldValue.serverTimestamp(),
+              'source': 'van2_customer',
+              'sourceApp': 'van2_customer',
+              'action': 'travel_order_created_customer_confirmed',
+              'customerConfirmed': true,
+              'riderNotifyReady': riderNotifyReady,
+            })
+            .catchError(
+              (_) => FirebaseFirestore.instance
+                  .collection('app_notifications')
+                  .doc(),
+            ),
+      );
     }
 
     if (mounted && !hasAssignedRider) {
@@ -2889,7 +2912,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final distanceKm = _distanceKm;
     final cartQuantity = _cartItems.fold<int>(
       0,
       (totalQuantity, item) => totalQuantity + item.quantity,
@@ -2897,7 +2919,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final body = switch (_selectedBottomTab) {
       0 =>
         _activeCatalog == null
-            ? _buildHomeBody(distanceKm)
+            ? _buildHomeBody()
             : CategoryCatalogScreen(
                 title: _activeCatalog!.title,
                 serviceType: _activeCatalog!.serviceType,
@@ -3043,7 +3065,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildHomeBody(double? distanceKm) {
+  Widget _buildHomeBody() {
     return CustomScrollView(
       slivers: <Widget>[
         SliverToBoxAdapter(
@@ -3267,57 +3289,14 @@ class _HomeScreenState extends State<HomeScreen> {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
           sliver: SliverToBoxAdapter(
-            child: Column(
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: _InfoCard(
-                        title: 'ตำแหน่งล่าสุด',
-                        primary: _userLocation.title,
-                        secondary:
-                            _userLocation.subtitle ??
-                            'Lat ${_userLocation.latitude.toStringAsFixed(4)} • Lng ${_userLocation.longitude.toStringAsFixed(4)}',
-                        trailing: const _SquareImagePlaceholder(size: 46),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _InfoCard(
-                        title: 'ระยะทางถึงจุดหมาย',
-                        primary: distanceKm == null
-                            ? '-'
-                            : '${distanceKm.toStringAsFixed(1)} กม.',
-                        secondary: _destinationLocation.title,
-                        trailing: Container(
-                          width: 46,
-                          height: 46,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFFFF1C2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'G',
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFFE8A400),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                TravelSummaryCard(
-                  pickup: _userLocation,
-                  destination: _destinationLocation,
-                  distanceKm: distanceKm,
-                  rideSelection: _travelRideSelection,
-                ),
+                _ProductShelfPlaceholder(title: 'สินค้าแนะนำ'),
+                SizedBox(height: 20),
+                _ProductShelfPlaceholder(title: 'สินค้าขายดี'),
+                SizedBox(height: 20),
+                _ProductShelfPlaceholder(title: 'สินค้าที่คุณอาจรู้จัก'),
               ],
             ),
           ),
@@ -3640,78 +3619,62 @@ class _SquareImagePlaceholder extends StatelessWidget {
   }
 }
 
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({
-    required this.title,
-    required this.primary,
-    required this.secondary,
-    required this.trailing,
-  });
+class _ProductShelfPlaceholder extends StatelessWidget {
+  const _ProductShelfPlaceholder({required this.title});
 
   final String title;
-  final String primary;
-  final String secondary;
-  final Widget trailing;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 18,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
             title,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF6B7280)),
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: const Color(0xFF111827),
+              fontWeight: FontWeight.w800,
+            ),
           ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      primary,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            color: const Color(0xFF111827),
-                          ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      secondary,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF6B7280),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              trailing,
-            ],
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 160,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            itemCount: 2,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (_, __) => const _ProductPlaceholderTile(),
           ),
-        ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ProductPlaceholderTile extends StatelessWidget {
+  const _ProductPlaceholderTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: 1,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Color(0x10000000),
+              blurRadius: 16,
+              offset: Offset(0, 8),
+            ),
+          ],
+        ),
       ),
     );
   }

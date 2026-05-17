@@ -77,9 +77,62 @@ class PublicCatalogService {
     String requiredServiceType,
     String requiredShopId,
   ) {
-    return query.snapshots().asyncMap((snapshot) async {
+    late StreamController<List<PublicCatalogSection>> controller;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? productSubscription;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? shopSubscription;
+    QuerySnapshot<Map<String, dynamic>>? latestProducts;
+    Map<String, Map<String, dynamic>> latestShops = const <String, Map<String, dynamic>>{};
+
+    void emit() {
+      final snapshot = latestProducts;
+      if (snapshot == null || controller.isClosed) return;
+      controller.add(_buildSections(
+        snapshot,
+        latestShops,
+        requiredServiceType,
+        requiredShopId,
+      ));
+    }
+
+    controller = StreamController<List<PublicCatalogSection>>(
+      onListen: () {
+        productSubscription = query.snapshots().listen(
+          (snapshot) {
+            latestProducts = snapshot;
+            emit();
+          },
+          onError: controller.addError,
+        );
+
+        shopSubscription = FirebaseFirestore.instance.collection('public_shops').snapshots().listen(
+          (snapshot) {
+            latestShops = <String, Map<String, dynamic>>{
+              for (final doc in snapshot.docs) doc.id: doc.data(),
+            };
+            emit();
+          },
+          onError: (_) {
+            latestShops = const <String, Map<String, dynamic>>{};
+            emit();
+          },
+        );
+      },
+      onCancel: () async {
+        await productSubscription?.cancel();
+        await shopSubscription?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  static List<PublicCatalogSection> _buildSections(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+    Map<String, Map<String, dynamic>> publicShops,
+    String requiredServiceType,
+    String requiredShopId,
+  ) {
       final Map<String, List<PublicCatalogProduct>> grouped = <String, List<PublicCatalogProduct>>{};
-      final Map<String, String> serviceTypeByShopId = <String, String>{};
       final normalizedTargetServiceType = requiredServiceType.trim().isEmpty
           ? null
           : _normalizeServiceType(requiredServiceType);
@@ -92,28 +145,28 @@ class PublicCatalogService {
         final shopId = _readShopId(data);
         if (shopId.isEmpty) continue;
 
+        final publicShop = publicShops[shopId];
+
         if (normalizedTargetShopId.isNotEmpty && shopId != normalizedTargetShopId) {
           continue;
         }
 
-        final serviceType = _readServiceType(data);
+        final serviceType = _readServiceType(publicShop).isNotEmpty
+          ? _readServiceType(publicShop)
+          : _readServiceType(data);
         if (normalizedTargetServiceType != null &&
             normalizedTargetServiceType.isNotEmpty &&
             _normalizeServiceType(serviceType) != normalizedTargetServiceType) {
           continue;
         }
 
-        if (serviceType.isNotEmpty) {
-          serviceTypeByShopId.putIfAbsent(shopId, () => serviceType);
-        }
-
         final product = PublicCatalogProduct(
           id: doc.id,
           shopId: shopId,
-          shopName: _readShopName(data),
-          shopImageUrl: _readShopImage(data),
-          shopLatitude: _extractLatitude(data),
-          shopLongitude: _extractLongitude(data),
+          shopName: _readShopName(publicShop) ?? _readShopName(data),
+          shopImageUrl: _readShopImage(publicShop) ?? _readShopImage(data),
+          shopLatitude: publicShop == null ? _extractLatitude(data) : _extractLatitude(publicShop) ?? _extractLatitude(data),
+          shopLongitude: publicShop == null ? _extractLongitude(data) : _extractLongitude(publicShop) ?? _extractLongitude(data),
           data: data,
         );
 
@@ -156,12 +209,12 @@ class PublicCatalogService {
           })
           .whereType<PublicCatalogSection>()
           .toList(growable: false);
-    });
   }
 
 }
 
-double? _extractLatitude(Map<String, dynamic> data) {
+double? _extractLatitude(Map<String, dynamic>? data) {
+  if (data == null) return null;
   final direct = _toDouble(data['shopLatitude']) ?? _toDouble(data['latitude']) ?? _toDouble(data['lat']);
   if (direct != null) {
     return direct;
@@ -178,7 +231,8 @@ double? _extractLatitude(Map<String, dynamic> data) {
   return null;
 }
 
-double? _extractLongitude(Map<String, dynamic> data) {
+double? _extractLongitude(Map<String, dynamic>? data) {
+  if (data == null) return null;
   final direct =
       _toDouble(data['shopLongitude']) ??
       _toDouble(data['longitude']) ??
@@ -274,7 +328,8 @@ String _readShopId(Map<String, dynamic> data) {
   return '';
 }
 
-String? _readShopName(Map<String, dynamic> data) {
+String? _readShopName(Map<String, dynamic>? data) {
+  if (data == null) return null;
   final candidates = <Object?>[
     data['shopName'],
     data['name'],
@@ -293,7 +348,8 @@ String? _readShopName(Map<String, dynamic> data) {
   return null;
 }
 
-String? _readShopImage(Map<String, dynamic> data) {
+String? _readShopImage(Map<String, dynamic>? data) {
+  if (data == null) return null;
   final candidates = <Object?>[
     data['shopImageUrl'],
     data['imageUrl'],
@@ -311,7 +367,8 @@ String? _readShopImage(Map<String, dynamic> data) {
   return null;
 }
 
-String _readServiceType(Map<String, dynamic> data) {
+String _readServiceType(Map<String, dynamic>? data) {
+  if (data == null) return '';
   final candidates = <Object?>[
     data['serviceType'],
     data['service_type'],

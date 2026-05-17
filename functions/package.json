@@ -7,8 +7,9 @@
     "node": "22"
   },
   "scripts": {
-    "deploy": "firebase deploy --only functions",
-    "deploy:otp": "firebase deploy --only functions:sendEmailOtp,functions:verifyEmailOtp",
+    "deploy": "powershell -ExecutionPolicy Bypass -File ../scripts/deploy-functions-isolated.ps1",
+    "deploy:otp": "powershell -ExecutionPolicy Bypass -File ../scripts/deploy-functions-isolated.ps1 -FunctionName sendEmailOtp verifyEmailOtp",
+    "deploy:verifyTopUpSlip": "powershell -ExecutionPolicy Bypass -File ../scripts/deploy-functions-isolated.ps1 -FunctionName verifyTopUpSlip",
     "migrate:customer-users": "node migrate-users-to-customer-users.js"
   },
   "dependencies": {

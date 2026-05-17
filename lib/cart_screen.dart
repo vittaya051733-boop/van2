@@ -31,6 +31,7 @@ class CartLineItem {
     required this.selectedToppings,
     required this.quantity,
     required this.availableStock,
+    required this.preparationTimeMinutes,
   });
 
   final String productId;
@@ -44,6 +45,7 @@ class CartLineItem {
   final List<String> selectedToppings;
   final int quantity;
   final int? availableStock;
+  final int preparationTimeMinutes;
 }
 
 class PaymentSlipSubmissionRequest {
@@ -2225,22 +2227,17 @@ class _CustomerLocationCard extends StatelessWidget {
             children: <Widget>[
               Expanded(
                 child: Text(
-                  'พิกัดลูกค้าที่ใช้งาน',
+                  'พิกัดส่งปัจจุบัน',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w700,
                     color: const Color(0xFF1F2937),
                   ),
                 ),
               ),
-              TextButton.icon(
-                onPressed: onApplySharedLocation,
-                icon: const Icon(Icons.share_location_outlined, size: 18),
-                label: const Text('วางพิกัดแชร์'),
-              ),
               OutlinedButton.icon(
-                onPressed: onPickLocation,
+                onPressed: () => _showDeliveryCoordinateOptions(context),
                 icon: const Icon(Icons.edit_location_alt_outlined, size: 18),
-                label: const Text('เปลี่ยน'),
+                label: const Text('เปลี่ยนพิกัดส่ง'),
               ),
             ],
           ),
@@ -2264,4 +2261,98 @@ class _CustomerLocationCard extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _showDeliveryCoordinateOptions(BuildContext context) async {
+    final selectedAction = await showModalBottomSheet<_LocationAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'เปลี่ยนพิกัดส่ง',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF1F2937),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF9FAFB),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Text(
+                        'พิกัดส่งปัจจุบัน',
+                        style: TextStyle(
+                          color: Color(0xFF6B7280),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF111827),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Lat ${latitude.toStringAsFixed(6)} • Lng ${longitude.toStringAsFixed(6)}',
+                        style: const TextStyle(
+                          color: Color(0xFF6B7280),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.share_location_outlined),
+                  title: const Text('วางพิกัด'),
+                  subtitle: const Text('วางพิกัดที่แชร์มาหรือ Google Maps URL'),
+                  onTap: () => Navigator.of(context).pop(_LocationAction.paste),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.edit_location_alt_outlined),
+                  title: const Text('เปลี่ยนพิกัด'),
+                  subtitle: const Text('เลือกตำแหน่งใหม่จากแผนที่'),
+                  onTap: () => Navigator.of(context).pop(_LocationAction.pick),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    switch (selectedAction) {
+      case _LocationAction.paste:
+        onApplySharedLocation();
+      case _LocationAction.pick:
+        onPickLocation();
+      case null:
+        break;
+    }
+  }
 }
+
+enum _LocationAction { paste, pick }

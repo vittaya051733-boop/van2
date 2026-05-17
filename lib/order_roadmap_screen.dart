@@ -63,7 +63,10 @@ class _RoadmapList extends StatelessWidget {
 }
 
 class _RecentCustomerRoadmapList extends StatelessWidget {
-  const _RecentCustomerRoadmapList({required this.uid, required this.firestore});
+  const _RecentCustomerRoadmapList({
+    required this.uid,
+    required this.firestore,
+  });
 
   final String? uid;
   final FirebaseFirestore firestore;
@@ -85,7 +88,8 @@ class _RecentCustomerRoadmapList extends StatelessWidget {
           .where('customerId', isEqualTo: uid)
           .snapshots(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
@@ -98,8 +102,10 @@ class _RecentCustomerRoadmapList extends StatelessWidget {
           );
         }
 
-        final docs = (snapshot.data?.docs ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[])
-            .toList(growable: false);
+        final docs =
+            (snapshot.data?.docs ??
+                    <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+                .toList(growable: false);
 
         if (docs.isEmpty) {
           return const Center(
@@ -136,7 +142,8 @@ class _OrderRoadmapCard extends StatelessWidget {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: firestore.collection('orders').doc(orderId).snapshots(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Card(
             child: Padding(
               padding: EdgeInsets.all(20),
@@ -168,16 +175,24 @@ class _OrderRoadmapCard extends StatelessWidget {
         final isTravelOrder = _isTravelPassengerOrder(data);
         final shopName = (data['shopName'] as String?)?.trim();
         final orderCode = (data['orderCode'] as String?)?.trim();
-        final total = (data['grandTotal'] as num?) ?? (data['totalPrice'] as num?) ?? 0;
+        final total =
+            (data['grandTotal'] as num?) ?? (data['totalPrice'] as num?) ?? 0;
         final driverId = (data['driverId'] as String?)?.trim();
         final shopImageUrl = _readShopImageUrl(data);
         final productEntries = _readProductEntries(data);
-        final deliveryProofImageUrl = (data['deliveryProofImageUrl'] as String?)?.trim();
+        final deliveryProofImageUrl = (data['deliveryProofImageUrl'] as String?)
+            ?.trim();
         final deliveryProofMeta = _buildDeliveryProofMeta(data);
         final pickupLabel = isTravelOrder ? _readTravelPickupLabel(data) : null;
-        final destinationLabel = isTravelOrder ? _readTravelDestinationLabel(data) : null;
-        final travelVehicleLabel = isTravelOrder ? _readTravelVehicleLabel(data) : null;
-        final travelScheduleLabel = isTravelOrder ? _readTravelScheduleLabel(data) : null;
+        final destinationLabel = isTravelOrder
+            ? _readTravelDestinationLabel(data)
+            : null;
+        final travelVehicleLabel = isTravelOrder
+            ? _readTravelVehicleLabel(data)
+            : null;
+        final travelScheduleLabel = isTravelOrder
+            ? _readTravelScheduleLabel(data)
+            : null;
 
         return Card(
           child: Padding(
@@ -190,7 +205,8 @@ class _OrderRoadmapCard extends StatelessWidget {
                       ? Future<String?>.value(shopImageUrl)
                       : _loadShopImageUrl(data),
                   builder: (context, shopImageSnapshot) {
-                    final resolvedShopImageUrl = shopImageSnapshot.data ?? shopImageUrl;
+                    final resolvedShopImageUrl =
+                        shopImageSnapshot.data ?? shopImageUrl;
 
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -204,8 +220,13 @@ class _OrderRoadmapCard extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                orderCode?.isNotEmpty == true ? 'Order $orderCode' : 'Order $orderId',
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                                orderCode?.isNotEmpty == true
+                                    ? 'Order $orderCode'
+                                    : 'Order $orderId',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
                               const SizedBox(height: 2),
                               SelectableText(
@@ -230,7 +251,9 @@ class _OrderRoadmapCard extends StatelessWidget {
                       : 'ร้าน: ${shopName?.isNotEmpty == true ? shopName : '-'}',
                 ),
                 if (isTravelOrder)
-                  Text('จุดส่ง: ${destinationLabel?.isNotEmpty == true ? destinationLabel : '-'}'),
+                  Text(
+                    'จุดส่ง: ${destinationLabel?.isNotEmpty == true ? destinationLabel : '-'}',
+                  ),
                 Text('ยอดชำระ: THB ${total.toStringAsFixed(1)}'),
                 if (isTravelOrder && travelVehicleLabel != null)
                   Text('ประเภทรถ: $travelVehicleLabel'),
@@ -260,7 +283,8 @@ class _OrderRoadmapCard extends StatelessWidget {
                     ),
                   ),
                 ],
-                if (deliveryProofImageUrl != null && deliveryProofImageUrl.isNotEmpty) ...[
+                if (deliveryProofImageUrl != null &&
+                    deliveryProofImageUrl.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   const Text(
                     'รูปยืนยันจากไรเดอร์',
@@ -303,7 +327,8 @@ class _OrderRoadmapCard extends StatelessWidget {
                     final contact = contactSnapshot.data;
                     final hasRider = driverId != null && driverId.isNotEmpty;
                     final canChat = contact?.profile != null;
-                    final canCall = hasRider || (contact?.phone?.isNotEmpty ?? false);
+                    final canCall =
+                        hasRider || (contact?.phone?.isNotEmpty ?? false);
 
                     return Row(
                       children: [
@@ -338,7 +363,9 @@ class _OrderRoadmapCard extends StatelessWidget {
                                     );
                                   },
                             icon: const Icon(Icons.phone_in_talk_outlined),
-                            label: Text(canCall ? 'โทรไรเดอร์' : 'โทรไรเดอร์ไม่ได้'),
+                            label: Text(
+                              canCall ? 'โทรไรเดอร์' : 'โทรไรเดอร์ไม่ได้',
+                            ),
                           ),
                         ),
                       ],
@@ -351,27 +378,39 @@ class _OrderRoadmapCard extends StatelessWidget {
                   data: data,
                   firestore: firestore,
                 ),
+                if (!isTravelOrder)
+                  _AwaitingShopDecisionBanner(
+                    orderId: orderId,
+                    data: data,
+                    firestore: firestore,
+                  ),
                 _TimelineStepTile(
                   label: 'ไรเดอร์รับออเดอร์',
                   status: roadmap.riderAccepted,
                   leadingIcon: Icons.assignment_turned_in_outlined,
                 ),
                 _TimelineStepTile(
-                  label: isTravelOrder ? 'กำลังรอผู้โดยสารขึ้นรถ' : 'ร้านค้ารับออเดอร์',
+                  label: isTravelOrder
+                      ? 'กำลังรอผู้โดยสารขึ้นรถ'
+                      : 'ร้านค้ารับออเดอร์',
                   status: roadmap.shopPreparing,
                   leadingIcon: isTravelOrder
                       ? Icons.airline_seat_recline_normal_outlined
                       : Icons.storefront_outlined,
                 ),
                 _TimelineStepTile(
-                  label: isTravelOrder ? 'ไรเดอร์ถึงจุดรับแล้ว' : 'ไรเดอร์สแกนรับสินค้า',
+                  label: isTravelOrder
+                      ? 'ไรเดอร์ถึงจุดรับแล้ว'
+                      : 'ไรเดอร์สแกนรับสินค้า',
                   status: roadmap.riderScannedPickup,
                   leadingIcon: isTravelOrder
                       ? Icons.location_on_outlined
                       : Icons.qr_code_scanner_outlined,
                 ),
                 _TimelineStepTile(
-                  label: isTravelOrder ? 'กำลังเดินทางไปจุดส่ง' : 'ไรเดอร์กำลังไปส่ง',
+                  label: isTravelOrder
+                      ? 'กำลังเดินทางไปจุดส่ง'
+                      : 'ไรเดอร์กำลังไปส่ง',
                   status: roadmap.delivering,
                   leadingIcon: isTravelOrder
                       ? Icons.directions_car_outlined
@@ -523,7 +562,10 @@ class _OrderRoadmapCard extends StatelessWidget {
 
     for (final field in _shopLookupFields) {
       try {
-        final query = await productCollection.where(field, isEqualTo: shopId).limit(1).get();
+        final query = await productCollection
+            .where(field, isEqualTo: shopId)
+            .limit(1)
+            .get();
         for (final doc in query.docs) {
           final imageUrl = _readShopImageFromProductDocument(doc.data());
           if (imageUrl != null) {
@@ -589,7 +631,10 @@ class _OrderRoadmapCard extends StatelessWidget {
         }
 
         final productMap = Map<String, dynamic>.from(rawProduct);
-        final productShopId = _readFirstNonEmptyValue(productMap, _shopLookupFields);
+        final productShopId = _readFirstNonEmptyValue(
+          productMap,
+          _shopLookupFields,
+        );
         if (productShopId != null) {
           return productShopId;
         }
@@ -627,7 +672,10 @@ class _OrderRoadmapCard extends StatelessWidget {
     return productIds.toList(growable: false);
   }
 
-  String? _readFirstNonEmptyValue(Map<String, dynamic> data, List<String> keys) {
+  String? _readFirstNonEmptyValue(
+    Map<String, dynamic> data,
+    List<String> keys,
+  ) {
     for (final key in keys) {
       final value = data[key]?.toString().trim();
       if (value != null && value.isNotEmpty) {
@@ -736,18 +784,18 @@ class _OrderRoadmapCard extends StatelessWidget {
     return '$day/$month/$year $hour:$minute';
   }
 
-  Future<_RiderContactState> _loadRiderContactState(Map<String, dynamic> data) async {
+  Future<_RiderContactState> _loadRiderContactState(
+    Map<String, dynamic> data,
+  ) async {
     final driverId = (data['driverId'] as String?)?.trim();
-    final fallbackName = ((data['driverName'] as String?)?.trim().isNotEmpty ?? false)
+    final fallbackName =
+        ((data['driverName'] as String?)?.trim().isNotEmpty ?? false)
         ? (data['driverName'] as String).trim()
         : 'ไรเดอร์';
     final fallbackPhone = (data['driverPhone'] as String?)?.trim();
 
     if (driverId == null || driverId.isEmpty) {
-      return _RiderContactState(
-        profile: null,
-        phone: fallbackPhone,
-      );
+      return _RiderContactState(profile: null, phone: fallbackPhone);
     }
 
     UserProfile? profile;
@@ -777,10 +825,7 @@ class _OrderRoadmapCard extends StatelessWidget {
       riderData?['mobile'] as String?,
     ]);
 
-    return _RiderContactState(
-      profile: profile,
-      phone: phone,
-    );
+    return _RiderContactState(profile: profile, phone: phone);
   }
 
   String? _pickFirstNonEmpty(List<String?> candidates) {
@@ -793,7 +838,10 @@ class _OrderRoadmapCard extends StatelessWidget {
     return null;
   }
 
-  Future<void> _callPhone(String phone, ScaffoldMessengerState? messenger) async {
+  Future<void> _callPhone(
+    String phone,
+    ScaffoldMessengerState? messenger,
+  ) async {
     final uri = Uri(scheme: 'tel', path: phone);
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok) {
@@ -822,11 +870,13 @@ class _OrderRoadmapCard extends StatelessWidget {
           throw Exception('ไม่สามารถโทรหาบัญชีตัวเองได้');
         }
 
-        final callee = riderProfile ?? UserProfile(
-          uid: riderUid,
-          displayName: 'ไรเดอร์',
-          phoneNumber: contact?.phone,
-        );
+        final callee =
+            riderProfile ??
+            UserProfile(
+              uid: riderUid,
+              displayName: 'ไรเดอร์',
+              phoneNumber: contact?.phone,
+            );
 
         final callData = await NotificationService().initiateCall(
           caller: caller,
@@ -841,7 +891,9 @@ class _OrderRoadmapCard extends StatelessWidget {
         await navigator.push(
           MaterialPageRoute<void>(
             builder: (_) => CallScreen(
-              channelName: (callData['channelId'] as String?) ?? 'call_${caller.uid}_$riderUid',
+              channelName:
+                  (callData['channelId'] as String?) ??
+                  'call_${caller.uid}_$riderUid',
               isVideo: false,
               targetProfile: callee,
               appIdOverride: callData['appId'] as String?,
@@ -876,9 +928,9 @@ class _OrderRoadmapCard extends StatelessWidget {
     }
 
     final customerDoc = await FirebaseFirestore.instance
-      .collection('customer_users')
-      .doc(user.uid)
-      .get();
+        .collection('customer_users')
+        .doc(user.uid)
+        .get();
     if (customerDoc.exists) {
       return UserProfile.fromSnapshot(customerDoc);
     }
@@ -887,7 +939,9 @@ class _OrderRoadmapCard extends StatelessWidget {
       uid: user.uid,
       displayName: user.displayName?.trim().isNotEmpty == true
           ? user.displayName!.trim()
-          : (user.email?.trim().isNotEmpty == true ? user.email!.trim() : 'ลูกค้า'),
+          : (user.email?.trim().isNotEmpty == true
+                ? user.email!.trim()
+                : 'ลูกค้า'),
       phoneNumber: user.phoneNumber,
       photoUrl: user.photoURL,
     );
@@ -895,54 +949,60 @@ class _OrderRoadmapCard extends StatelessWidget {
 
   _OrderRoadmapState _buildRoadmapState(Map<String, dynamic> data) {
     final status = (data['status'] as String?)?.trim() ?? '';
-    final hasDriver = ((data['driverId'] as String?)?.trim().isNotEmpty ?? false);
+    final hasDriver =
+        ((data['driverId'] as String?)?.trim().isNotEmpty ?? false);
     final riderSearch = data['riderSearch'];
     final matchedBySearch = riderSearch is Map<String, dynamic>
-      ? (riderSearch['matched'] == true)
-      : false;
+        ? (riderSearch['matched'] == true)
+        : false;
     final hasAcceptedAt = data['acceptedAt'] != null;
-    final hasScanned = ((data['scannedByDriverId'] as String?)?.trim().isNotEmpty ?? false) ||
+    final hasScanned =
+        ((data['scannedByDriverId'] as String?)?.trim().isNotEmpty ?? false) ||
         data['scannedAt'] != null;
 
-    final riderSearchStarted = riderSearch is Map<String, dynamic> ||
-      status == 'awaiting_rider' ||
-      status == 'pending' ||
-      status == 'accepted' ||
-      status == 'preparing' ||
-      status == 'ready' ||
-      status == 'delivering' ||
-      status == 'delivered';
-
-    final riderMatched = hasDriver ||
-      matchedBySearch ||
-      status == 'pending' ||
-      status == 'accepted' ||
-      status == 'preparing' ||
-      status == 'ready' ||
-      status == 'delivering' ||
-      status == 'delivered';
-
-    final riderAccepted = hasAcceptedAt ||
+    final riderSearchStarted =
+        riderSearch is Map<String, dynamic> ||
+        status == 'awaiting_rider' ||
+        status == 'pending' ||
         status == 'accepted' ||
         status == 'preparing' ||
         status == 'ready' ||
         status == 'delivering' ||
         status == 'delivered';
 
-    final riderToShop = status == 'accepted' ||
+    final riderMatched =
+        hasDriver ||
+        matchedBySearch ||
+        status == 'pending' ||
+        status == 'accepted' ||
         status == 'preparing' ||
         status == 'ready' ||
         status == 'delivering' ||
         status == 'delivered';
 
-    final shopPreparing = status == 'preparing' ||
+    final riderAccepted =
+        hasAcceptedAt ||
+        status == 'accepted' ||
+        status == 'preparing' ||
         status == 'ready' ||
         status == 'delivering' ||
         status == 'delivered';
 
-    final riderScannedPickup = hasScanned ||
+    final riderToShop =
+        status == 'accepted' ||
+        status == 'preparing' ||
+        status == 'ready' ||
         status == 'delivering' ||
         status == 'delivered';
+
+    final shopPreparing =
+        status == 'preparing' ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+
+    final riderScannedPickup =
+        hasScanned || status == 'delivering' || status == 'delivered';
 
     final delivering = status == 'delivering' || status == 'delivered';
     final delivered = status == 'delivered';
@@ -1040,7 +1100,10 @@ class _ShopRoadmapImage extends StatelessWidget {
         height: 52,
         fit: BoxFit.cover,
         borderRadius: BorderRadius.circular(14),
-        errorWidget: const Icon(Icons.storefront_outlined, color: Color(0xFF9CA3AF)),
+        errorWidget: const Icon(
+          Icons.storefront_outlined,
+          color: Color(0xFF9CA3AF),
+        ),
       ),
     );
   }
@@ -1077,7 +1140,10 @@ class _RoadmapProductImageCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
                 color: const Color(0xFFF3F4F6),
               ),
-              child: const Icon(Icons.image_not_supported_outlined, color: Color(0xFF9CA3AF)),
+              child: const Icon(
+                Icons.image_not_supported_outlined,
+                color: Color(0xFF9CA3AF),
+              ),
             ),
           ),
           const SizedBox(height: 6),
@@ -1085,10 +1151,7 @@ class _RoadmapProductImageCard extends StatelessWidget {
             name,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 2),
           Text(
@@ -1120,10 +1183,7 @@ class _RoadmapProductEntry {
 }
 
 class _RiderContactState {
-  const _RiderContactState({
-    required this.profile,
-    required this.phone,
-  });
+  const _RiderContactState({required this.profile, required this.phone});
 
   final UserProfile? profile;
   final String? phone;
@@ -1177,7 +1237,9 @@ class _TimelineStepTile extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: status ? const Color(0xFF111827) : const Color(0xFF6B7280),
+                color: status
+                    ? const Color(0xFF111827)
+                    : const Color(0xFF6B7280),
                 fontWeight: status ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -1269,7 +1331,8 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
   bool get _isStale {
     final status = (widget.data['status'] as String?)?.trim() ?? '';
     final driverId = (widget.data['driverId'] as String?)?.trim() ?? '';
-    final reassignFailed = (widget.data['reassignFailureReason'] as String?)?.trim();
+    final reassignFailed = (widget.data['reassignFailureReason'] as String?)
+        ?.trim();
     final acceptedAt = _readTimestamp(widget.data['acceptedAt']);
 
     if (_isWaiting) {
@@ -1327,14 +1390,16 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
       }, SetOptions(merge: true));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('รอเพิ่ม 15 นาที ระบบจะหาไรเดอร์ให้ใหม่')),
+          const SnackBar(
+            content: Text('รอเพิ่ม 15 นาที ระบบจะหาไรเดอร์ให้ใหม่'),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('บันทึกการรอไม่สำเร็จ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('บันทึกการรอไม่สำเร็จ: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1423,7 +1488,8 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
               onPressed: () {
                 if (formKey.currentState?.validate() != true) return;
                 Navigator.pop(ctx, {
-                  'refundBankAccountNumber': accountNumberController.text.trim(),
+                  'refundBankAccountNumber': accountNumberController.text
+                      .trim(),
                   'refundAccountName': accountNameController.text.trim(),
                   'refundBankName': bankNameController.text.trim(),
                 });
@@ -1456,14 +1522,16 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
       }, SetOptions(merge: true));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('ส่งคำขอคืนเงินแล้ว ทีมงานจะดำเนินการให้')),
+          const SnackBar(
+            content: Text('ส่งคำขอคืนเงินแล้ว ทีมงานจะดำเนินการให้'),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ส่งคำขอคืนเงินไม่สำเร็จ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('ส่งคำขอคืนเงินไม่สำเร็จ: $e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1488,8 +1556,11 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
         children: [
           Row(
             children: [
-              const Icon(Icons.access_time_rounded,
-                  color: Color(0xFFEA580C), size: 22),
+              const Icon(
+                Icons.access_time_rounded,
+                color: Color(0xFFEA580C),
+                size: 22,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1530,6 +1601,364 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
                   onPressed: _busy ? null : _requestRefund,
                   icon: const Icon(Icons.payments_outlined),
                   label: const Text('ขอคืนเงิน'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AwaitingShopDecisionBanner extends StatefulWidget {
+  const _AwaitingShopDecisionBanner({
+    required this.orderId,
+    required this.data,
+    required this.firestore,
+  });
+
+  final String orderId;
+  final Map<String, dynamic> data;
+  final FirebaseFirestore firestore;
+
+  @override
+  State<_AwaitingShopDecisionBanner> createState() =>
+      _AwaitingShopDecisionBannerState();
+}
+
+class _AwaitingShopDecisionBannerState
+    extends State<_AwaitingShopDecisionBanner> {
+  static const Duration _shopDecisionThreshold = Duration(minutes: 15);
+  static const Duration _customerExtraWaitDuration = Duration(minutes: 15);
+
+  Timer? _refreshTimer;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  DateTime? _readTimestamp(Object? value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    if (value is DateTime) {
+      return value;
+    }
+    return null;
+  }
+
+  String _readStatus() => (widget.data['status'] as String?)?.trim() ?? '';
+
+  String _readShopDecisionStatus() =>
+      (widget.data['shopDecisionStatus'] as String?)?.trim() ?? '';
+
+  bool get _shopHasAccepted {
+    final status = _readStatus();
+    return widget.data['preparingStartTime'] != null ||
+        status == 'preparing' ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+  }
+
+  bool get _shopRejected {
+    final cancelReason = (widget.data['cancelReason'] as String?)?.trim() ?? '';
+    return _readShopDecisionStatus() == 'rejected' ||
+        widget.data['shopRejectedAt'] != null ||
+        cancelReason == 'shop_rejected_waiting_customer_decision' ||
+        cancelReason == 'shop_rejected_order';
+  }
+
+  bool get _isWaiting {
+    final waitUntil = widget.data['customerShopWaitUntil'];
+    if (waitUntil is Timestamp) {
+      return waitUntil.toDate().isAfter(DateTime.now());
+    }
+    return false;
+  }
+
+  bool get _isStale {
+    if (_isWaiting) {
+      return true;
+    }
+    if (_shopHasAccepted) {
+      return false;
+    }
+    if (_shopRejected) {
+      return true;
+    }
+
+    final status = _readStatus();
+    if (status != 'accepted') {
+      return false;
+    }
+
+    final acceptedAt = _readTimestamp(widget.data['acceptedAt']);
+    if (acceptedAt == null) {
+      return false;
+    }
+    return DateTime.now().difference(acceptedAt) >= _shopDecisionThreshold;
+  }
+
+  String? _currentUserUidOrNull() {
+    try {
+      return FirebaseAuth.instance.currentUser?.uid;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _wait15Min() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final until = DateTime.now().add(_customerExtraWaitDuration);
+      await widget.firestore.collection('orders').doc(widget.orderId).set({
+        'status': 'accepted',
+        'customerShopWaitUntil': Timestamp.fromDate(until),
+        'customerShopWaitRequestedAt': FieldValue.serverTimestamp(),
+        'customerShopChoice': 'wait_15_min',
+        'shopDecisionStatus': FieldValue.delete(),
+        'shopRejectedAt': FieldValue.delete(),
+        'shopRejectedBy': FieldValue.delete(),
+        'cancelReason': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('รอเพิ่ม 15 นาที ร้านค้าจะเห็นออเดอร์นี้อีกครั้ง'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('บันทึกการรอไม่สำเร็จ: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _cancelOrder() async {
+    if (_busy) return;
+    final accountNumberController = TextEditingController();
+    final accountNameController = TextEditingController();
+    final bankNameController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    Map<String, String>? refundInfo;
+    try {
+      refundInfo = await showDialog<Map<String, String>>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('ขอคืนเงิน'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: accountNumberController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'หมายเลขบัญชี',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่หมายเลขบัญชี';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: accountNameController,
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'ชื่อเจ้าของบัญชี',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่ชื่อเจ้าของบัญชี';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: bankNameController,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'ชื่อธนาคาร',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'กรุณาใส่ชื่อธนาคาร';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('ยกเลิก'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() != true) return;
+                Navigator.pop(ctx, {
+                  'refundBankAccountNumber': accountNumberController.text
+                      .trim(),
+                  'refundAccountName': accountNameController.text.trim(),
+                  'refundBankName': bankNameController.text.trim(),
+                });
+              },
+              child: const Text('ยืนยันคืนเงิน'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      accountNumberController.dispose();
+      accountNameController.dispose();
+      bankNameController.dispose();
+    }
+
+    if (refundInfo == null) return;
+
+    setState(() => _busy = true);
+    try {
+      final currentUid = _currentUserUidOrNull();
+      await widget.firestore.collection('orders').doc(widget.orderId).set({
+        'status': 'cancelled',
+        'statusLabel': 'ยกเลิกออเดอร์',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelledBy': currentUid,
+        'cancelReason': _shopRejected
+            ? 'customer_cancelled_after_shop_rejected'
+            : 'customer_cancelled_after_shop_no_response',
+        'customerShopChoice': 'cancel',
+        'customerCancelledAt': FieldValue.serverTimestamp(),
+        'refundRequested': true,
+        'refundRequestedAt': FieldValue.serverTimestamp(),
+        'refundRequestedBy': currentUid,
+        'refundStatus': 'requested',
+        ...refundInfo,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('ยกเลิกออเดอร์แล้ว')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('ยกเลิกออเดอร์ไม่สำเร็จ: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isStale) return const SizedBox.shrink();
+
+    final waiting = _isWaiting;
+    final rejected = _shopRejected;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        border: Border.all(color: const Color(0xFFF59E0B)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.storefront_outlined,
+                color: Color(0xFFD97706),
+                size: 22,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  waiting
+                      ? 'กำลังรอร้านค้าอีก 15 นาที'
+                      : rejected
+                      ? 'ร้านค้าปฏิเสธออเดอร์นี้'
+                      : 'ร้านค้ายังไม่รับออเดอร์หลังไรเดอร์รับงานแล้ว',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            waiting
+                ? 'หากร้านค้ายังไม่รับงานภายในเวลาที่กำหนด คุณสามารถยกเลิกออเดอร์ได้'
+                : 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์นี้ได้',
+            style: const TextStyle(color: Color(0xFF78350F), fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy || waiting ? null : _wait15Min,
+                  icon: const Icon(Icons.timer_outlined),
+                  label: Text(waiting ? 'รออยู่...' : 'รออีก 15 นาที'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFDC2626),
+                  ),
+                  onPressed: _busy ? null : _cancelOrder,
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('ยกเลิกออเดอร์'),
                 ),
               ),
             ],

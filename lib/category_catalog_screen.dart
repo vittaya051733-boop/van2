@@ -36,6 +36,7 @@ class CartProductSelection {
     required this.selectedToppings,
     required this.quantity,
     required this.availableStock,
+    required this.preparationTimeMinutes,
   });
 
   final String productId;
@@ -49,6 +50,7 @@ class CartProductSelection {
   final List<String> selectedToppings;
   final int quantity;
   final int? availableStock;
+  final int preparationTimeMinutes;
 }
 
 class _ToppingOption {
@@ -61,6 +63,26 @@ class _ToppingOption {
   final String label;
   final num adjustedPrice;
   final String displayLabel;
+}
+
+class _ToppingGroup {
+  const _ToppingGroup({
+    required this.heading,
+    required this.options,
+  });
+
+  final String? heading;
+  final List<_ToppingOption> options;
+}
+
+class _IndexedToppingOption {
+  const _IndexedToppingOption({
+    required this.key,
+    required this.option,
+  });
+
+  final String key;
+  final _ToppingOption option;
 }
 
 class CategoryCatalogScreen extends StatelessWidget {
@@ -274,8 +296,9 @@ class _ProductCard extends StatelessWidget {
     final num basePrice = TaxPricingPolicy.parseNumber(data['price']);
     final num adjustedBasePrice = TaxPricingPolicy.applyProductMarkup(basePrice, taxable);
     final String adjustedPriceText = TaxPricingPolicy.formatPrice(adjustedBasePrice);
-    final List<_ToppingOption> toppings = _extractToppings(data);
+    final List<_ToppingGroup> toppingGroups = _extractToppings(data);
     final int? availableStock = _extractAvailableStock(data);
+    final int preparationTimeMinutes = _extractPreparationTimeMinutes(data);
     final String shopName =
         product.shopName?.trim().isNotEmpty == true ? product.shopName!.trim() : 'ร้านค้า';
     final String? distanceText = _formatDistanceKm(shopDistanceKm);
@@ -369,8 +392,9 @@ class _ProductCard extends StatelessWidget {
               description: cleanDescription,
               adjustedBasePrice: adjustedBasePrice,
               imageUrl: imageUrl,
-              toppings: toppings,
+                    toppingGroups: toppingGroups,
               availableStock: availableStock,
+              preparationTimeMinutes: preparationTimeMinutes,
             ),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFFE55A00),
@@ -409,17 +433,26 @@ String? _formatDistanceKm(double? distanceKm) {
     required String description,
     required num adjustedBasePrice,
     required String? imageUrl,
-    required List<_ToppingOption> toppings,
+    required List<_ToppingGroup> toppingGroups,
     required int? availableStock,
+    required int preparationTimeMinutes,
   }) {
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final List<_IndexedToppingOption> indexedToppings = <_IndexedToppingOption>[
+      for (var groupIndex = 0; groupIndex < toppingGroups.length; groupIndex++)
+        for (var optionIndex = 0; optionIndex < toppingGroups[groupIndex].options.length; optionIndex++)
+          _IndexedToppingOption(
+            key: '$groupIndex:$optionIndex',
+            option: toppingGroups[groupIndex].options[optionIndex],
+          ),
+    ];
 
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        final selectedToppings = <int>{};
+        final selectedToppings = <String>{};
         var quantity = 1;
         return SafeArea(
           child: StatefulBuilder(
@@ -435,14 +468,18 @@ String? _formatDistanceKm(double? distanceKm) {
               return Container(
                 margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                 Row(
                   children: [
                     _ShopAvatar(imageUrl: shopImageUrl),
@@ -563,7 +600,7 @@ String? _formatDistanceKm(double? distanceKm) {
                         ),
                   ),
                 ],
-                if (toppings.isNotEmpty) ...[
+                if (toppingGroups.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(
                     'ท็อปปิ้ง',
@@ -574,31 +611,52 @@ String? _formatDistanceKm(double? distanceKm) {
                   ),
                   const SizedBox(height: 6),
                   Column(
-                    children: List<Widget>.generate(toppings.length, (index) {
-                      final isChecked = selectedToppings.contains(index);
-                      return CheckboxListTile(
-                        value: isChecked,
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        activeColor: const Color(0xFFE55A00),
-                        title: Text(
-                          toppings[index].displayLabel,
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: const Color(0xFF374151),
-                                fontWeight: FontWeight.w600,
-                              ),
-                        ),
-                        onChanged: (value) {
-                          setModalState(() {
-                            if (value == true) {
-                              selectedToppings.add(index);
-                            } else {
-                              selectedToppings.remove(index);
-                            }
-                          });
-                        },
-                      );
-                    }),
+                    children: [
+                      for (var groupIndex = 0; groupIndex < toppingGroups.length; groupIndex++) ...[
+                        if (toppingGroups[groupIndex].heading?.isNotEmpty == true) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, bottom: 2),
+                            child: Text(
+                              toppingGroups[groupIndex].heading!,
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: const Color(0xFF92400E),
+                                  ),
+                            ),
+                          ),
+                        ],
+                        for (var optionIndex = 0; optionIndex < toppingGroups[groupIndex].options.length; optionIndex++)
+                          Builder(
+                            builder: (context) {
+                              final option = toppingGroups[groupIndex].options[optionIndex];
+                              final selectionKey = '$groupIndex:$optionIndex';
+                              final isChecked = selectedToppings.contains(selectionKey);
+                              return CheckboxListTile(
+                                value: isChecked,
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                activeColor: const Color(0xFFE55A00),
+                                title: Text(
+                                  option.displayLabel,
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                        color: const Color(0xFF374151),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                                onChanged: (value) {
+                                  setModalState(() {
+                                    if (value == true) {
+                                      selectedToppings.add(selectionKey);
+                                    } else {
+                                      selectedToppings.remove(selectionKey);
+                                    }
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                      ],
+                    ],
                   ),
                 ],
                 const SizedBox(height: 8),
@@ -616,12 +674,16 @@ String? _formatDistanceKm(double? distanceKm) {
                     onPressed: outOfStock
                         ? null
                         : () {
-                      final selectedNames = selectedToppings
-                          .map((index) => toppings[index].label)
+                      final selectedOptions = indexedToppings
+                          .where((entry) => selectedToppings.contains(entry.key))
+                          .map((entry) => entry.option)
                           .toList(growable: false);
-                      final toppingTotal = selectedToppings.fold<num>(
+                      final selectedNames = selectedOptions
+                          .map((option) => option.label)
+                          .toList(growable: false);
+                      final toppingTotal = selectedOptions.fold<num>(
                         0,
-                        (sum, index) => sum + toppings[index].adjustedPrice,
+                        (sum, option) => sum + option.adjustedPrice,
                       );
                       final unitPrice = adjustedBasePrice + toppingTotal;
                       final lineTotal = unitPrice * quantity;
@@ -638,6 +700,7 @@ String? _formatDistanceKm(double? distanceKm) {
                           selectedToppings: selectedNames,
                           quantity: quantity,
                           availableStock: availableStock,
+                          preparationTimeMinutes: preparationTimeMinutes,
                         ),
                       );
                       Navigator.of(sheetContext).pop();
@@ -666,7 +729,8 @@ String? _formatDistanceKm(double? distanceKm) {
                     ),
                   ),
                 ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },
@@ -695,6 +759,18 @@ String? _formatDistanceKm(double? distanceKm) {
     return null;
   }
 
+  int _extractPreparationTimeMinutes(Map<String, dynamic> data) {
+    final direct = _parseNonNegativeInt(data['preparationTimeMinutes']);
+    if (direct != null && direct > 0) {
+      return direct.clamp(1, 240).toInt();
+    }
+    final durationMs = _parseNonNegativeInt(data['preparingDuration']);
+    if (durationMs != null && durationMs > 0) {
+      return (durationMs / 60000).ceil().clamp(1, 240).toInt();
+    }
+    return 10;
+  }
+
   int? _parseNonNegativeInt(dynamic value) {
     if (value is num) {
       return value < 0 ? 0 : value.toInt();
@@ -709,7 +785,7 @@ String? _formatDistanceKm(double? distanceKm) {
     return null;
   }
 
-  List<_ToppingOption> _extractToppings(Map<String, dynamic> data) {
+  List<_ToppingGroup> _extractToppings(Map<String, dynamic> data) {
     const keys = <String>['toppings', 'topping', 'addons', 'addOns', 'options', 'extraOptions'];
 
     for (final key in keys) {
@@ -720,48 +796,43 @@ String? _formatDistanceKm(double? distanceKm) {
       }
     }
 
-    return const <_ToppingOption>[];
+    return const <_ToppingGroup>[];
   }
 
-  List<_ToppingOption> _parseToppingValues(dynamic raw) {
+  List<_ToppingGroup> _parseToppingValues(dynamic raw) {
     if (raw is String) {
-      final plusSegments = _extractPlusSegments(raw);
-      if (plusSegments.isNotEmpty) {
-        return plusSegments;
+      final structured = _extractStructuredToppingGroups(raw);
+      if (structured.isNotEmpty) {
+        return structured;
       }
 
       final parts = raw
           .split(',')
           .map((value) => value.trim())
           .where((value) => value.isNotEmpty)
-          .map(
-            (value) => _ToppingOption(
-              label: value,
-              adjustedPrice: 0,
-              displayLabel: value,
-            ),
-          )
+          .map(_buildToppingOption)
           .toList(growable: false);
-      return parts;
+      return parts.isEmpty
+          ? const <_ToppingGroup>[]
+          : <_ToppingGroup>[_ToppingGroup(heading: null, options: parts)];
     }
 
     if (raw is List) {
-      final result = <_ToppingOption>[];
+      final result = <_ToppingGroup>[];
       for (final item in raw) {
         if (item is String) {
-          final plusSegments = _extractPlusSegments(item);
-          if (plusSegments.isNotEmpty) {
-            result.addAll(plusSegments);
+          final structured = _extractStructuredToppingGroups(item);
+          if (structured.isNotEmpty) {
+            result.addAll(structured);
             continue;
           }
 
           final value = item.trim();
           if (value.isNotEmpty) {
             result.add(
-              _ToppingOption(
-                label: value,
-                adjustedPrice: 0,
-                displayLabel: value,
+              _ToppingGroup(
+                heading: null,
+                options: <_ToppingOption>[_buildToppingOption(value)],
               ),
             );
           }
@@ -773,17 +844,15 @@ String? _formatDistanceKm(double? distanceKm) {
           for (final key in <String>['name', 'label', 'title']) {
             final value = (map[key] ?? '').toString().trim();
             if (value.isNotEmpty) {
-              final adjusted = TaxPricingPolicy.applyToppingMarkup(
-                TaxPricingPolicy.parseNumber(map['price']),
-              );
-              final display = adjusted > 0
-                  ? '$value ${TaxPricingPolicy.formatPrice(adjusted)}'
-                  : value;
               result.add(
-                _ToppingOption(
-                  label: value,
-                  adjustedPrice: adjusted,
-                  displayLabel: display,
+                _ToppingGroup(
+                  heading: null,
+                  options: <_ToppingOption>[
+                    _buildToppingOption(
+                      value,
+                      explicitPrice: TaxPricingPolicy.parseNumber(map['price']),
+                    ),
+                  ],
                 ),
               );
               break;
@@ -795,32 +864,79 @@ String? _formatDistanceKm(double? distanceKm) {
       return result;
     }
 
-    return const <_ToppingOption>[];
+    return const <_ToppingGroup>[];
   }
 
-  List<_ToppingOption> _extractPlusSegments(String source) {
+  List<_ToppingGroup> _extractStructuredToppingGroups(String source) {
     final text = source.trim();
-    if (!text.contains('+')) {
-      return const <_ToppingOption>[];
+    if (!text.contains('+') && !text.contains('(')) {
+      return const <_ToppingGroup>[];
     }
 
-    final matches = RegExp(r'\+\s*([^+\d][^+]*?)\s*(\d+(?:\.\d+)?)').allMatches(text);
-    final values = matches
-        .map((m) {
-          final label = '+${(m.group(1) ?? '').trim()}';
-          final rawPrice = TaxPricingPolicy.parseNumber(m.group(2));
-          final adjusted = TaxPricingPolicy.applyToppingMarkup(rawPrice);
-          final display = '$label ${TaxPricingPolicy.formatPrice(adjusted)}';
-          return _ToppingOption(
-            label: label,
-            adjustedPrice: adjusted,
-            displayLabel: display,
-          );
-        })
-        .where((v) => v.label.trim().isNotEmpty)
-        .toList(growable: false);
+    final headingPattern = RegExp(r'\(([^()]+)\)');
+    final headingMatches = headingPattern.allMatches(text).toList(growable: false);
+    if (headingMatches.isEmpty) {
+      final options = _extractDelimitedOptions(text);
+      return options.isEmpty
+          ? const <_ToppingGroup>[]
+          : <_ToppingGroup>[_ToppingGroup(heading: null, options: options)];
+    }
 
-    return values;
+    final groups = <_ToppingGroup>[];
+
+    final leadingOptions = _extractDelimitedOptions(
+      text.substring(0, headingMatches.first.start),
+    );
+    if (leadingOptions.isNotEmpty) {
+      groups.add(_ToppingGroup(heading: null, options: leadingOptions));
+    }
+
+    for (var index = 0; index < headingMatches.length; index++) {
+      final match = headingMatches[index];
+      final heading = (match.group(1) ?? '').trim();
+      final bodyStart = match.end;
+      final bodyEnd = index + 1 < headingMatches.length
+          ? headingMatches[index + 1].start
+          : text.length;
+      final options = _extractDelimitedOptions(text.substring(bodyStart, bodyEnd));
+      if (heading.isNotEmpty || options.isNotEmpty) {
+        groups.add(_ToppingGroup(heading: heading.isEmpty ? null : heading, options: options));
+      }
+    }
+
+    return groups.where((group) => group.options.isNotEmpty).toList(growable: false);
+  }
+
+  List<_ToppingOption> _extractDelimitedOptions(String source) {
+    final parts = source
+        .split('+')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .map(_buildToppingOption)
+        .toList(growable: false);
+    return parts;
+  }
+
+  _ToppingOption _buildToppingOption(String value, {num? explicitPrice}) {
+    final label = value.trim();
+    final num rawPrice = explicitPrice ?? _extractTrailingPrice(label) ?? 0;
+    final adjusted = TaxPricingPolicy.applyToppingMarkup(rawPrice);
+    final display = adjusted > 0
+        ? '$label (+฿${TaxPricingPolicy.formatPrice(adjusted)})'
+        : label;
+    return _ToppingOption(
+      label: label,
+      adjustedPrice: adjusted,
+      displayLabel: display,
+    );
+  }
+
+  num? _extractTrailingPrice(String value) {
+    final match = RegExp(r'(\d+(?:\.\d+)?)\s*$').firstMatch(value.trim());
+    if (match == null) {
+      return null;
+    }
+    return TaxPricingPolicy.parseNumber(match.group(1));
   }
 
   String _cleanDescriptionWithoutToppings(String source) {
@@ -829,6 +945,8 @@ String? _formatDistanceKm(double? distanceKm) {
     }
 
     var cleaned = source;
+    cleaned = cleaned.replaceAll(RegExp(r'\([^()]+\)'), ' ');
+    cleaned = cleaned.replaceAll(RegExp(r'\+[^+]+\+'), ' ');
     cleaned = cleaned.replaceAll(RegExp(r'\+[^+]*?\d+(?:\.\d+)?'), '');
     cleaned = cleaned.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
     cleaned = cleaned.replaceAll(RegExp(r'^[,;|\-\s]+'), '').trim();

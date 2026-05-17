@@ -1,7 +1,8 @@
 param(
   [switch]$FunctionsOnly,
   [switch]$HostingOnly,
-  [switch]$BuildWeb
+  [switch]$BuildWeb,
+  [string[]]$FunctionName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,12 +33,35 @@ if ($projectId -ne $expectedProjectId) {
 
 $targets = @()
 if ($FunctionsOnly -and -not $HostingOnly) {
-  $targets += "functions:$functionsCodebase"
+  if (-not $FunctionName -or $FunctionName.Count -eq 0) {
+    Write-Error "Functions deploy is locked to explicit function names. Use: scripts/deploy-isolated.ps1 -FunctionsOnly -FunctionName verifyTopUpSlip"
+    exit 1
+  }
+
+  foreach ($name in $FunctionName) {
+    $cleanName = [string]$name
+    $cleanName = $cleanName.Trim()
+    if (-not $cleanName) {
+      continue
+    }
+    if ($cleanName -notmatch '^[A-Za-z0-9_-]+$') {
+      Write-Error "Invalid function name '$cleanName'."
+      exit 1
+    }
+    $targets += "functions:${functionsCodebase}:${cleanName}"
+  }
+
+  if ($targets.Count -eq 0) {
+    Write-Error 'No valid function names were provided.'
+    exit 1
+  }
+
+  $env:FUNCTIONS_DISCOVERY_TIMEOUT = '30000'
 } elseif ($HostingOnly -and -not $FunctionsOnly) {
   $targets += "hosting:$hostingTarget"
 } else {
-  $targets += "functions:$functionsCodebase"
   $targets += "hosting:$hostingTarget"
+  Write-Host 'Routine isolated deploy excludes functions. Use -FunctionsOnly -FunctionName <name> when you need to deploy a van2 function explicitly.' -ForegroundColor DarkYellow
 }
 
 if ($targets -contains "hosting:$hostingTarget") {
@@ -52,5 +76,4 @@ if ($targets -contains "hosting:$hostingTarget") {
 }
 
 Write-Host "Deploying isolated targets: $($targets -join ', ')" -ForegroundColor Cyan
-$env:FUNCTIONS_DISCOVERY_TIMEOUT = '30000'
 firebase deploy --project $expectedProjectId --only ($targets -join ',')

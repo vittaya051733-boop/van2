@@ -8,6 +8,7 @@ const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -22,6 +23,7 @@ const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_INTERVAL_MS = 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
 const RESET_PASSWORD_SESSION_TTL_MS = 15 * 60 * 1000;
+const UNPAID_PRODUCT_PAYMENT_HOLD_MS = 30 * 60 * 1000;
 const DEFAULT_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_NON_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_TOPPING_MARKUP_RATE = 0.07;
@@ -598,19 +600,18 @@ function extractPlusSegments(source, rates = defaultPricingRates()) {
     return [];
   }
 
-  const result = [];
-  const matches = text.matchAll(/\+\s*([^+\d][^+]*?)\s*(\d+(?:\.\d+)?)/g);
-  for (const match of matches) {
-    const label = `+${String(match[1] || '').trim()}`;
-    if (!label || label === '+') {
-      continue;
-    }
-    result.push({
-      label,
-      adjustedPrice: applyToppingMarkupWithRates(parseNumber(match[2]), rates),
+  const normalized = text.replace(/\([^()]+\)/g, '+');
+  return normalized
+    .split('+')
+    .map((value) => value.trim())
+    .filter((value) => value)
+    .map((label) => {
+      const priceMatch = label.match(/(\d+(?:\.\d+)?)\s*$/);
+      return {
+        label,
+        adjustedPrice: applyToppingMarkupWithRates(parseNumber(priceMatch ? priceMatch[1] : 0), rates),
+      };
     });
-  }
-  return result;
 }
 
 function parseToppingValues(raw, rates = defaultPricingRates()) {
@@ -676,6 +677,21 @@ function toFiniteOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseFiniteOrNull(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function haversineDistanceKm(lat1, lng1, lat2, lng2) {
   const toRad = (deg) => (deg * Math.PI) / 180;
   const earthRadiusKm = 6371;
@@ -714,6 +730,53 @@ async function loadProductsByIds(productIds) {
   }
 
   return productMap;
+}
+
+function readCoordinatePair(data = {}) {
+  const directLatitude = parseFiniteOrNull(data.shopLatitude ?? data.latitude ?? data.lat);
+  const directLongitude = parseFiniteOrNull(
+    data.shopLongitude ?? data.longitude ?? data.lng ?? data.lon ?? data.long,
+  );
+  if (directLatitude != null && directLongitude != null) {
+    return { latitude: directLatitude, longitude: directLongitude };
+  }
+
+  const location = data.shopLocation || data.location || data.geoPoint || data.coordinates;
+  if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+    return { latitude: location.latitude, longitude: location.longitude };
+  }
+  if (location && typeof location === 'object') {
+    const latitude = parseFiniteOrNull(location.latitude ?? location.lat ?? location.y);
+    const longitude = parseFiniteOrNull(location.longitude ?? location.lng ?? location.lon ?? location.long ?? location.x);
+    if (latitude != null && longitude != null) {
+      return { latitude, longitude };
+    }
+  }
+
+  return { latitude: null, longitude: null };
+}
+
+async function loadPublicShopsByIds(shopIds) {
+  const uniqueShopIds = [...new Set(shopIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  const publicShops = new Map();
+
+  for (let i = 0; i < uniqueShopIds.length; i += 100) {
+    const refs = uniqueShopIds
+      .slice(i, i + 100)
+      .map((shopId) => db.collection('public_shops').doc(shopId));
+    if (refs.length === 0) {
+      continue;
+    }
+
+    const snapshots = await db.getAll(...refs);
+    for (const snapshot of snapshots) {
+      if (snapshot.exists) {
+        publicShops.set(snapshot.id, snapshot.data() || {});
+      }
+    }
+  }
+
+  return publicShops;
 }
 
 function buildTransport() {
@@ -1253,20 +1316,45 @@ exports.calculateCartTotals = onCall(
       const shopId = shopIdFromDb || `shop-${productId}`;
       const shopName = String(product.shopName || item?.shopName || 'ร้านค้า').trim() || 'ร้านค้า';
 
-      const latitude = toFiniteOrNull(product.shopLatitude ?? item?.shopLatitude);
-      const longitude = toFiniteOrNull(product.shopLongitude ?? item?.shopLongitude);
+      const fallbackLocation = readCoordinatePair({
+        shopLatitude: product.shopLatitude ?? item?.shopLatitude,
+        shopLongitude: product.shopLongitude ?? item?.shopLongitude,
+        location: product.location ?? item?.location,
+        shopLocation: product.shopLocation ?? item?.shopLocation,
+      });
       if (!shops.has(shopId)) {
         shops.set(shopId, {
           shopName,
-          latitude,
-          longitude,
+          latitude: fallbackLocation.latitude,
+          longitude: fallbackLocation.longitude,
         });
       } else {
         const existing = shops.get(shopId);
-        if ((existing.latitude == null || existing.longitude == null) && latitude != null && longitude != null) {
-          existing.latitude = latitude;
-          existing.longitude = longitude;
+        if (
+          (existing.latitude == null || existing.longitude == null) &&
+          fallbackLocation.latitude != null &&
+          fallbackLocation.longitude != null
+        ) {
+          existing.latitude = fallbackLocation.latitude;
+          existing.longitude = fallbackLocation.longitude;
         }
+      }
+    }
+
+    const publicShops = await loadPublicShopsByIds([...shops.keys()]);
+    for (const [shopId, publicShop] of publicShops.entries()) {
+      const shop = shops.get(shopId);
+      if (!shop) continue;
+
+      const publicLocation = readCoordinatePair(publicShop);
+      if (publicLocation.latitude != null && publicLocation.longitude != null) {
+        shop.latitude = publicLocation.latitude;
+        shop.longitude = publicLocation.longitude;
+      }
+
+      const publicShopName = String(publicShop.shopName || publicShop.name || '').trim();
+      if (publicShopName) {
+        shop.shopName = publicShopName;
       }
     }
 
@@ -1336,6 +1424,32 @@ exports.verifyOrderPaymentSlip = onCall(
       const data = snapshot.data() || {};
       if (String(data.customerId || '').trim() !== request.auth.uid) {
         throw new HttpsError('permission-denied', 'คุณไม่มีสิทธิ์ส่งสลิปให้ออเดอร์นี้');
+      }
+
+      const expiresAtMillis = timestampToMillis(data.paymentExpiresAt);
+      const currentPaymentStatus = String(data.paymentStatus || '').trim();
+      const currentStockHoldStatus = String(data.stockHoldStatus || '').trim();
+      const currentOrderStatus = String(data.status || '').trim();
+      if (
+        currentPaymentStatus === 'stock_unavailable' ||
+        currentStockHoldStatus === 'failed' ||
+        currentStockHoldStatus === 'returned' ||
+        currentOrderStatus === 'cancelled'
+      ) {
+        throw new HttpsError(
+          'failed-precondition',
+          'ออเดอร์นี้ไม่สามารถชำระเงินต่อได้ กรุณาสั่งซื้อใหม่อีกครั้ง',
+        );
+      }
+      if (
+        expiresAtMillis != null &&
+        Date.now() > expiresAtMillis &&
+        currentPaymentStatus !== 'verified'
+      ) {
+        throw new HttpsError(
+          'failed-precondition',
+          'เกินเวลา 30 นาที ระบบคืนสินค้าเข้าสู่ระบบแล้ว กรุณาสั่งซื้อใหม่อีกครั้ง',
+        );
       }
     }
 
@@ -1560,6 +1674,12 @@ exports.verifyOrderPaymentSlip = onCall(
             verificationStatus === 'verified'
               ? hasAssignedRider
               : false,
+          ...(verificationStatus === 'verified'
+            ? {
+                stockHoldStatus: 'captured',
+                stockHoldCapturedAt: FieldValue.serverTimestamp(),
+              }
+            : {}),
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true },
@@ -2053,6 +2173,286 @@ async function getOrCreateUserProfile(uid) {
   return null;
 }
 
+function normalizeStockHoldItems(data = {}) {
+  const rawProducts = Array.isArray(data.products) ? data.products : [];
+  const quantitiesByProductId = new Map();
+
+  for (const item of rawProducts) {
+    const productId = String(item?.productId || '').trim();
+    if (!productId || productId === 'travel_passenger_service') {
+      continue;
+    }
+
+    const quantityRaw = Number(item?.quantity);
+    const quantity = Number.isFinite(quantityRaw) ? Math.floor(quantityRaw) : 0;
+    if (quantity <= 0) {
+      continue;
+    }
+
+    quantitiesByProductId.set(
+      productId,
+      (quantitiesByProductId.get(productId) || 0) + quantity,
+    );
+  }
+
+  return [...quantitiesByProductId.entries()].map(([productId, quantity]) => ({
+    productId,
+    quantity,
+  }));
+}
+
+function isVan2PromptPayProductOrder(data = {}) {
+  return String(data.sourceApp || '').trim() === 'van2_customer' &&
+    String(data.paymentMethod || '').trim() === 'promptpay_qr' &&
+    String(data.orderType || '').trim() !== 'travel_passenger' &&
+    normalizeStockHoldItems(data).length > 0;
+}
+
+async function writeOrderTimeline(orderRef, orderId, payload) {
+  try {
+    await orderRef.collection('timeline').add({
+      orderId,
+      actorRole: 'system',
+      timestamp: FieldValue.serverTimestamp(),
+      ...payload,
+    });
+  } catch (error) {
+    logger.warn('Failed to write order timeline', {
+      orderId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function notifyCustomerProductReturned({
+  orderId,
+  customerId,
+  orderCode,
+  title = 'คืนสินค้าแล้ว',
+  body = 'สินค้าของคุณ คืนเข้าสู่ระบบ',
+}) {
+  if (!customerId) {
+    return;
+  }
+
+  try {
+    await db.collection('app_notifications').add({
+      targetApp: 'van2',
+      recipientUid: customerId,
+      orderId,
+      title,
+      body,
+      read: false,
+      createdAt: FieldValue.serverTimestamp(),
+      source: 'van2_payment_timeout',
+      sourceApp: 'van2_customer',
+      action: 'product_stock_returned_unpaid_timeout',
+      orderCode: orderCode || null,
+    });
+  } catch (error) {
+    logger.warn('Failed to notify customer about returned product stock', {
+      orderId,
+      customerId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function reserveProductStockForOrder(orderRef, orderId, initialData = {}) {
+  if (!isVan2PromptPayProductOrder(initialData)) {
+    return;
+  }
+
+  const holdExpiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + UNPAID_PRODUCT_PAYMENT_HOLD_MS);
+  let reserved = false;
+  let unavailableItems = [];
+
+  await db.runTransaction(async (transaction) => {
+    const orderSnap = await transaction.get(orderRef);
+    if (!orderSnap.exists) {
+      return;
+    }
+
+    const orderData = orderSnap.data() || {};
+    const existingHoldStatus = String(orderData.stockHoldStatus || '').trim();
+    const paymentStatus = String(orderData.paymentStatus || '').trim();
+    if (existingHoldStatus === 'active' || existingHoldStatus === 'captured' || paymentStatus === 'verified') {
+      return;
+    }
+
+    const currentItems = normalizeStockHoldItems(orderData);
+    const currentProductRefs = currentItems.map((item) => db.collection('products').doc(item.productId));
+    const productSnaps = [];
+    for (const productRef of currentProductRefs) {
+      productSnaps.push(await transaction.get(productRef));
+    }
+
+    unavailableItems = [];
+    for (let index = 0; index < currentItems.length; index += 1) {
+      const item = currentItems[index];
+      const productSnap = productSnaps[index];
+      const productData = productSnap.data() || {};
+      const stock = Number(productData.stock);
+      if (!productSnap.exists || !Number.isFinite(stock) || stock < item.quantity) {
+        unavailableItems.push({
+          productId: item.productId,
+          requestedQuantity: item.quantity,
+          availableStock: Number.isFinite(stock) ? stock : null,
+        });
+      }
+    }
+
+    if (unavailableItems.length > 0) {
+      transaction.set(
+        orderRef,
+        {
+          status: 'stock_unavailable',
+          statusLabel: 'stock_unavailable',
+          paymentStatus: 'stock_unavailable',
+          paymentStatusLabel: 'สินค้าไม่พอ',
+          stockHoldStatus: 'failed',
+          stockHoldFailedAt: FieldValue.serverTimestamp(),
+          stockHoldUnavailableItems: unavailableItems,
+          riderNotifyReady: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return;
+    }
+
+    for (let index = 0; index < currentItems.length; index += 1) {
+      transaction.update(currentProductRefs[index], {
+        stock: FieldValue.increment(-currentItems[index].quantity),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    transaction.set(
+      orderRef,
+      {
+        stockHoldStatus: 'active',
+        stockHoldReservedAt: FieldValue.serverTimestamp(),
+        stockHoldItems: currentItems,
+        paymentExpiresAt: orderData.paymentExpiresAt || holdExpiresAt,
+        paymentExpiresInMinutes: 30,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    reserved = true;
+  });
+
+  if (reserved) {
+    await writeOrderTimeline(orderRef, orderId, {
+      event: 'product_stock_reserved_for_payment',
+      eventLabel: 'ระบบจองสินค้าไว้ระหว่างรอชำระเงิน 30 นาที',
+      actorId: 'reserveProductStockForOrder',
+    });
+  } else if (unavailableItems.length > 0) {
+    await writeOrderTimeline(orderRef, orderId, {
+      event: 'product_stock_reservation_failed',
+      eventLabel: 'สินค้าไม่พอสำหรับจองออเดอร์นี้',
+      actorId: 'reserveProductStockForOrder',
+      unavailableItems,
+    });
+    await notifyCustomerProductReturned({
+      orderId,
+      customerId: String(initialData.customerId || '').trim(),
+      orderCode: String(initialData.orderCode || '').trim(),
+      title: 'สินค้าไม่พอ',
+      body: 'สินค้าในตะกร้าไม่พอ กรุณาเลือกใหม่',
+    });
+  }
+}
+
+async function returnExpiredProductStock(orderRef, orderId) {
+  let returned = false;
+  let customerId = '';
+  let orderCode = '';
+  let returnedItems = [];
+
+  await db.runTransaction(async (transaction) => {
+    const orderSnap = await transaction.get(orderRef);
+    if (!orderSnap.exists) {
+      return;
+    }
+
+    const orderData = orderSnap.data() || {};
+    const stockHoldStatus = String(orderData.stockHoldStatus || '').trim();
+    const paymentStatus = String(orderData.paymentStatus || '').trim();
+    const expiresAtMillis = timestampToMillis(orderData.paymentExpiresAt);
+    if (
+      stockHoldStatus !== 'active' ||
+      paymentStatus === 'verified' ||
+      expiresAtMillis == null ||
+      expiresAtMillis > Date.now()
+    ) {
+      return;
+    }
+
+    returnedItems = Array.isArray(orderData.stockHoldItems) && orderData.stockHoldItems.length > 0
+      ? normalizeStockHoldItems({ products: orderData.stockHoldItems })
+      : normalizeStockHoldItems(orderData);
+    if (returnedItems.length === 0) {
+      transaction.set(
+        orderRef,
+        {
+          stockHoldStatus: 'returned',
+          stockReturnedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      returned = true;
+      customerId = String(orderData.customerId || '').trim();
+      orderCode = String(orderData.orderCode || '').trim();
+      return;
+    }
+
+    for (const item of returnedItems) {
+      transaction.update(db.collection('products').doc(item.productId), {
+        stock: FieldValue.increment(item.quantity),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    transaction.set(
+      orderRef,
+      {
+        status: 'cancelled',
+        statusLabel: 'ยกเลิกออเดอร์',
+        cancelReason: 'payment_timeout_30_minutes',
+        paymentStatus: 'expired_unpaid',
+        paymentStatusLabel: 'หมดเวลาชำระเงิน',
+        stockHoldStatus: 'returned',
+        stockReturnedAt: FieldValue.serverTimestamp(),
+        stockReturnedReason: 'payment_timeout_30_minutes',
+        riderNotifyReady: false,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    returned = true;
+    customerId = String(orderData.customerId || '').trim();
+    orderCode = String(orderData.orderCode || '').trim();
+  });
+
+  if (!returned) {
+    return false;
+  }
+
+  await writeOrderTimeline(orderRef, orderId, {
+    event: 'unpaid_order_stock_returned',
+    eventLabel: 'ครบ 30 นาทีแล้วยังไม่ชำระเงิน ระบบคืนสินค้าเข้าสู่ระบบ',
+    actorId: 'returnExpiredProductStock',
+    returnedItems,
+  });
+  await notifyCustomerProductReturned({ orderId, customerId, orderCode });
+  return true;
+}
+
 async function getProfileFromFriendDoc(ownerId, friendId) {
   for (const ownerCollection of CUSTOMER_COLLECTIONS) {
     try {
@@ -2260,6 +2660,53 @@ exports.normalizeVan2SlipOrders = onDocumentCreated(
     } catch (_) {
       // Do not fail the main normalization if timeline logging fails.
     }
+  },
+);
+
+exports.reserveVan2PromptPayProductStock = onDocumentCreated(
+  {
+    region: DEFAULT_REGION,
+    document: 'orders/{orderId}',
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) {
+      return;
+    }
+
+    await reserveProductStockForOrder(
+      event.data.ref,
+      event.params.orderId,
+      data,
+    );
+  },
+);
+
+exports.returnExpiredUnpaidProductStock = onSchedule(
+  {
+    region: DEFAULT_REGION,
+    schedule: 'every 5 minutes',
+    timeZone: 'Asia/Bangkok',
+  },
+  async () => {
+    const snapshot = await db
+      .collection('orders')
+      .where('stockHoldStatus', '==', 'active')
+      .limit(100)
+      .get();
+
+    let returnedCount = 0;
+    for (const doc of snapshot.docs) {
+      const returned = await returnExpiredProductStock(doc.ref, doc.id);
+      if (returned) {
+        returnedCount += 1;
+      }
+    }
+
+    logger.info('returnExpiredUnpaidProductStock completed', {
+      checkedCount: snapshot.size,
+      returnedCount,
+    });
   },
 );
 

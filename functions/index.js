@@ -7,8 +7,7 @@ const logger = require('firebase-functions/logger');
 const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
-const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -23,7 +22,6 @@ const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_INTERVAL_MS = 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
 const RESET_PASSWORD_SESSION_TTL_MS = 15 * 60 * 1000;
-const UNPAID_PRODUCT_PAYMENT_HOLD_MS = 30 * 60 * 1000;
 const DEFAULT_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_NON_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_TOPPING_MARKUP_RATE = 0.07;
@@ -600,18 +598,19 @@ function extractPlusSegments(source, rates = defaultPricingRates()) {
     return [];
   }
 
-  const normalized = text.replace(/\([^()]+\)/g, '+');
-  return normalized
-    .split('+')
-    .map((value) => value.trim())
-    .filter((value) => value)
-    .map((label) => {
-      const priceMatch = label.match(/(\d+(?:\.\d+)?)\s*$/);
-      return {
-        label,
-        adjustedPrice: applyToppingMarkupWithRates(parseNumber(priceMatch ? priceMatch[1] : 0), rates),
-      };
+  const result = [];
+  const matches = text.matchAll(/\+\s*([^+\d][^+]*?)\s*(\d+(?:\.\d+)?)/g);
+  for (const match of matches) {
+    const label = `+${String(match[1] || '').trim()}`;
+    if (!label || label === '+') {
+      continue;
+    }
+    result.push({
+      label,
+      adjustedPrice: applyToppingMarkupWithRates(parseNumber(match[2]), rates),
     });
+  }
+  return result;
 }
 
 function parseToppingValues(raw, rates = defaultPricingRates()) {
@@ -677,21 +676,6 @@ function toFiniteOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseFiniteOrNull(value) {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
 function haversineDistanceKm(lat1, lng1, lat2, lng2) {
   const toRad = (deg) => (deg * Math.PI) / 180;
   const earthRadiusKm = 6371;
@@ -730,53 +714,6 @@ async function loadProductsByIds(productIds) {
   }
 
   return productMap;
-}
-
-function readCoordinatePair(data = {}) {
-  const directLatitude = parseFiniteOrNull(data.shopLatitude ?? data.latitude ?? data.lat);
-  const directLongitude = parseFiniteOrNull(
-    data.shopLongitude ?? data.longitude ?? data.lng ?? data.lon ?? data.long,
-  );
-  if (directLatitude != null && directLongitude != null) {
-    return { latitude: directLatitude, longitude: directLongitude };
-  }
-
-  const location = data.shopLocation || data.location || data.geoPoint || data.coordinates;
-  if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number') {
-    return { latitude: location.latitude, longitude: location.longitude };
-  }
-  if (location && typeof location === 'object') {
-    const latitude = parseFiniteOrNull(location.latitude ?? location.lat ?? location.y);
-    const longitude = parseFiniteOrNull(location.longitude ?? location.lng ?? location.lon ?? location.long ?? location.x);
-    if (latitude != null && longitude != null) {
-      return { latitude, longitude };
-    }
-  }
-
-  return { latitude: null, longitude: null };
-}
-
-async function loadPublicShopsByIds(shopIds) {
-  const uniqueShopIds = [...new Set(shopIds.map((id) => String(id || '').trim()).filter(Boolean))];
-  const publicShops = new Map();
-
-  for (let i = 0; i < uniqueShopIds.length; i += 100) {
-    const refs = uniqueShopIds
-      .slice(i, i + 100)
-      .map((shopId) => db.collection('public_shops').doc(shopId));
-    if (refs.length === 0) {
-      continue;
-    }
-
-    const snapshots = await db.getAll(...refs);
-    for (const snapshot of snapshots) {
-      if (snapshot.exists) {
-        publicShops.set(snapshot.id, snapshot.data() || {});
-      }
-    }
-  }
-
-  return publicShops;
 }
 
 function buildTransport() {
@@ -1316,45 +1253,20 @@ exports.calculateCartTotals = onCall(
       const shopId = shopIdFromDb || `shop-${productId}`;
       const shopName = String(product.shopName || item?.shopName || 'ร้านค้า').trim() || 'ร้านค้า';
 
-      const fallbackLocation = readCoordinatePair({
-        shopLatitude: product.shopLatitude ?? item?.shopLatitude,
-        shopLongitude: product.shopLongitude ?? item?.shopLongitude,
-        location: product.location ?? item?.location,
-        shopLocation: product.shopLocation ?? item?.shopLocation,
-      });
+      const latitude = toFiniteOrNull(product.shopLatitude ?? item?.shopLatitude);
+      const longitude = toFiniteOrNull(product.shopLongitude ?? item?.shopLongitude);
       if (!shops.has(shopId)) {
         shops.set(shopId, {
           shopName,
-          latitude: fallbackLocation.latitude,
-          longitude: fallbackLocation.longitude,
+          latitude,
+          longitude,
         });
       } else {
         const existing = shops.get(shopId);
-        if (
-          (existing.latitude == null || existing.longitude == null) &&
-          fallbackLocation.latitude != null &&
-          fallbackLocation.longitude != null
-        ) {
-          existing.latitude = fallbackLocation.latitude;
-          existing.longitude = fallbackLocation.longitude;
+        if ((existing.latitude == null || existing.longitude == null) && latitude != null && longitude != null) {
+          existing.latitude = latitude;
+          existing.longitude = longitude;
         }
-      }
-    }
-
-    const publicShops = await loadPublicShopsByIds([...shops.keys()]);
-    for (const [shopId, publicShop] of publicShops.entries()) {
-      const shop = shops.get(shopId);
-      if (!shop) continue;
-
-      const publicLocation = readCoordinatePair(publicShop);
-      if (publicLocation.latitude != null && publicLocation.longitude != null) {
-        shop.latitude = publicLocation.latitude;
-        shop.longitude = publicLocation.longitude;
-      }
-
-      const publicShopName = String(publicShop.shopName || publicShop.name || '').trim();
-      if (publicShopName) {
-        shop.shopName = publicShopName;
       }
     }
 
@@ -1424,32 +1336,6 @@ exports.verifyOrderPaymentSlip = onCall(
       const data = snapshot.data() || {};
       if (String(data.customerId || '').trim() !== request.auth.uid) {
         throw new HttpsError('permission-denied', 'คุณไม่มีสิทธิ์ส่งสลิปให้ออเดอร์นี้');
-      }
-
-      const expiresAtMillis = timestampToMillis(data.paymentExpiresAt);
-      const currentPaymentStatus = String(data.paymentStatus || '').trim();
-      const currentStockHoldStatus = String(data.stockHoldStatus || '').trim();
-      const currentOrderStatus = String(data.status || '').trim();
-      if (
-        currentPaymentStatus === 'stock_unavailable' ||
-        currentStockHoldStatus === 'failed' ||
-        currentStockHoldStatus === 'returned' ||
-        currentOrderStatus === 'cancelled'
-      ) {
-        throw new HttpsError(
-          'failed-precondition',
-          'ออเดอร์นี้ไม่สามารถชำระเงินต่อได้ กรุณาสั่งซื้อใหม่อีกครั้ง',
-        );
-      }
-      if (
-        expiresAtMillis != null &&
-        Date.now() > expiresAtMillis &&
-        currentPaymentStatus !== 'verified'
-      ) {
-        throw new HttpsError(
-          'failed-precondition',
-          'เกินเวลา 30 นาที ระบบคืนสินค้าเข้าสู่ระบบแล้ว กรุณาสั่งซื้อใหม่อีกครั้ง',
-        );
       }
     }
 
@@ -1674,12 +1560,6 @@ exports.verifyOrderPaymentSlip = onCall(
             verificationStatus === 'verified'
               ? hasAssignedRider
               : false,
-          ...(verificationStatus === 'verified'
-            ? {
-                stockHoldStatus: 'captured',
-                stockHoldCapturedAt: FieldValue.serverTimestamp(),
-              }
-            : {}),
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true },
@@ -1742,251 +1622,6 @@ exports.verifyOrderPaymentSlip = onCall(
       message: verificationMessage,
       expectedCombinedAmount,
       orderIds,
-    };
-  },
-);
-
-exports.verifyTopUpSlip = onCall(
-  {
-    region: DEFAULT_REGION,
-    secrets: [SLIPOK_API_KEY_SECRET],
-  },
-  async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนส่งสลิป');
-    }
-
-    const expectedAmount = parseNumber(request.data?.expectedAmount);
-    const storagePath = String(request.data?.storagePath || '').trim();
-    const storageBucket = String(request.data?.bucket || '').trim();
-    const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
-    const fileName = String(request.data?.fileName || 'slip.jpg').trim() || 'slip.jpg';
-    const contentType = String(request.data?.contentType || 'image/jpeg').trim() || 'image/jpeg';
-
-    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) {
-      throw new HttpsError('invalid-argument', 'กรุณาระบุ expectedAmount ให้ถูกต้อง');
-    }
-    if (!storagePath) {
-      throw new HttpsError('invalid-argument', 'กรุณาระบุ storagePath');
-    }
-    if (!paymentGroupId) {
-      throw new HttpsError('invalid-argument', 'กรุณาระบุ paymentGroupId');
-    }
-
-    if (storageBucket) {
-      const allowedBuckets = new Set([
-        'van-merchant-van2-storage-802503541368',
-        'van-merchant-van3-storage-802503541368',
-      ]);
-      if (!allowedBuckets.has(storageBucket)) {
-        throw new HttpsError('invalid-argument', 'ไม่รองรับ bucket ที่ระบุ');
-      }
-    }
-
-    const paymentCollectionSettings = await getPaymentCollectionSettings();
-
-    const bucket = storageBucket
-      ? admin.storage().bucket(storageBucket)
-      : admin.storage().bucket();
-    const file = bucket.file(storagePath);
-    const [exists] = await file.exists();
-    if (!exists) {
-      throw new HttpsError('not-found', 'ไม่พบไฟล์สลิปใน Firebase Storage');
-    }
-
-    let verificationStatus = 'error';
-    let verificationMessage = 'ส่งสลิปไปตรวจไม่สำเร็จ';
-    let responseCode = 0;
-    let providerPayload = null;
-    let verifiedSlipAmount = null;
-    let providerRawText = '';
-
-    try {
-      const [buffer] = await file.download();
-      const apiKey = readRequiredConfiguredSecret(
-        SLIPOK_API_KEY_SECRET,
-        'SLIPOK_API_KEY',
-        'ระบบตรวจสลิป Slip OK',
-      );
-
-      const formData = new FormData();
-      formData.append('files', new Blob([buffer], { type: contentType }), fileName);
-      formData.append('log', 'true');
-      formData.append('amount', expectedAmount.toString());
-
-      const slipResponse = await fetch(SLIPOK_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'x-authorization': apiKey,
-        },
-        body: formData,
-      });
-
-      responseCode = slipResponse.status;
-      providerRawText = await slipResponse.text();
-      try {
-        providerPayload = providerRawText ? JSON.parse(providerRawText) : null;
-      } catch (_) {
-        providerPayload = { raw: providerRawText };
-      }
-
-      const rawCode = Number(providerPayload?.code);
-      const requestSucceeded = providerPayload?.success === true;
-      const dataSucceeded = providerPayload?.data?.success === true;
-      verifiedSlipAmount = parseNumber(providerPayload?.data?.amount);
-      const hasValidAmount = Number.isFinite(verifiedSlipAmount) && verifiedSlipAmount > 0;
-      const receiverValidation = validateSlipReceiver(providerPayload, paymentCollectionSettings);
-      const hasMatchingReceiver = receiverValidation.matched;
-      const hasMatchingAmount = amountsMatch(verifiedSlipAmount, expectedAmount);
-
-      if (rawCode === 1012) {
-        verificationStatus = 'failed';
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          'สลิปนี้ถูกใช้ตรวจสอบไปแล้ว',
-        );
-      } else if (
-        slipResponse.ok &&
-        requestSucceeded &&
-        dataSucceeded &&
-        hasMatchingReceiver &&
-        hasValidAmount
-      ) {
-        verificationStatus = 'verified';
-        if (hasMatchingAmount) {
-          verificationMessage = 'ตรวจสอบสลิปสำเร็จ เติมเครดิตเรียบร้อย';
-        } else if (verifiedSlipAmount < expectedAmount) {
-          const remaining = expectedAmount - verifiedSlipAmount;
-          verificationMessage = `ตรวจสอบสลิปสำเร็จ แต่ยอดจ่ายไม่ครบ (ขาด ${remaining.toFixed(2)} บาท) เติมเครดิตตามยอดที่จ่ายแล้ว`;
-        } else {
-          const overpaid = verifiedSlipAmount - expectedAmount;
-          verificationMessage = `ตรวจสอบสลิปสำเร็จ แต่ยอดจ่ายเกิน (เกิน ${overpaid.toFixed(2)} บาท) เติมเครดิตตามยอดที่จ่ายแล้ว`;
-        }
-      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingReceiver) {
-        verificationStatus = 'failed';
-        providerPayload = {
-          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
-          code: Number(providerPayload?.code) || 1014,
-          data: {
-            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
-            receiverValidation,
-            expectedRecipientDisplayName: paymentCollectionSettings.recipientDisplayName,
-            expectedReceiverTargets: buildExpectedReceiverTargets(paymentCollectionSettings),
-            message:
-              providerPayload?.data?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-          },
-          message: providerPayload?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-        };
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-        );
-      } else {
-        verificationStatus = 'failed';
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          `Slip OK responded with status ${slipResponse.status}`,
-        );
-      }
-    } catch (error) {
-      verificationStatus = 'error';
-      providerPayload = {
-        message: error instanceof Error ? error.message : String(error),
-      };
-      verificationMessage = buildSlipVerificationMessage(
-        verificationStatus,
-        providerPayload,
-        'ส่งสลิปไปตรวจสอบไม่สำเร็จ',
-      );
-      logger.error('verifyTopUpSlip failed', {
-        uid: request.auth.uid,
-        paymentGroupId,
-        storagePath,
-        message: verificationMessage,
-      });
-    }
-
-    const slipOkFeedbackId = await writeSlipOkFeedbackLog({
-      feedbackId: paymentGroupId,
-      customerUid: request.auth.uid,
-      orderIds: [],
-      paymentGroupId,
-      storagePath,
-      fileName,
-      contentType,
-      expectedCombinedAmount: expectedAmount,
-      verifiedSlipAmount,
-      verificationStatus,
-      verificationMessage,
-      responseCode,
-      providerPayload,
-      providerRawText,
-    });
-
-    const creditedAmount = Number.isFinite(verifiedSlipAmount) ? verifiedSlipAmount : 0;
-    const remainingAmount = Math.max(0, expectedAmount - creditedAmount);
-    const overpaidAmount = Math.max(0, creditedAmount - expectedAmount);
-
-    if (verificationStatus !== 'verified') {
-      return {
-        success: false,
-        status: verificationStatus,
-        message: verificationMessage,
-        expectedAmount,
-        verifiedAmount: creditedAmount,
-        remainingAmount,
-        overpaidAmount,
-        slipFeedbackId: slipOkFeedbackId,
-        paymentGroupId,
-      };
-    }
-
-    const creditDocId = `slipok_topup_${slipOkFeedbackId}`;
-    const creditRef = db.collection('credits').doc(creditDocId);
-
-    await db.runTransaction(async (tx) => {
-      const existing = await tx.get(creditRef);
-      if (existing.exists) {
-        return;
-      }
-      tx.set(
-        creditRef,
-        {
-          uid: request.auth.uid,
-          amount: creditedAmount,
-          timestamp: FieldValue.serverTimestamp(),
-          provider: 'slipok',
-          providerLabel: 'Slip OK',
-          status: 'verified',
-          creditedByCloudFunction: true,
-          slipFeedbackId: slipOkFeedbackId,
-          paymentGroupId,
-          storagePath,
-          expectedAmount,
-          verifiedAmount: creditedAmount,
-          remainingAmount,
-          overpaidAmount,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    });
-
-    return {
-      success: true,
-      status: verificationStatus,
-      message: verificationMessage,
-      expectedAmount,
-      verifiedAmount: creditedAmount,
-      remainingAmount,
-      overpaidAmount,
-      slipFeedbackId: slipOkFeedbackId,
-      paymentGroupId,
-      creditId: creditDocId,
     };
   },
 );
@@ -2062,6 +1697,34 @@ async function resolveAnyRecipientFcmToken(recipientUid) {
   }
 
   return null;
+}
+
+function isRetryableFcmError(error) {
+  const code = String(error?.code || error?.errorInfo?.code || '').trim();
+  return code === 'messaging/unavailable'
+    || code === 'messaging/internal-error'
+    || code === 'messaging/server-unavailable'
+    || code === 'messaging/unknown-error'
+    || code === 'deadline-exceeded'
+    || code === 'unavailable';
+}
+
+async function sendFcmWithRetry(message, maxAttempts = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await admin.messaging().send(message);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableFcmError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250 * (2 ** (attempt - 1)));
+      });
+    }
+  }
+  throw lastError;
 }
 
 function activeCallInviteRef(callerId, calleeId) {
@@ -2171,286 +1834,6 @@ async function getOrCreateUserProfile(uid) {
   }
 
   return null;
-}
-
-function normalizeStockHoldItems(data = {}) {
-  const rawProducts = Array.isArray(data.products) ? data.products : [];
-  const quantitiesByProductId = new Map();
-
-  for (const item of rawProducts) {
-    const productId = String(item?.productId || '').trim();
-    if (!productId || productId === 'travel_passenger_service') {
-      continue;
-    }
-
-    const quantityRaw = Number(item?.quantity);
-    const quantity = Number.isFinite(quantityRaw) ? Math.floor(quantityRaw) : 0;
-    if (quantity <= 0) {
-      continue;
-    }
-
-    quantitiesByProductId.set(
-      productId,
-      (quantitiesByProductId.get(productId) || 0) + quantity,
-    );
-  }
-
-  return [...quantitiesByProductId.entries()].map(([productId, quantity]) => ({
-    productId,
-    quantity,
-  }));
-}
-
-function isVan2PromptPayProductOrder(data = {}) {
-  return String(data.sourceApp || '').trim() === 'van2_customer' &&
-    String(data.paymentMethod || '').trim() === 'promptpay_qr' &&
-    String(data.orderType || '').trim() !== 'travel_passenger' &&
-    normalizeStockHoldItems(data).length > 0;
-}
-
-async function writeOrderTimeline(orderRef, orderId, payload) {
-  try {
-    await orderRef.collection('timeline').add({
-      orderId,
-      actorRole: 'system',
-      timestamp: FieldValue.serverTimestamp(),
-      ...payload,
-    });
-  } catch (error) {
-    logger.warn('Failed to write order timeline', {
-      orderId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-async function notifyCustomerProductReturned({
-  orderId,
-  customerId,
-  orderCode,
-  title = 'คืนสินค้าแล้ว',
-  body = 'สินค้าของคุณ คืนเข้าสู่ระบบ',
-}) {
-  if (!customerId) {
-    return;
-  }
-
-  try {
-    await db.collection('app_notifications').add({
-      targetApp: 'van2',
-      recipientUid: customerId,
-      orderId,
-      title,
-      body,
-      read: false,
-      createdAt: FieldValue.serverTimestamp(),
-      source: 'van2_payment_timeout',
-      sourceApp: 'van2_customer',
-      action: 'product_stock_returned_unpaid_timeout',
-      orderCode: orderCode || null,
-    });
-  } catch (error) {
-    logger.warn('Failed to notify customer about returned product stock', {
-      orderId,
-      customerId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-async function reserveProductStockForOrder(orderRef, orderId, initialData = {}) {
-  if (!isVan2PromptPayProductOrder(initialData)) {
-    return;
-  }
-
-  const holdExpiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + UNPAID_PRODUCT_PAYMENT_HOLD_MS);
-  let reserved = false;
-  let unavailableItems = [];
-
-  await db.runTransaction(async (transaction) => {
-    const orderSnap = await transaction.get(orderRef);
-    if (!orderSnap.exists) {
-      return;
-    }
-
-    const orderData = orderSnap.data() || {};
-    const existingHoldStatus = String(orderData.stockHoldStatus || '').trim();
-    const paymentStatus = String(orderData.paymentStatus || '').trim();
-    if (existingHoldStatus === 'active' || existingHoldStatus === 'captured' || paymentStatus === 'verified') {
-      return;
-    }
-
-    const currentItems = normalizeStockHoldItems(orderData);
-    const currentProductRefs = currentItems.map((item) => db.collection('products').doc(item.productId));
-    const productSnaps = [];
-    for (const productRef of currentProductRefs) {
-      productSnaps.push(await transaction.get(productRef));
-    }
-
-    unavailableItems = [];
-    for (let index = 0; index < currentItems.length; index += 1) {
-      const item = currentItems[index];
-      const productSnap = productSnaps[index];
-      const productData = productSnap.data() || {};
-      const stock = Number(productData.stock);
-      if (!productSnap.exists || !Number.isFinite(stock) || stock < item.quantity) {
-        unavailableItems.push({
-          productId: item.productId,
-          requestedQuantity: item.quantity,
-          availableStock: Number.isFinite(stock) ? stock : null,
-        });
-      }
-    }
-
-    if (unavailableItems.length > 0) {
-      transaction.set(
-        orderRef,
-        {
-          status: 'stock_unavailable',
-          statusLabel: 'stock_unavailable',
-          paymentStatus: 'stock_unavailable',
-          paymentStatusLabel: 'สินค้าไม่พอ',
-          stockHoldStatus: 'failed',
-          stockHoldFailedAt: FieldValue.serverTimestamp(),
-          stockHoldUnavailableItems: unavailableItems,
-          riderNotifyReady: false,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      return;
-    }
-
-    for (let index = 0; index < currentItems.length; index += 1) {
-      transaction.update(currentProductRefs[index], {
-        stock: FieldValue.increment(-currentItems[index].quantity),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-
-    transaction.set(
-      orderRef,
-      {
-        stockHoldStatus: 'active',
-        stockHoldReservedAt: FieldValue.serverTimestamp(),
-        stockHoldItems: currentItems,
-        paymentExpiresAt: orderData.paymentExpiresAt || holdExpiresAt,
-        paymentExpiresInMinutes: 30,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
-    reserved = true;
-  });
-
-  if (reserved) {
-    await writeOrderTimeline(orderRef, orderId, {
-      event: 'product_stock_reserved_for_payment',
-      eventLabel: 'ระบบจองสินค้าไว้ระหว่างรอชำระเงิน 30 นาที',
-      actorId: 'reserveProductStockForOrder',
-    });
-  } else if (unavailableItems.length > 0) {
-    await writeOrderTimeline(orderRef, orderId, {
-      event: 'product_stock_reservation_failed',
-      eventLabel: 'สินค้าไม่พอสำหรับจองออเดอร์นี้',
-      actorId: 'reserveProductStockForOrder',
-      unavailableItems,
-    });
-    await notifyCustomerProductReturned({
-      orderId,
-      customerId: String(initialData.customerId || '').trim(),
-      orderCode: String(initialData.orderCode || '').trim(),
-      title: 'สินค้าไม่พอ',
-      body: 'สินค้าในตะกร้าไม่พอ กรุณาเลือกใหม่',
-    });
-  }
-}
-
-async function returnExpiredProductStock(orderRef, orderId) {
-  let returned = false;
-  let customerId = '';
-  let orderCode = '';
-  let returnedItems = [];
-
-  await db.runTransaction(async (transaction) => {
-    const orderSnap = await transaction.get(orderRef);
-    if (!orderSnap.exists) {
-      return;
-    }
-
-    const orderData = orderSnap.data() || {};
-    const stockHoldStatus = String(orderData.stockHoldStatus || '').trim();
-    const paymentStatus = String(orderData.paymentStatus || '').trim();
-    const expiresAtMillis = timestampToMillis(orderData.paymentExpiresAt);
-    if (
-      stockHoldStatus !== 'active' ||
-      paymentStatus === 'verified' ||
-      expiresAtMillis == null ||
-      expiresAtMillis > Date.now()
-    ) {
-      return;
-    }
-
-    returnedItems = Array.isArray(orderData.stockHoldItems) && orderData.stockHoldItems.length > 0
-      ? normalizeStockHoldItems({ products: orderData.stockHoldItems })
-      : normalizeStockHoldItems(orderData);
-    if (returnedItems.length === 0) {
-      transaction.set(
-        orderRef,
-        {
-          stockHoldStatus: 'returned',
-          stockReturnedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-      returned = true;
-      customerId = String(orderData.customerId || '').trim();
-      orderCode = String(orderData.orderCode || '').trim();
-      return;
-    }
-
-    for (const item of returnedItems) {
-      transaction.update(db.collection('products').doc(item.productId), {
-        stock: FieldValue.increment(item.quantity),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-
-    transaction.set(
-      orderRef,
-      {
-        status: 'cancelled',
-        statusLabel: 'ยกเลิกออเดอร์',
-        cancelReason: 'payment_timeout_30_minutes',
-        paymentStatus: 'expired_unpaid',
-        paymentStatusLabel: 'หมดเวลาชำระเงิน',
-        stockHoldStatus: 'returned',
-        stockReturnedAt: FieldValue.serverTimestamp(),
-        stockReturnedReason: 'payment_timeout_30_minutes',
-        riderNotifyReady: false,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-    returned = true;
-    customerId = String(orderData.customerId || '').trim();
-    orderCode = String(orderData.orderCode || '').trim();
-  });
-
-  if (!returned) {
-    return false;
-  }
-
-  await writeOrderTimeline(orderRef, orderId, {
-    event: 'unpaid_order_stock_returned',
-    eventLabel: 'ครบ 30 นาทีแล้วยังไม่ชำระเงิน ระบบคืนสินค้าเข้าสู่ระบบ',
-    actorId: 'returnExpiredProductStock',
-    returnedItems,
-  });
-  await notifyCustomerProductReturned({ orderId, customerId, orderCode });
-  return true;
 }
 
 async function getProfileFromFriendDoc(ownerId, friendId) {
@@ -2663,53 +2046,6 @@ exports.normalizeVan2SlipOrders = onDocumentCreated(
   },
 );
 
-exports.reserveVan2PromptPayProductStock = onDocumentCreated(
-  {
-    region: DEFAULT_REGION,
-    document: 'orders/{orderId}',
-  },
-  async (event) => {
-    const data = event.data?.data();
-    if (!data) {
-      return;
-    }
-
-    await reserveProductStockForOrder(
-      event.data.ref,
-      event.params.orderId,
-      data,
-    );
-  },
-);
-
-exports.returnExpiredUnpaidProductStock = onSchedule(
-  {
-    region: DEFAULT_REGION,
-    schedule: 'every 5 minutes',
-    timeZone: 'Asia/Bangkok',
-  },
-  async () => {
-    const snapshot = await db
-      .collection('orders')
-      .where('stockHoldStatus', '==', 'active')
-      .limit(100)
-      .get();
-
-    let returnedCount = 0;
-    for (const doc of snapshot.docs) {
-      const returned = await returnExpiredProductStock(doc.ref, doc.id);
-      if (returned) {
-        returnedCount += 1;
-      }
-    }
-
-    logger.info('returnExpiredUnpaidProductStock completed', {
-      checkedCount: snapshot.size,
-      returnedCount,
-    });
-  },
-);
-
 exports.pushAppNotification = onDocumentCreated(
   {
     region: DEFAULT_REGION,
@@ -2748,7 +2084,8 @@ exports.pushAppNotification = onDocumentCreated(
       return;
     }
 
-    const token = await resolveRecipientFcmToken(targetApp, recipientUid);
+    const token = await resolveRecipientFcmToken(targetApp, recipientUid)
+      || await resolveAnyRecipientFcmToken(recipientUid);
     if (!token) {
       await event.data.ref.set(
         {
@@ -2809,7 +2146,7 @@ exports.pushAppNotification = onDocumentCreated(
     };
 
     try {
-      const responseId = await admin.messaging().send(message);
+      const responseId = await sendFcmWithRetry(message);
       await event.data.ref.set(
         {
           deliveryStatus: 'sent',
@@ -2819,6 +2156,12 @@ exports.pushAppNotification = onDocumentCreated(
         { merge: true },
       );
     } catch (error) {
+      logger.error('pushAppNotification failed', {
+        notificationId,
+        targetApp,
+        recipientUid,
+        message: error instanceof Error ? error.message : String(error),
+      });
       await event.data.ref.set(
         {
           deliveryStatus: 'failed',
@@ -2827,7 +2170,6 @@ exports.pushAppNotification = onDocumentCreated(
         },
         { merge: true },
       );
-      throw error;
     }
   },
 );
@@ -3023,208 +2365,3 @@ exports.cancelCallInvite = functions
     await clearActiveCallInvite(callerId, calleeId);
     return { success: true };
   });
-
-// ----------------------------------------------------------------------------
-// Reassign orders when a rider closes their ready toggle.
-// Triggered by van3 client which clears driverId and sets needsReassign=true.
-// We pick the next nearest online-ready rider (excluding the previous one)
-// and update the order so it can be delivered again.
-// ----------------------------------------------------------------------------
-
-const REASSIGN_FRESH_LOCATION_MIN = 10;
-const REASSIGN_MAX_RADIUS_KM = 25;
-
-function _toNum(v) {
-  if (typeof v === 'number' && isFinite(v)) return v;
-  if (typeof v === 'string') {
-    const n = parseFloat(v);
-    return isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-function _haversineKm(lat1, lng1, lat2, lng2) {
-  const R = 6371;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
-}
-
-async function _findNextNearestRider({
-  excludeUid,
-  shopLat,
-  shopLng,
-  isPassenger,
-}) {
-  const fieldName = isPassenger ? 'passengerReady' : 'onlineReady';
-  const snap = await db
-    .collection('riders')
-    .where(fieldName, '==', true)
-    .get();
-
-  if (snap.empty) return null;
-
-  const now = Date.now();
-  const candidates = [];
-  const fallback = [];
-  for (const doc of snap.docs) {
-    if (doc.id === excludeUid) continue;
-    const data = doc.data() || {};
-    const geo = data.currentLocation;
-    let lat = null;
-    let lng = null;
-    if (geo && typeof geo.latitude === 'number') {
-      lat = geo.latitude;
-      lng = geo.longitude;
-    } else {
-      lat = _toNum(data.latitude);
-      lng = _toNum(data.longitude);
-    }
-    if (lat == null || lng == null) continue;
-    if (lat === 0 && lng === 0) continue;
-
-    const distanceKm =
-      shopLat != null && shopLng != null
-        ? _haversineKm(shopLat, shopLng, lat, lng)
-        : 0;
-
-    const item = { uid: doc.id, distanceKm };
-    fallback.push(item);
-
-    const status = String(data.locationStatus || '').trim();
-    if (status === 'offline') continue;
-
-    const ts = data.locationUpdatedAt || data.updatedAt;
-    const ageMs =
-      ts && typeof ts.toMillis === 'function'
-        ? now - ts.toMillis()
-        : Number.POSITIVE_INFINITY;
-    if (ageMs > REASSIGN_FRESH_LOCATION_MIN * 60 * 1000) continue;
-    if (shopLat != null && distanceKm > REASSIGN_MAX_RADIUS_KM) continue;
-
-    candidates.push(item);
-  }
-
-  const list = candidates.length > 0 ? candidates : fallback;
-  if (list.length === 0) return null;
-  list.sort((a, b) => a.distanceKm - b.distanceKm);
-  return list[0];
-}
-
-exports.reassignOrderOnRiderClose = onDocumentUpdated(
-  {
-    region: DEFAULT_REGION,
-    document: 'orders/{orderId}',
-  },
-  async (event) => {
-    const before = event.data?.before?.data() || {};
-    const after = event.data?.after?.data() || {};
-
-    // Trigger only on the transition into needsReassign=true.
-    const turnedOn =
-      after.needsReassign === true && before.needsReassign !== true;
-    if (!turnedOn) return;
-
-    // Don't re-pick if a driver was set again or the status moved on.
-    if (after.driverId) return;
-    const status = String(after.status || '').trim();
-    if (status !== 'awaiting_rider' && status !== 'pending') return;
-
-    const orderId = event.params.orderId;
-    const previousDriverId = String(after.previousDriverId || '').trim();
-    const orderType = String(after.orderType || '').trim();
-    const serviceType = String(after.serviceType || '').trim();
-    const isPassenger =
-      orderType === 'travel_passenger' || serviceType === 'travel_passenger';
-
-    const shopLocation = after.shopLocation || after.pickupLocation || {};
-    const shopLat =
-      _toNum(shopLocation.latitude) ??
-      _toNum(after.shopLatitude) ??
-      _toNum(after.pickupLatitude);
-    const shopLng =
-      _toNum(shopLocation.longitude) ??
-      _toNum(after.shopLongitude) ??
-      _toNum(after.pickupLongitude);
-
-    try {
-      const next = await _findNextNearestRider({
-        excludeUid: previousDriverId,
-        shopLat,
-        shopLng,
-        isPassenger,
-      });
-
-      if (!next) {
-        await event.data.after.ref.set(
-          {
-            needsReassign: false,
-            reassignFailedAt: FieldValue.serverTimestamp(),
-            reassignFailureReason: 'no_other_rider_available',
-          },
-          { merge: true },
-        );
-        logger.info(
-          `[reassign] no rider for order ${orderId} (excluded ${previousDriverId})`,
-        );
-        return;
-      }
-
-      await event.data.after.ref.set(
-        {
-          driverId: next.uid,
-          status: 'pending',
-          riderNotifyReady: true,
-          needsReassign: false,
-          reassignedAt: FieldValue.serverTimestamp(),
-          reassignedFromDriverId: previousDriverId || null,
-          assignedRiderAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-
-      // Best-effort notification doc so existing pushAppNotification function
-      // delivers the order to the new rider.
-      try {
-        await db.collection('app_notifications').add({
-          type: 'order',
-          targetApp: 'van3_rider',
-          recipientUid: next.uid,
-          orderId,
-          action: 'order_reassigned',
-          sourceApp: after.sourceApp || 'van2_customer',
-          customerConfirmed: after.customerConfirmed === true,
-          riderNotifyReady: true,
-          title: 'งานใหม่ที่ได้รับมอบหมาย',
-          body: 'มีออเดอร์ที่ถูกส่งต่อถึงคุณ กรุณาตรวจสอบ',
-          createdAt: FieldValue.serverTimestamp(),
-        });
-      } catch (e) {
-        logger.warn(`[reassign] notify failed for ${orderId}: ${e}`);
-      }
-
-      logger.info(
-        `[reassign] order ${orderId} -> ${next.uid} (${next.distanceKm.toFixed(2)} km)`,
-      );
-    } catch (error) {
-      logger.error(`[reassign] failed for order ${orderId}: ${error}`);
-      try {
-        await event.data.after.ref.set(
-          {
-            needsReassign: false,
-            reassignFailedAt: FieldValue.serverTimestamp(),
-            reassignFailureReason:
-              error instanceof Error ? error.message : String(error),
-          },
-          { merge: true },
-        );
-      } catch (_) {
-        // ignore
-      }
-    }
-  },
-);

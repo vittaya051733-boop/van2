@@ -1,0 +1,60 @@
+---
+description: Safe deploy rules for van1–van4 shared Firebase ecosystem (van-merchant)
+globs: "**/firestore.rules,**/firebase.json,**/scripts/deploy*.ps1,**/functions/index.js"
+alwaysApply: false
+---
+
+# Van Ecosystem — Safe Deploy (ทุกครั้งก่อน deploy)
+
+> **แอปนี้: van2 (Customer)** — **canonical hub** สำหรับ Firestore rules + functions codebase van2
+
+Project เดียว: `van-merchant` | Firestore default DB แชร์ van1/van2/van3/van4 admin
+
+## กฎเหล็ก (ห้ามฝ่าฝืน)
+
+1. **Firestore rules แก้ที่ `van2/firestore.rules` เท่านั้น** — แล้ว sync ก่อน deploy
+2. **Deploy Firestore จาก van2 เท่านั้น** — van1/van3 ต้อง delegate (ห้าม `firebase deploy --only firestore` ตรงๆ)
+3. **Functions ระบุชื่อทีละตัว** — ห้าม `firebase deploy --only functions` ทั้งก้อน
+4. **ห้ามใช้ `deploy-van-merchant-rules.ps1`** และห้าม deploy ข้าม codebase
+5. **ทุก deploy ต้องมี tokens:** `ConfirmDeploy`, `ConfirmFile`, `ConfirmImpact`, `FinalAcknowledge "YES I UNDERSTAND"`
+
+## Ownership (ไม่ทับกัน)
+
+| ทรัพยากร | เจ้าของ deploy |
+|----------|----------------|
+| Firestore `(default)` rules | **van2** → `SHARED:van1,van2,van3,van4` |
+| Functions codebase `van1` | van1 scripts only |
+| Functions codebase `van2` | van2 scripts only |
+| Storage van1/van2/van3/van4 | แต่ละแอป `SELF` |
+| Firestore DB `van4` (deny-all) | van4 only `SELF:van4` — **ไม่ใช่ default DB** |
+
+## ขั้นตอนมาตรฐาน
+
+```powershell
+# 1) ดูกฎ
+van2\scripts\deploy-safe.ps1 -Action help
+
+# 2) หลังแก้ rules — sync ให้ van1/van3 ตรง hash
+van2\scripts\sync-firestore-rules.ps1
+
+# 3) Preflight
+van2\scripts\deploy-preflight.ps1 -App van2 -Target firestore
+
+# 4) Deploy rules (canonical)
+van2\scripts\deploy-safe.ps1 -Action firestore -App van2 `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" `
+  -ConfirmFile "firestore.rules" `
+  -ConfirmImpact "SHARED:van1,van2,van3,van4" `
+  -FinalAcknowledge "YES I UNDERSTAND"
+
+# 5) Deploy function (ตัวอย่าง van2)
+van2\scripts\deploy-safe.ps1 -Action functions -App van2 -FunctionName pushAppNotification `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+```
+
+## เมื่อ AI/คนแก้โค้ด
+
+- แก้ `firestore.rules` ใน van1/van3 → **copy ไป van2 ก่อน** แล้ว sync กลับ
+- เพิ่ม Cloud Function → ลงทะเบียนใน `van2/scripts/deploy-governance.ps1` (`FunctionOwnershipVan1` หรือ `Van2`)
+- ห้าม commit rules ที่ default deny เป็น `if true`
+- Manifest กลาง: `van2/scripts/deploy-governance.ps1`

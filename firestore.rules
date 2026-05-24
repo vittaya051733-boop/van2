@@ -13,6 +13,21 @@ service cloud.firestore {
       return signedIn() && request.auth.token.admin == true;
     }
 
+    function isAdminFromProfile() {
+      return signedIn()
+          && exists(/databases/$(database)/documents/users/$(uid()))
+          && get(/databases/$(database)/documents/users/$(uid())).data != null
+          && (
+            get(/databases/$(database)/documents/users/$(uid())).data.role in ['admin', 'superadmin']
+            || get(/databases/$(database)/documents/users/$(uid())).data.isAdmin == true
+            || get(/databases/$(database)/documents/users/$(uid())).data.admin == true
+          );
+    }
+
+    function isPrivilegedAdmin() {
+      return isAdmin() || isAdminFromProfile();
+    }
+
     function isSelf(userId) {
       return signedIn() && uid() == userId;
     }
@@ -30,6 +45,26 @@ service cloud.firestore {
         'agriculture_registrations',
         'other_registrations'
       ];
+    }
+
+    function isRegistrationOwner(docId) {
+      return docId == uid()
+          || (resource.data.ownerId != null && resource.data.ownerId == uid())
+          || (
+            authEmail() != null
+            && resource.data.email != null
+            && resource.data.email == authEmail()
+          );
+    }
+
+    function isRegistrationCreateOwner(docId) {
+      return docId == uid()
+          || (request.resource.data.ownerId != null
+              && request.resource.data.ownerId == uid());
+    }
+
+    function isPublicProductVisible(data) {
+      return data != null && data.isActive == true;
     }
 
     function isOrderParticipant(data) {
@@ -56,9 +91,14 @@ service cloud.firestore {
           && data != null
           && (
             (data.customerId != null && data.customerId == uid())
-            || (data.driverId != null && data.driverId == uid())
-            || (data.shopId != null && data.shopId == uid())
-            || (data.shopOwnerId != null && data.shopOwnerId == uid())
+            || (
+              !isUnverifiedPromptPayOrder(data)
+              && (
+                (data.shopId != null && data.shopId == uid())
+                || (data.shopOwnerId != null && data.shopOwnerId == uid())
+                || (data.driverId != null && data.driverId == uid())
+              )
+            )
           );
     }
 
@@ -98,21 +138,26 @@ service cloud.firestore {
     // แอปเช็คอัปเดต ต้องอ่านได้ก่อนล็อกอิน (ใช้ใน AppUpdateGate)
     match /app_updates/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // สาขาระบบกลาง แอปทุกฝั่งอ่านเพื่อเช็กสถานะ/พิกัด/เวลาตัดรอบได้
+    match /branches/{branchId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
     }
 
     // อัตราบวกเพิ่มราคากลางของระบบ (เช่น 7% = 0.07)
     match /pricing_config/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
     }
 
     // สินค้า (แอปโหลดจาก collection('products'))
     match /products/{productId} {
-      // โหลดสินค้าได้เมื่อ login แล้ว (รองรับ both get และ query/list)
-      allow get, list: if signedIn();
+      allow get, list: if (signedIn() && resource.data.ownerUid == uid())
+          || isPublicProductVisible(resource.data);
 
-      // เจ้าของสินค้าเท่านั้นที่เพิ่ม/แก้/ลบ
       allow create: if signedIn() && request.resource.data.ownerUid == uid();
 
       allow update: if signedIn()
@@ -120,6 +165,13 @@ service cloud.firestore {
           && request.resource.data.ownerUid == uid();
 
       allow delete: if signedIn() && resource.data.ownerUid == uid();
+
+      match /specifications/{specId} {
+        allow get, list: if signedIn()
+            && get(/databases/$(database)/documents/products/$(productId)).data.ownerUid == uid();
+        allow create, update, delete: if signedIn()
+            && get(/databases/$(database)/documents/products/$(productId)).data.ownerUid == uid();
+      }
     }
 
     // โปรไฟล์ผู้ใช้ฝั่งลูกค้า (ใช้เก็บ fcmToken ฯลฯ)
@@ -128,7 +180,6 @@ service cloud.firestore {
       allow create, update, delete: if isSelf(userId);
       allow list: if false;
 
-      // friends subcollection (ใช้ใน friend_service)
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
         allow create, update, delete: if isSelf(userId);
@@ -137,9 +188,9 @@ service cloud.firestore {
 
     // โปรไฟล์ผู้ใช้เดิม (รองรับช่วง migration)
     match /users/{userId} {
-      allow get: if isSelf(userId);
+      allow get: if isSelf(userId) || isPrivilegedAdmin();
       allow create, update, delete: if isSelf(userId);
-      allow list: if false;
+      allow list: if isPrivilegedAdmin();
 
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
@@ -160,31 +211,28 @@ service cloud.firestore {
       allow list: if false;
     }
 
+    // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
+    match /public_shops/{shopId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isSelf(shopId);
+    }
+
     // เอกสารลงทะเบียนร้านค้า
-    // - get (single doc): อนุญาตทุกผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์: รูปร้าน พิกัด ฯลฯ)
-    // - list/query: เฉพาะเจ้าของ (docId==uid, ownerId==uid, หรือตรงกับ email)
+    // - get (single doc): ผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์)
+    // - list/query: เจ้าของหรือแอดมิน
     match /{collection}/{docId} {
       allow get: if isRegistrationCollection(collection) && signedIn();
 
       allow list: if isRegistrationCollection(collection)
           && signedIn()
           && (
-            docId == uid()
-            || (resource.data.ownerId != null && resource.data.ownerId == uid())
-            || (
-              authEmail() != null
-              && resource.data.email != null
-              && resource.data.email == authEmail()
-            )
+            isPrivilegedAdmin()
+            || isRegistrationOwner(docId)
           );
 
       allow create: if isRegistrationCollection(collection)
           && signedIn()
-          && (
-            docId == uid()
-            || (request.resource.data.ownerId != null
-                && request.resource.data.ownerId == uid())
-          );
+          && isRegistrationCreateOwner(docId);
 
       allow update: if isRegistrationCollection(collection)
           && signedIn()
@@ -206,7 +254,7 @@ service cloud.firestore {
       allow read: if signedIn() && (uid() in resource.data.participants);
       allow create: if signedIn() && (uid() in request.resource.data.participants);
       allow update: if signedIn() && (uid() in resource.data.participants);
-      allow delete: if isAdmin();
+      allow delete: if isPrivilegedAdmin();
     }
 
     // แชท (collection('chats')/{chatId}/messages)
@@ -214,7 +262,7 @@ service cloud.firestore {
       allow read: if signedIn() && (uid() in resource.data.participants);
       allow create: if signedIn() && (uid() in request.resource.data.participants);
       allow update: if signedIn() && (uid() in resource.data.participants);
-      allow delete: if isAdmin();
+      allow delete: if isPrivilegedAdmin();
 
       match /messages/{messageId} {
         allow get, list: if signedIn()
@@ -222,7 +270,7 @@ service cloud.firestore {
         allow create: if signedIn()
             && (uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
             && request.resource.data.senderId == uid();
-        allow update, delete: if isAdmin();
+        allow update, delete: if isPrivilegedAdmin();
       }
     }
 
@@ -231,7 +279,7 @@ service cloud.firestore {
       allow read: if canAccessOrderAsParticipant(resource.data);
       allow create: if isOrderParticipant(request.resource.data);
       allow update: if canAccessOrderAsParticipant(resource.data);
-      allow delete: if isAdmin();
+      allow delete: if isPrivilegedAdmin();
 
       match /timeline/{timelineId} {
         allow read, write: if signedIn()
@@ -244,25 +292,19 @@ service cloud.firestore {
       allow read, write: if isSelf(shopId);
     }
 
-    // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
-    match /public_shops/{shopId} {
-      allow get, list: if signedIn();
-      allow create, update, delete: if isSelf(shopId);
-    }
-
     // เครดิต
     match /credits/{creditId} {
       allow read: if signedIn() && resource.data.uid == uid();
       allow create: if signedIn() && request.resource.data.uid == uid();
-      allow update, delete: if isAdmin();
+      allow update, delete: if isPrivilegedAdmin();
     }
 
     // คำขอถอนเงิน
     match /withdraw_requests/{requestId} {
       allow read: if signedIn() && resource.data.uid == uid();
       allow create: if signedIn() && request.resource.data.uid == uid();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
+      allow update: if isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
     }
 
     // สถานะการโทร
@@ -270,17 +312,17 @@ service cloud.firestore {
       allow read: if isCallParticipant(resource.data);
       allow create: if isCallParticipant(request.resource.data);
       allow update: if isCallParticipant(resource.data);
-      allow delete: if isAdmin();
+      allow delete: if isPrivilegedAdmin();
     }
 
-    // การแจ้งเตือนข้ามแอป (van3 -> van1/van2)
+    // การแจ้งเตือนข้ามแอป (van1/van2/van3)
     match /app_notifications/{notificationId} {
       allow create: if canCreateAppNotification();
       allow get, list: if signedIn() && resource.data.recipientUid == uid();
       allow update: if signedIn()
           && resource.data.recipientUid == uid()
           && request.resource.data.recipientUid == resource.data.recipientUid;
-      allow delete: if isAdmin();
+      allow delete: if isPrivilegedAdmin();
     }
 
     match /payment_config/{documentId} {

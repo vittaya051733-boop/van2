@@ -2,134 +2,57 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Deploy Help — Safe Deploy Governance",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/deploy-safe.ps1", "-Action", "help"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Sync Firestore Rules (van2 → van1, van3)",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/sync-firestore-rules.ps1"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preflight — Firestore (van2 canonical)",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/deploy-preflight.ps1", "-App", "van2", "-Target", "firestore"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Deploy Firestore Isolated (van2 canonical)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy", "Bypass", "-File", "scripts/deploy-safe.ps1",
+        "-Action", "firestore", "-App", "van2",
+        "-ConfirmDeploy", "APPROVE:van2:van-merchant",
+        "-ConfirmFile", "firestore.rules",
+        "-ConfirmImpact", "SHARED:van1,van2,van3,van4",
+        "-InteractiveConfirm"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "Deploy Storage Isolated (van2)",
       "type": "shell",
       "command": "powershell",
       "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-storage-isolated.ps1"
+        "-ExecutionPolicy", "Bypass", "-File", "scripts/deploy-safe.ps1",
+        "-Action", "storage", "-App", "van2",
+        "-ConfirmDeploy", "APPROVE:van2:van-merchant",
+        "-InteractiveConfirm"
       ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
       "problemMatcher": []
     },
     {
-      "label": "Deploy Firestore Isolated (van2)",
+      "label": "DO NOT USE — Deploy Rules (van-merchant legacy)",
       "type": "shell",
       "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-firestore-isolated.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Deploy Isolated (van2)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-isolated.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "DO NOT USE - Deploy Rules (van-merchant)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-van-merchant-rules.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Deploy Function verifyTopUpSlip Isolated (van2)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-functions-isolated.ps1",
-        "-FunctionName",
-        "verifyTopUpSlip"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Deploy Functions Email OTP Isolated (van2)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/deploy-functions-isolated.ps1",
-        "-FunctionName",
-        "sendEmailOtp",
-        "verifyEmailOtp"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Run van2 on emulator-5554",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/run-van2-by-avd.ps1",
-        "-Serial",
-        "emulator-5554"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "isBackground": true,
-      "problemMatcher": []
-    },
-    {
-      "label": "Run van2 by AVD name",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/run-van2-by-avd.ps1"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "isBackground": true,
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/deploy-van-merchant-rules.ps1"],
       "problemMatcher": []
     }
   ]

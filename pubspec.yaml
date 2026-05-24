@@ -58,6 +58,7 @@ dependencies:
   agora_rtc_engine: ^6.5.3
   audioplayers: ^5.2.1
   image_picker: ^1.2.0
+  flutter_image_compress: ^2.3.0
   file_picker: ^10.3.7
   url_launcher: ^6.3.0
   path: ^1.9.0
@@ -95,6 +96,7 @@ flutter:
     - assets/
     - assets/k-pop-ringtone-no-copyright-357142.mp3
     - assets/topping-pop-sound-245150.mp3
+    - shorebird.yaml
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

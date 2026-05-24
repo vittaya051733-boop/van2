@@ -1,5 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PublicCatalogProduct {
   const PublicCatalogProduct({
@@ -42,10 +43,21 @@ class PublicCatalogSection {
 class PublicCatalogService {
   PublicCatalogService._();
 
-  static Stream<List<PublicCatalogSection>> streamAllSections() {
-    final query = FirebaseFirestore.instance.collection('products');
+  static const Duration _catalogRefreshInterval = Duration(minutes: 3);
+  static final Map<String, _CatalogRefreshHub> _refreshHubs =
+      <String, _CatalogRefreshHub>{};
 
-    return _streamSectionsFromQuery(query, '', '').map(
+  static Stream<List<PublicCatalogSection>> streamAllSections() {
+    return _cachedSections(
+      'all',
+      () => _fetchSections(
+        FirebaseFirestore.instance
+            .collection('products')
+            .where('isActive', isEqualTo: true),
+        '',
+        '',
+      ),
+    ).map(
       (sections) => sections.toList()
         ..sort(
           (left, right) => (left.shopName ?? left.shopId).compareTo(
@@ -55,136 +67,127 @@ class PublicCatalogService {
     );
   }
 
-  static Stream<List<PublicCatalogSection>> streamSectionsByServiceType(String serviceType) {
-    final query = FirebaseFirestore.instance.collection('products');
-
-    return _streamSectionsFromQuery(query, serviceType, '');
+  static Stream<List<PublicCatalogSection>> streamSectionsByServiceType(
+    String serviceType,
+  ) {
+    final normalized = _normalizeServiceType(serviceType);
+    return _cachedSections(
+      'service:$normalized',
+      () => _fetchSections(
+        FirebaseFirestore.instance
+            .collection('products')
+            .where('isActive', isEqualTo: true),
+        normalized,
+        '',
+      ),
+    );
   }
 
   static Stream<List<PublicCatalogSection>> streamSectionsByShopId(String shopId) {
     final normalizedShopId = shopId.trim();
     if (normalizedShopId.isEmpty) {
-      return Stream<List<PublicCatalogSection>>.value(const <PublicCatalogSection>[]);
+      return Stream<List<PublicCatalogSection>>.value(
+        const <PublicCatalogSection>[],
+      );
     }
 
-    final query = FirebaseFirestore.instance.collection('products');
+    final query = FirebaseFirestore.instance
+        .collection('products')
+        .where('ownerUid', isEqualTo: normalizedShopId)
+        .where('isActive', isEqualTo: true);
 
-    return _streamSectionsFromQuery(query, '', normalizedShopId);
+    return query.snapshots().map(
+      (snapshot) => _buildSectionsFromDocs(
+        snapshot.docs,
+        '',
+        normalizedShopId,
+      ),
+    );
   }
 
-  static Stream<List<PublicCatalogSection>> _streamSectionsFromQuery(
+  static Stream<List<PublicCatalogSection>> _cachedSections(
+    String key,
+    Future<List<PublicCatalogSection>> Function() loader,
+  ) {
+    return _refreshHubs
+        .putIfAbsent(key, () => _CatalogRefreshHub(loader))
+        .stream;
+  }
+
+  static Future<List<PublicCatalogSection>> _fetchSections(
     Query<Map<String, dynamic>> query,
     String requiredServiceType,
     String requiredShopId,
-  ) {
-    late StreamController<List<PublicCatalogSection>> controller;
-    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? productSubscription;
-    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? shopSubscription;
-    QuerySnapshot<Map<String, dynamic>>? latestProducts;
-    Map<String, Map<String, dynamic>> latestShops = const <String, Map<String, dynamic>>{};
-
-    void emit() {
-      final snapshot = latestProducts;
-      if (snapshot == null || controller.isClosed) return;
-      controller.add(_buildSections(
-        snapshot,
-        latestShops,
-        requiredServiceType,
-        requiredShopId,
-      ));
-    }
-
-    controller = StreamController<List<PublicCatalogSection>>(
-      onListen: () {
-        productSubscription = query.snapshots().listen(
-          (snapshot) {
-            latestProducts = snapshot;
-            emit();
-          },
-          onError: controller.addError,
-        );
-
-        shopSubscription = FirebaseFirestore.instance.collection('public_shops').snapshots().listen(
-          (snapshot) {
-            latestShops = <String, Map<String, dynamic>>{
-              for (final doc in snapshot.docs) doc.id: doc.data(),
-            };
-            emit();
-          },
-          onError: (_) {
-            latestShops = const <String, Map<String, dynamic>>{};
-            emit();
-          },
-        );
-      },
-      onCancel: () async {
-        await productSubscription?.cancel();
-        await shopSubscription?.cancel();
-      },
+  ) async {
+    final snapshot = await query.get();
+    return _buildSectionsFromDocs(
+      snapshot.docs,
+      requiredServiceType,
+      requiredShopId,
     );
-
-    return controller.stream;
   }
 
-  static List<PublicCatalogSection> _buildSections(
-    QuerySnapshot<Map<String, dynamic>> snapshot,
-    Map<String, Map<String, dynamic>> publicShops,
+  static List<PublicCatalogSection> _buildSectionsFromDocs(
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     String requiredServiceType,
     String requiredShopId,
   ) {
-      final Map<String, List<PublicCatalogProduct>> grouped = <String, List<PublicCatalogProduct>>{};
-      final normalizedTargetServiceType = requiredServiceType.trim().isEmpty
-          ? null
-          : _normalizeServiceType(requiredServiceType);
-      final normalizedTargetShopId = requiredShopId.trim();
+    final grouped = <String, List<PublicCatalogProduct>>{};
+    final normalizedTargetServiceType = requiredServiceType.trim().isEmpty
+        ? null
+        : _normalizeServiceType(requiredServiceType);
+    final normalizedTargetShopId = requiredShopId.trim();
 
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        if (!_isProductActive(data)) continue;
+    for (final doc in docs) {
+      final data = doc.data();
+      if (!_isProductActive(data)) continue;
 
-        final shopId = _readShopId(data);
-        if (shopId.isEmpty) continue;
+      final shopId = _readShopId(data);
+      if (shopId.isEmpty) continue;
 
-        final publicShop = publicShops[shopId];
-
-        if (normalizedTargetShopId.isNotEmpty && shopId != normalizedTargetShopId) {
-          continue;
-        }
-
-        final serviceType = _readServiceType(publicShop).isNotEmpty
-          ? _readServiceType(publicShop)
-          : _readServiceType(data);
-        if (normalizedTargetServiceType != null &&
-            normalizedTargetServiceType.isNotEmpty &&
-            _normalizeServiceType(serviceType) != normalizedTargetServiceType) {
-          continue;
-        }
-
-        final product = PublicCatalogProduct(
-          id: doc.id,
-          shopId: shopId,
-          shopName: _readShopName(publicShop) ?? _readShopName(data),
-          shopImageUrl: _readShopImage(publicShop) ?? _readShopImage(data),
-          shopLatitude: publicShop == null ? _extractLatitude(data) : _extractLatitude(publicShop) ?? _extractLatitude(data),
-          shopLongitude: publicShop == null ? _extractLongitude(data) : _extractLongitude(publicShop) ?? _extractLongitude(data),
-          data: data,
-        );
-
-        grouped.putIfAbsent(shopId, () => <PublicCatalogProduct>[]).add(product);
+      if (normalizedTargetShopId.isNotEmpty && shopId != normalizedTargetShopId) {
+        continue;
       }
 
-      const registrationImages = <String, String>{};
+      final serviceType = _readServiceType(data);
+      if (normalizedTargetServiceType != null &&
+          normalizedTargetServiceType.isNotEmpty &&
+          _normalizeServiceType(serviceType) != normalizedTargetServiceType) {
+        continue;
+      }
 
-      return grouped.entries
-          .map((entry) {
-            final products = entry.value;
-            if (products.isEmpty) return null;
-            final first = products.first;
-            final shopImageUrl = _preferRegistrationImage(
-              registrationImages[entry.key],
-              first.shopImageUrl,
-            );
-            final mappedProducts = products
+      grouped.putIfAbsent(shopId, () => <PublicCatalogProduct>[]).add(
+        PublicCatalogProduct(
+          id: doc.id,
+          shopId: shopId,
+          shopName: _readShopName(data),
+          shopImageUrl: _readShopImage(data),
+          shopLatitude: _extractLatitude(data),
+          shopLongitude: _extractLongitude(data),
+          data: data,
+        ),
+      );
+    }
+
+    const registrationImages = <String, String>{};
+
+    return grouped.entries
+        .map((entry) {
+          final products = entry.value;
+          if (products.isEmpty) return null;
+          final first = products.first;
+          final shopImageUrl = _preferRegistrationImage(
+            registrationImages[entry.key],
+            first.shopImageUrl,
+          );
+
+          return PublicCatalogSection(
+            shopId: entry.key,
+            shopName: first.shopName,
+            shopImageUrl: shopImageUrl,
+            shopLatitude: first.shopLatitude,
+            shopLongitude: first.shopLongitude,
+            products: products
                 .map(
                   (product) => PublicCatalogProduct(
                     id: product.id,
@@ -196,25 +199,71 @@ class PublicCatalogService {
                     data: product.data,
                   ),
                 )
-                .toList(growable: false);
-
-            return PublicCatalogSection(
-              shopId: entry.key,
-              shopName: first.shopName,
-              shopImageUrl: shopImageUrl,
-              shopLatitude: first.shopLatitude,
-              shopLongitude: first.shopLongitude,
-              products: mappedProducts,
-            );
-          })
-          .whereType<PublicCatalogSection>()
-          .toList(growable: false);
+                .toList(growable: false),
+          );
+        })
+        .whereType<PublicCatalogSection>()
+        .toList(growable: false);
   }
-
 }
 
-double? _extractLatitude(Map<String, dynamic>? data) {
-  if (data == null) return null;
+class _CatalogRefreshHub {
+  _CatalogRefreshHub(this._loader) {
+    _stream = Stream<List<PublicCatalogSection>>.multi((controller) {
+      var listeners = 0;
+      Timer? timer;
+      var refreshInFlight = false;
+
+      Future<void> refresh() async {
+        if (refreshInFlight || listeners == 0) {
+          return;
+        }
+        refreshInFlight = true;
+        try {
+          final sections = await _loader();
+          if (listeners > 0) {
+            controller.add(sections);
+          }
+        } catch (error, stackTrace) {
+          if (listeners > 0) {
+            controller.addError(error, stackTrace);
+          }
+        } finally {
+          refreshInFlight = false;
+        }
+      }
+
+      controller.onListen = () {
+        listeners++;
+        if (listeners != 1) {
+          return;
+        }
+        unawaited(refresh());
+        timer = Timer.periodic(
+          PublicCatalogService._catalogRefreshInterval,
+          (_) => unawaited(refresh()),
+        );
+      };
+
+      controller.onCancel = () {
+        listeners--;
+        if (listeners > 0) {
+          return;
+        }
+        listeners = 0;
+        timer?.cancel();
+        timer = null;
+      };
+    });
+  }
+
+  final Future<List<PublicCatalogSection>> Function() _loader;
+  late final Stream<List<PublicCatalogSection>> _stream;
+
+  Stream<List<PublicCatalogSection>> get stream => _stream;
+}
+
+double? _extractLatitude(Map<String, dynamic> data) {
   final direct = _toDouble(data['shopLatitude']) ?? _toDouble(data['latitude']) ?? _toDouble(data['lat']);
   if (direct != null) {
     return direct;
@@ -231,8 +280,7 @@ double? _extractLatitude(Map<String, dynamic>? data) {
   return null;
 }
 
-double? _extractLongitude(Map<String, dynamic>? data) {
-  if (data == null) return null;
+double? _extractLongitude(Map<String, dynamic> data) {
   final direct =
       _toDouble(data['shopLongitude']) ??
       _toDouble(data['longitude']) ??
@@ -299,7 +347,6 @@ bool _isProductActive(Map<String, dynamic> data) {
     }
   }
 
-  // Require explicit active=true for customer catalog visibility.
   return false;
 }
 
@@ -328,8 +375,7 @@ String _readShopId(Map<String, dynamic> data) {
   return '';
 }
 
-String? _readShopName(Map<String, dynamic>? data) {
-  if (data == null) return null;
+String? _readShopName(Map<String, dynamic> data) {
   final candidates = <Object?>[
     data['shopName'],
     data['name'],
@@ -348,8 +394,7 @@ String? _readShopName(Map<String, dynamic>? data) {
   return null;
 }
 
-String? _readShopImage(Map<String, dynamic>? data) {
-  if (data == null) return null;
+String? _readShopImage(Map<String, dynamic> data) {
   final candidates = <Object?>[
     data['shopImageUrl'],
     data['imageUrl'],
@@ -367,8 +412,7 @@ String? _readShopImage(Map<String, dynamic>? data) {
   return null;
 }
 
-String _readServiceType(Map<String, dynamic>? data) {
-  if (data == null) return '';
+String _readServiceType(Map<String, dynamic> data) {
   final candidates = <Object?>[
     data['serviceType'],
     data['service_type'],

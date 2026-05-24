@@ -16,8 +16,8 @@ service cloud.firestore {
     function isAdminFromRegistry() {
       return signedIn()
           && authEmail() != null
-          && exists(/databases/$(database)/documents/แอดมิน/$(authEmail().lower()))
-          && get(/databases/$(database)/documents/แอดมิน/$(authEmail().lower())).data.active != false;
+          && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
+          && get(/databases/$(database)/documents/admins/$(authEmail().lower())).data.active != false;
     }
 
     function isPrivilegedAdmin() {
@@ -152,15 +152,24 @@ service cloud.firestore {
     // สินค้า (แอปโหลดจาก collection('products'))
     match /products/{productId} {
       allow get, list: if (signedIn() && resource.data.ownerUid == uid())
-          || isPublicProductVisible(resource.data);
+          || isPublicProductVisible(resource.data)
+          || isPrivilegedAdmin();
 
-      allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow create: if signedIn()
+          && (
+            request.resource.data.ownerUid == uid()
+            || isPrivilegedAdmin()
+          );
 
       allow update: if signedIn()
-          && resource.data.ownerUid == uid()
-          && request.resource.data.ownerUid == uid();
+          && (
+            (resource.data.ownerUid == uid()
+                && request.resource.data.ownerUid == uid())
+            || isPrivilegedAdmin()
+          );
 
-      allow delete: if signedIn() && resource.data.ownerUid == uid();
+      allow delete: if signedIn()
+          && (resource.data.ownerUid == uid() || isPrivilegedAdmin());
 
       match /specifications/{specId} {
         allow get, list: if signedIn()
@@ -214,13 +223,13 @@ service cloud.firestore {
     // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
     match /public_shops/{shopId} {
       allow get, list: if signedIn();
-      allow create: if isSelf(shopId);
+      allow create: if isSelf(shopId) || isPrivilegedAdmin();
       allow update, delete: if isSelf(shopId) || isPrivilegedAdmin();
     }
 
     // เอกสารลงทะเบียนร้านค้า
     // - get (single doc): ผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์)
-    // - list/query: เจ้าของหรือแอดมิน
+    // - list/query: เจ้าของหรือadmins
     match /{collection}/{docId} {
       allow get: if isRegistrationCollection(collection) && signedIn();
 
@@ -343,11 +352,38 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // รายชื่อแอดมิน van4 — doc id = อีเมลตัวพิมพ์เล็ก, จัดการผ่าน Firebase Console เท่านั้น
-    match /แอดมิน/{emailId} {
+    // รายชื่อadmins van4 — doc id = อีเมลตัวพิมพ์เล็ก, จัดการผ่าน Firebase Console เท่านั้น
+    match /admins/{emailId} {
       allow get: if signedIn() && authEmail() != null && authEmail().lower() == emailId;
       allow list: if false;
       allow create, update, delete: if false;
+    }
+
+    // สินค้าที่ AI ประเมินว่าผิดกฎหมาย — รอแอดมินอนุมัติก่อนขึ้น products
+    match /product_admin_reviews/{reviewId} {
+      allow create: if signedIn()
+          && (
+            request.resource.data.ownerUid == uid()
+            || isPrivilegedAdmin()
+          )
+          && request.resource.data.adminReviewStatus == 'pending'
+          && request.resource.data.aiIsLegalInThailand == false;
+
+      allow get: if signedIn()
+          && (
+            resource.data.ownerUid == uid()
+            || isPrivilegedAdmin()
+          );
+
+      allow list: if isPrivilegedAdmin();
+
+      allow update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตั้งค่าแอดมิน van4 (อนุมัติอัตโนมัติ ฯลฯ)
+    match /admin_config/{docId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
     }
 
     // Default deny

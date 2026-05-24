@@ -3,6 +3,24 @@ param(
   [string]$ProjectId,
 
   [Parameter(Mandatory = $true)]
+  [string]$ConfirmDeploy,
+
+  [Parameter(Mandatory = $true)]
+  [string]$ConfirmFile,
+
+  [Parameter(Mandatory = $true)]
+  [string]$ConfirmImpact,
+
+  [Parameter(Mandatory = $false)]
+  [switch]$InteractiveConfirm,
+
+  [Parameter(Mandatory = $false)]
+  [string]$FinalAcknowledge,
+
+  [Parameter(Mandatory = $false)]
+  [switch]$DryRun,
+
+  [Parameter(Mandatory = $true)]
   [string]$BillingAccount,
 
   [Parameter(Mandatory = $true)]
@@ -32,26 +50,62 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$expectedConfirmation = "APPROVE:van2:$ProjectId"
+if ($ConfirmDeploy -ne $expectedConfirmation) {
+  throw "Deployment blocked. Re-run with: -ConfirmDeploy '$expectedConfirmation'"
+}
+Write-Host "[guard] Confirmation accepted: $expectedConfirmation" -ForegroundColor Green
+
+$expectedFile = 'functions'
+$expectedImpact = 'SELF:van2'
+if ($ConfirmFile -ne $expectedFile) {
+  throw "Deployment blocked. Re-run with: -ConfirmFile '$expectedFile'"
+}
+if ($ConfirmImpact -ne $expectedImpact) {
+  throw "Deployment blocked. Re-run with: -ConfirmImpact '$expectedImpact'"
+}
+Write-Host "[guard] File confirmation accepted: $expectedFile" -ForegroundColor Green
+Write-Host "[guard] Impact confirmation accepted: $expectedImpact" -ForegroundColor Green
+
+if ($InteractiveConfirm) {
+  $interactiveFile = Read-Host "Interactive confirm file scope (expected: $expectedFile)"
+  if ($interactiveFile -ne $expectedFile) {
+    throw "Interactive confirmation failed for file scope."
+  }
+  $interactiveImpact = Read-Host "Interactive confirm impact scope (expected: $expectedImpact)"
+  if ($interactiveImpact -ne $expectedImpact) {
+    throw "Interactive confirmation failed for impact scope."
+  }
+  Write-Host "[interactive] File and impact confirmations accepted." -ForegroundColor Green
+  $FinalAcknowledge = Read-Host "Type final acknowledgement before deploy (expected: YES I UNDERSTAND)"
+}
+
+$expectedFinalAcknowledge = 'YES I UNDERSTAND'
+if ($FinalAcknowledge -ne $expectedFinalAcknowledge) {
+  throw "Deployment blocked. Re-run with: -FinalAcknowledge '$expectedFinalAcknowledge'"
+}
+Write-Host "[guard] Final acknowledgement accepted." -ForegroundColor Green
+
 function Assert-Command([string]$name) {
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
-    throw "ไม่พบคำสั่ง '$name' กรุณาติดตั้งก่อนใช้งาน"
+    throw "Command '$name' was not found. Install it before running this script."
   }
 }
 
-Write-Host "== ตรวจสอบเครื่องมือ ==" -ForegroundColor Cyan
+Write-Host "== Checking required tools ==" -ForegroundColor Cyan
 Assert-Command "gcloud"
 Assert-Command "firebase"
 
-Write-Host "== ตั้งค่าโปรเจกต์ ==" -ForegroundColor Cyan
+Write-Host "== Setting project ==" -ForegroundColor Cyan
 gcloud config set project $ProjectId | Out-Null
 
-Write-Host "== เปิด API ที่ต้องใช้ ==" -ForegroundColor Cyan
+Write-Host "== Enabling required APIs ==" -ForegroundColor Cyan
 gcloud services enable routes.googleapis.com --project $ProjectId
 gcloud services enable cloudfunctions.googleapis.com --project $ProjectId
 gcloud services enable secretmanager.googleapis.com --project $ProjectId
 gcloud services enable billingbudgets.googleapis.com --project $ProjectId
 
-Write-Host "== ตั้งค่า Firebase Functions Secrets ==" -ForegroundColor Cyan
+Write-Host "== Setting Firebase Functions secrets ==" -ForegroundColor Cyan
 Push-Location $FunctionsDir
 try {
   $GoogleRoutesApiKey | firebase functions:secrets:set GOOGLE_ROUTES_API_KEY --project $ProjectId
@@ -59,35 +113,39 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($RedisUrl)) {
     $RedisUrl | firebase functions:secrets:set REDIS_URL --project $ProjectId
   } else {
-    Write-Host "ข้าม REDIS_URL (ไม่ได้ระบุ)" -ForegroundColor Yellow
+    Write-Host "Skipping REDIS_URL (not provided)." -ForegroundColor Yellow
   }
 
   if (-not [string]::IsNullOrWhiteSpace($RedisToken)) {
     $RedisToken | firebase functions:secrets:set REDIS_TOKEN --project $ProjectId
   } else {
-    Write-Host "ข้าม REDIS_TOKEN (ไม่ได้ระบุ)" -ForegroundColor Yellow
+    Write-Host "Skipping REDIS_TOKEN (not provided)." -ForegroundColor Yellow
   }
 
   if (-not [string]::IsNullOrWhiteSpace($RedisRestUrl)) {
     $RedisRestUrl | firebase functions:secrets:set REDIS_REST_URL --project $ProjectId
   } else {
-    Write-Host "ข้าม REDIS_REST_URL (ไม่ได้ระบุ)" -ForegroundColor Yellow
+    Write-Host "Skipping REDIS_REST_URL (not provided)." -ForegroundColor Yellow
   }
 
   if (-not [string]::IsNullOrWhiteSpace($RedisRestToken)) {
     $RedisRestToken | firebase functions:secrets:set REDIS_REST_TOKEN --project $ProjectId
   } else {
-    Write-Host "ข้าม REDIS_REST_TOKEN (ไม่ได้ระบุ)" -ForegroundColor Yellow
+    Write-Host "Skipping REDIS_REST_TOKEN (not provided)." -ForegroundColor Yellow
   }
 
-  Write-Host "== Deploy ฟังก์ชัน computeRouteMetrics ==" -ForegroundColor Cyan
-  firebase deploy --only functions:computeRouteMetrics --project $ProjectId
+  Write-Host "== Deploying computeRouteMetrics function ==" -ForegroundColor Cyan
+  if ($DryRun) {
+    Write-Host "[dry-run] Skipping firebase deploy for computeRouteMetrics." -ForegroundColor Yellow
+  } else {
+    firebase deploy --only functions:computeRouteMetrics --project $ProjectId
+  }
 }
 finally {
   Pop-Location
 }
 
-Write-Host "== สร้าง Budget Alerts ==" -ForegroundColor Cyan
+Write-Host "== Creating budget alerts ==" -ForegroundColor Cyan
 $amount = "{0}USD" -f $BudgetAmountUsd
 gcloud beta billing budgets create `
   --billing-account=$BillingAccount `
@@ -96,9 +154,9 @@ gcloud beta billing budgets create `
   --threshold-rule=percent=0.5 `
   --threshold-rule=percent=1.0
 
-Write-Host "== ตรวจสอบผลลัพธ์ ==" -ForegroundColor Cyan
+Write-Host "== Verifying results ==" -ForegroundColor Cyan
 gcloud services list --enabled --project $ProjectId | Select-String "routes.googleapis.com"
 firebase functions:list --project $ProjectId
 gcloud beta billing budgets list --billing-account=$BillingAccount
 
-Write-Host "เสร็จสิ้น: เปิด Routes API + ตั้ง Secrets + Deploy + ตั้ง Budget Alerts เรียบร้อย" -ForegroundColor Green
+Write-Host "Done: APIs enabled, secrets set, function deployed, and budget alerts created." -ForegroundColor Green

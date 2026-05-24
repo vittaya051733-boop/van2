@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../models/chat_message.dart';
 import '../models/user_profile.dart';
 import '../storage_helper.dart';
+import '../utils/upload_image_compressor.dart';
 
 class ChatService {
   ChatService();
@@ -88,17 +89,27 @@ class ChatService {
     final chatDoc = _firestore.collection('chats').doc(chatId);
     await _ensureChatDocument(chatDoc, sender: sender, target: target);
 
+    var uploadFile = file;
+    var uploadFileName = p.basename(fileName);
+    var uploadContentType = contentType ?? _guessMimeType(fileName);
+    if (messageType == 'image') {
+      final compressed = await UploadImageCompressor.compressForUpload(file);
+      uploadFile = compressed.file;
+      uploadFileName = compressed.fileName;
+      uploadContentType = compressed.contentType;
+    }
+
     final storageRef = _storage
         .ref()
-        .child('chat_uploads/$chatId/${DateTime.now().millisecondsSinceEpoch}_${p.basename(fileName)}');
-    final metadata = SettableMetadata(contentType: contentType ?? _guessMimeType(fileName));
-    await storageRef.putFile(file, metadata);
+        .child('chat_uploads/$chatId/${DateTime.now().millisecondsSinceEpoch}_$uploadFileName');
+    final metadata = SettableMetadata(contentType: uploadContentType);
+    await storageRef.putFile(uploadFile, metadata);
     final downloadUrl = await storageRef.getDownloadURL();
 
-    final summaryText = _summaryForType(messageType, fileName);
+    final summaryText = _summaryForType(messageType, uploadFileName);
     final expiresAt = Timestamp.fromDate(DateTime.now().add(const Duration(days: 30)));
     final messageRef = chatDoc.collection('messages').doc();
-    final fileSize = await file.length();
+    final fileSize = await uploadFile.length();
     await messageRef.set({
       'senderId': sender.uid,
       'senderName': sender.displayName,
@@ -106,7 +117,7 @@ class ChatService {
       'type': messageType,
       'text': summaryText,
       'mediaUrl': downloadUrl,
-      'fileName': fileName,
+      'fileName': uploadFileName,
       'fileSize': fileSize,
       'mediaContentType': metadata.contentType,
       'createdAt': FieldValue.serverTimestamp(),

@@ -77,7 +77,10 @@ class PaymentSlipSubmissionResult {
 }
 
 class _TrueMoneyDialogDraft {
-  const _TrueMoneyDialogDraft({required this.grandTotal, this.attachedSlip});
+  const _TrueMoneyDialogDraft({
+    required this.grandTotal,
+    this.attachedSlip,
+  });
 
   final double grandTotal;
   final PlatformFile? attachedSlip;
@@ -89,9 +92,7 @@ class _TrueMoneyDialogDraft {
   }) {
     return _TrueMoneyDialogDraft(
       grandTotal: grandTotal ?? this.grandTotal,
-      attachedSlip: clearAttachedSlip
-          ? null
-          : (attachedSlip ?? this.attachedSlip),
+      attachedSlip: clearAttachedSlip ? null : (attachedSlip ?? this.attachedSlip),
     );
   }
 }
@@ -119,10 +120,8 @@ class CartScreen extends StatefulWidget {
   final VoidCallback onPickCustomerLocation;
   final VoidCallback onApplySharedLocation;
   final Future<List<String>> Function()? onConfirmCashOnDelivery;
-  final Future<PaymentSlipSubmissionResult> Function(
-    PaymentSlipSubmissionRequest request,
-  )?
-  onSubmitPromptPaySlip;
+  final Future<PaymentSlipSubmissionResult> Function(PaymentSlipSubmissionRequest request)?
+      onSubmitPromptPaySlip;
   final Future<void> Function(List<String> orderIds)? onOpenOrderRoadmap;
 
   @override
@@ -130,12 +129,12 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
-  static const Duration _routeCacheTtl = Duration(hours: 24);
-  static const String _routeCachePrefix = 'routes_cache_v1:';
+  static const Duration _routeCacheTtl = Duration(days: 7);
+  static const String _routeCachePrefix = 'routes_cache_v2:';
+  /// Urban road distance is typically ~1.3–1.4× straight-line; used only when Routes API fails.
+  static const double _haversineRoadFactor = 1.35;
 
-  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
-    region: 'asia-southeast1',
-  );
+  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
   _PaymentMethod _selectedPaymentMethod = _PaymentMethod.cashOnDelivery;
   late Future<_ShippingSummary> _shippingSummaryFuture;
   late Future<_ServerCartTotals> _serverTotalsFuture;
@@ -171,9 +170,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     if (state != AppLifecycleState.resumed) {
       return;
     }
-    if (_trueMoneyDialogDraft == null ||
-        _isTrueMoneyDialogShowing ||
-        !mounted) {
+    if (_trueMoneyDialogDraft == null || _isTrueMoneyDialogShowing || !mounted) {
       return;
     }
 
@@ -239,7 +236,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
               '${item.shopId}:${item.shopLatitude ?? 'na'}:${item.shopLongitude ?? 'na'}:${item.unitPrice}',
         )
         .join('|');
-    return '${customerLatitude.toStringAsFixed(6)},${customerLongitude.toStringAsFixed(6)}|$keyParts';
+    return '${customerLatitude.toStringAsFixed(4)},${customerLongitude.toStringAsFixed(4)}|$keyParts';
   }
 
   String _buildServerTotalsKey({
@@ -266,7 +263,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
               '${item.productId}:${item.shopId}:${item.quantity}:${item.selectedToppings.join(',')}:${item.shopLatitude ?? 'na'}:${item.shopLongitude ?? 'na'}',
         )
         .join('|');
-    return '${customerLatitude.toStringAsFixed(6)},${customerLongitude.toStringAsFixed(6)}|$keyParts';
+    return '${customerLatitude.toStringAsFixed(4)},${customerLongitude.toStringAsFixed(4)}|$keyParts';
   }
 
   @override
@@ -287,11 +284,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        Icon(
-                          Icons.shopping_cart_outlined,
-                          size: 42,
-                          color: Color(0xFF9CA3AF),
-                        ),
+                        Icon(Icons.shopping_cart_outlined, size: 42, color: Color(0xFF9CA3AF)),
                         SizedBox(height: 10),
                         Text(
                           'ตะกร้า',
@@ -321,16 +314,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       0,
       (subtotalAcc, item) => subtotalAcc + (item.unitPrice * item.quantity),
     );
-    final itemCount = cartItems.fold<int>(
-      0,
-      (countAcc, item) => countAcc + item.quantity,
-    );
+    final itemCount = cartItems.fold<int>(0, (countAcc, item) => countAcc + item.quantity);
     return FutureBuilder<_ShippingSummary>(
       future: _shippingSummaryFuture,
       builder: (context, snapshot) {
         final shippingSummary = snapshot.data ?? _ShippingSummary.zero;
-        final isCalculatingShipping =
-            snapshot.connectionState != ConnectionState.done;
+        final isCalculatingShipping = snapshot.connectionState != ConnectionState.done;
         final localGrandTotal = localSubtotal + shippingSummary.fee;
 
         return FutureBuilder<_ServerCartTotals>(
@@ -338,352 +327,325 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           builder: (context, serverSnapshot) {
             final serverTotals = serverSnapshot.data;
             final usingServerTotals = serverTotals?.trusted == true;
-            final isCalculatingServerTotals =
-                serverSnapshot.connectionState != ConnectionState.done;
             final subtotal = serverTotals?.subtotal ?? localSubtotal.toDouble();
-            final shippingFee =
-                serverTotals?.shippingFee ?? shippingSummary.fee;
-            final grandTotal =
-                serverTotals?.grandTotal ?? localGrandTotal.toDouble();
-            final isWaitingForFinalTotals =
-                isCalculatingShipping || isCalculatingServerTotals;
-            final canOpenPayment =
-                !isWaitingForFinalTotals && usingServerTotals && grandTotal > 0;
+            final shippingFee = serverTotals?.shippingFee ?? shippingSummary.fee;
+            final grandTotal = serverTotals?.grandTotal ?? localGrandTotal.toDouble();
 
             return SafeArea(
               child: Column(
-                children: <Widget>[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-                    child: _RiderOnlineStatusCard(),
+        children: <Widget>[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+            child: _RiderOnlineStatusCard(),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _CustomerLocationCard(
+              label: widget.customerLocationLabel,
+              latitude: widget.customerLatitude,
+              longitude: widget.customerLongitude,
+              onPickLocation: widget.onPickCustomerLocation,
+              onApplySharedLocation: widget.onApplySharedLocation,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+            child: Row(
+              children: <Widget>[
+                Text(
+                  'ตะกร้าของฉัน',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF111827),
+                      ),
+                ),
+                const Spacer(),
+                Text(
+                  '$itemCount ชิ้น',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF6B7280),
+                      ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              itemCount: cartItems.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final item = cartItems[index];
+                final lineTotal = item.unitPrice * item.quantity;
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: const <BoxShadow>[
+                      BoxShadow(
+                        color: Color(0x12000000),
+                        blurRadius: 10,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _CustomerLocationCard(
-                      label: widget.customerLocationLabel,
-                      latitude: widget.customerLatitude,
-                      longitude: widget.customerLongitude,
-                      onPickLocation: widget.onPickCustomerLocation,
-                      onApplySharedLocation: widget.onApplySharedLocation,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-                    child: Row(
-                      children: <Widget>[
-                        Text(
-                          'ตะกร้าของฉัน',
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                color: const Color(0xFF111827),
-                              ),
+                  child: Row(
+                    children: <Widget>[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 58,
+                          height: 58,
+                          child: item.imageUrl != null
+                              ? CachedNetworkImage(
+                                  imageUrl: item.imageUrl!,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, __, ___) => const ColoredBox(
+                                    color: Color(0xFFFFEDD5),
+                                    child: Icon(Icons.fastfood, color: Color(0xFF9A3412)),
+                                  ),
+                                )
+                              : const ColoredBox(
+                                  color: Color(0xFFFFEDD5),
+                                  child: Icon(Icons.fastfood, color: Color(0xFF9A3412)),
+                                ),
                         ),
-                        const Spacer(),
-                        Text(
-                          '$itemCount ชิ้น',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(color: const Color(0xFF6B7280)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                      itemCount: cartItems.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final item = cartItems[index];
-                        final lineTotal = item.unitPrice * item.quantity;
-                        return Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: const <BoxShadow>[
-                              BoxShadow(
-                                color: Color(0x12000000),
-                                blurRadius: 10,
-                                offset: Offset(0, 4),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              item.productName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item.shopName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: const Color(0xFF6B7280),
+                                  ),
+                            ),
+                            if (item.selectedToppings.isNotEmpty) ...<Widget>[
+                              const SizedBox(height: 4),
+                              Text(
+                                'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: const Color(0xFF4B5563),
+                                    ),
                               ),
                             ],
-                          ),
-                          child: Row(
-                            children: <Widget>[
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: SizedBox(
-                                  width: 58,
-                                  height: 58,
-                                  child: item.imageUrl != null
-                                      ? CachedNetworkImage(
-                                          imageUrl: item.imageUrl!,
-                                          fit: BoxFit.cover,
-                                          errorWidget: (_, __, ___) =>
-                                              const ColoredBox(
-                                                color: Color(0xFFFFEDD5),
-                                                child: Icon(
-                                                  Icons.fastfood,
-                                                  color: Color(0xFF9A3412),
-                                                ),
-                                              ),
-                                        )
-                                      : const ColoredBox(
-                                          color: Color(0xFFFFEDD5),
-                                          child: Icon(
-                                            Icons.fastfood,
-                                            color: Color(0xFF9A3412),
-                                          ),
-                                        ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      item.productName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      item.shopName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: const Color(0xFF6B7280),
-                                          ),
-                                    ),
-                                    if (item
-                                        .selectedToppings
-                                        .isNotEmpty) ...<Widget>[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: const Color(0xFF4B5563),
-                                            ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: const Color(0xFF6B7280),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: <Widget>[
-                                  Text(
-                                    '฿${lineTotal.toStringAsFixed(0)}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleSmall
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                          color: const Color(0xFFE55A00),
-                                        ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: const Color(0xFF6B7280),
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                  IconButton(
-                                    onPressed: () => widget.onRemoveItem(index),
-                                    tooltip: 'ลบสินค้า',
-                                    icon: const Icon(
-                                      Icons.delete_outline_rounded,
-                                      color: Color(0xFFDC2626),
-                                    ),
-                                    visualDensity: VisualDensity.compact,
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: <Widget>[
+                          Text(
+                            '฿${lineTotal.toStringAsFixed(0)}',
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: const Color(0xFFE55A00),
+                                ),
                           ),
-                        );
+                          IconButton(
+                            onPressed: () => widget.onRemoveItem(index),
+                            tooltip: 'ลบสินค้า',
+                            icon: const Icon(
+                              Icons.delete_outline_rounded,
+                              color: Color(0xFFDC2626),
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+            decoration: const BoxDecoration(color: Colors.white),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Text(
+                      'รวมค่าสินค้า',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '฿${subtotal.toStringAsFixed(0)}',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFFE55A00),
+                          ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: <Widget>[
+                    Text(
+                      'ค่าส่ง',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF1F2937),
+                          ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      isCalculatingShipping
+                          ? 'กำลังคำนวณ...'
+                          : '฿${_formatMoney(shippingFee)}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF111827),
+                          ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isCalculatingShipping
+                      ? 'กำลังคำนวณระยะทางจาก Google Routes API'
+                      : 'ค่าส่งรวม ${_formatDistanceKm(shippingSummary.totalDistanceKm)} กม. • เวลา ${_formatMinutes(shippingSummary.totalDurationMinutes)} นาที',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF6B7280),
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: <Widget>[
+                    Text(
+                      'ยอดชำระทั้งหมด',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF111827),
+                          ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      isCalculatingShipping ? '...' : '฿${_formatMoney(grandTotal)}',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: const Color(0xFFE55A00),
+                          ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  usingServerTotals
+                      ? 'คำนวณจาก Cloud Function โดยอ้างอิงข้อมูลสินค้าในฐานข้อมูล'
+                      : 'กำลังใช้ยอดประมาณจากแอปชั่วคราว (ยังไม่ได้ยอดยืนยันจากเซิร์ฟเวอร์)',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: usingServerTotals
+                            ? const Color(0xFF047857)
+                            : const Color(0xFFB45309),
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'วิธีจ่าย',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1F2937),
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: <Widget>[
+                    _PaymentMethodChip(
+                      label: 'จ่ายปลายทาง',
+                      selected: _selectedPaymentMethod == _PaymentMethod.cashOnDelivery,
+                      onTap: () {
+                        setState(() => _selectedPaymentMethod = _PaymentMethod.cashOnDelivery);
                       },
                     ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-                    decoration: const BoxDecoration(color: Colors.white),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Text(
-                              'รวมค่าสินค้า',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            const Spacer(),
-                            Text(
-                              '฿${subtotal.toStringAsFixed(0)}',
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: const Color(0xFFE55A00),
-                                  ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: <Widget>[
-                            Text(
-                              'ค่าส่ง',
-                              style: Theme.of(context).textTheme.titleSmall
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: const Color(0xFF1F2937),
-                                  ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              isCalculatingShipping
-                                  ? 'กำลังคำนวณ...'
-                                  : '฿${_formatMoney(shippingFee)}',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: const Color(0xFF111827),
-                                  ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          isCalculatingShipping
-                              ? 'กำลังคำนวณระยะทางจาก Google Routes API'
-                              : 'ค่าส่งรวม ${_formatDistanceKm(shippingSummary.totalDistanceKm)} กม. • เวลา ${_formatMinutes(shippingSummary.totalDurationMinutes)} นาที',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: const Color(0xFF6B7280)),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: <Widget>[
-                            Text(
-                              'ยอดชำระทั้งหมด',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: const Color(0xFF111827),
-                                  ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              isWaitingForFinalTotals
-                                  ? '...'
-                                  : '฿${_formatMoney(grandTotal)}',
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: const Color(0xFFE55A00),
-                                  ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          isWaitingForFinalTotals
-                              ? 'กำลังคำนวณยอดชำระให้เสร็จก่อนเปิดหน้ายืนยัน/คิวอาร์โค้ด'
-                              : (usingServerTotals && grandTotal > 0
-                                    ? 'คำนวณจาก Cloud Function โดยอ้างอิงข้อมูลสินค้าในฐานข้อมูล'
-                                    : 'คำนวณยอดชำระไม่สำเร็จ กรุณารอสักครู่หรือกลับเข้าหน้าตะกร้าใหม่'),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: isWaitingForFinalTotals
-                                    ? const Color(0xFFB45309)
-                                    : (usingServerTotals && grandTotal > 0
-                                          ? const Color(0xFF047857)
-                                          : const Color(0xFFDC2626)),
-                              ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'วิธีจ่าย',
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF1F2937),
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: <Widget>[
-                            _PaymentMethodChip(
-                              label: 'จ่ายปลายทาง',
-                              selected:
-                                  _selectedPaymentMethod ==
-                                  _PaymentMethod.cashOnDelivery,
-                              onTap: canOpenPayment
-                                  ? () {
-                                      setState(
-                                        () => _selectedPaymentMethod =
-                                            _PaymentMethod.cashOnDelivery,
-                                      );
-                                      _confirmCashOnDelivery(
-                                        subtotal: subtotal,
-                                        shippingFee: shippingFee,
-                                        grandTotal: grandTotal,
-                                      );
-                                    }
-                                  : null,
-                            ),
-                            _PaymentMethodChip(
-                              label: 'จ่ายด้วยทรูมันนี่',
-                              selected:
-                                  _selectedPaymentMethod ==
-                                  _PaymentMethod.trueMoney,
-                              leading: const _TrueMoneyLogoMark(),
-                              iconOnly: true,
-                              onTap: canOpenPayment
-                                  ? () {
-                                      setState(
-                                        () => _selectedPaymentMethod =
-                                            _PaymentMethod.trueMoney,
-                                      );
-                                      _showTrueMoneyQrDialog(
-                                        grandTotal: grandTotal,
-                                      );
-                                    }
-                                  : null,
-                            ),
-                          ],
-                        ),
-                      ],
+                    _PaymentMethodChip(
+                      label: 'จ่ายผ่านบัตร',
+                      selected: _selectedPaymentMethod == _PaymentMethod.card,
+                      onTap: () {
+                        setState(() => _selectedPaymentMethod = _PaymentMethod.card);
+                      },
+                    ),
+                    _PaymentMethodChip(
+                      label: 'จ่ายด้วยทรูมันนี่',
+                      selected: _selectedPaymentMethod == _PaymentMethod.trueMoney,
+                      onTap: () {
+                        setState(() => _selectedPaymentMethod = _PaymentMethod.trueMoney);
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _selectedPaymentMethod == _PaymentMethod.card
+                        ? null
+                        : () {
+                            if (_selectedPaymentMethod == _PaymentMethod.cashOnDelivery) {
+                              _confirmCashOnDelivery(
+                                subtotal: subtotal,
+                                shippingFee: shippingFee,
+                                grandTotal: grandTotal,
+                              );
+                              return;
+                            }
+
+                            _showTrueMoneyQrDialog(grandTotal: grandTotal);
+                          },
+                    icon: Icon(
+                      _selectedPaymentMethod == _PaymentMethod.cashOnDelivery
+                          ? Icons.local_shipping_outlined
+                          : _selectedPaymentMethod == _PaymentMethod.trueMoney
+                              ? Icons.qr_code_2_rounded
+                              : Icons.credit_card,
+                    ),
+                    label: Text(
+                      _selectedPaymentMethod == _PaymentMethod.cashOnDelivery
+                          ? 'ยืนยันสั่งซื้อแบบจ่ายปลายทาง'
+                          : _selectedPaymentMethod == _PaymentMethod.trueMoney
+                              ? 'เปิดคิวอาร์และแนบสลิปเพื่อตรวจสอบ'
+                              : 'ยังไม่รองรับการชำระผ่านบัตร',
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          ),
+        ],
               ),
             );
           },
@@ -754,10 +716,8 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         continue;
       }
 
-      final existingHasCoords =
-          existing.shopLatitude != null && existing.shopLongitude != null;
-      final nextHasCoords =
-          item.shopLatitude != null && item.shopLongitude != null;
+      final existingHasCoords = existing.shopLatitude != null && existing.shopLongitude != null;
+      final nextHasCoords = item.shopLatitude != null && item.shopLongitude != null;
       if (!existingHasCoords && nextHasCoords) {
         uniqueByShop[item.shopId] = item;
       }
@@ -789,21 +749,13 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         continue;
       }
 
-      final route = await _getRouteMetrics(
+      final metrics = await _resolveRouteMetrics(
         originLatitude: shopLat,
         originLongitude: shopLng,
         destinationLatitude: customerLatitude,
         destinationLongitude: customerLongitude,
       );
-      final metrics =
-          route ??
-          _buildFallbackRouteMetrics(
-            originLatitude: shopLat,
-            originLongitude: shopLng,
-            destinationLatitude: customerLatitude,
-            destinationLongitude: customerLongitude,
-          );
-      if (route == null) {
+      if (metrics.usedFallback) {
         routeUnavailableShops += 1;
       }
 
@@ -836,7 +788,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<_RouteMetrics?> _getRouteMetrics({
+  Future<_ResolvedRouteMetrics> _resolveRouteMetrics({
     required double originLatitude,
     required double originLongitude,
     required double destinationLatitude,
@@ -848,11 +800,55 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       destinationLatitude: destinationLatitude,
       destinationLongitude: destinationLongitude,
     );
-    final cached = await _readRouteCache(cacheKey);
-    if (cached != null) {
-      return cached;
+
+    final memoryHit = _RouteMetricsCacheStore.readMemory(cacheKey);
+    if (memoryHit != null) {
+      return memoryHit;
     }
 
+    final persisted = await _readRouteCache(cacheKey);
+    if (persisted != null) {
+      _RouteMetricsCacheStore.writeMemory(cacheKey, persisted);
+      return persisted;
+    }
+
+    final inFlight = _RouteMetricsCacheStore.readInFlight(cacheKey);
+    if (inFlight != null) {
+      final shared = await inFlight;
+      if (shared != null) {
+        return shared;
+      }
+    }
+
+    final fetchFuture = _fetchRouteMetricsFromServer(
+      originLatitude: originLatitude,
+      originLongitude: originLongitude,
+      destinationLatitude: destinationLatitude,
+      destinationLongitude: destinationLongitude,
+    );
+    _RouteMetricsCacheStore.trackInFlight(cacheKey, fetchFuture);
+
+    final resolved = await fetchFuture;
+    if (resolved != null) {
+      _RouteMetricsCacheStore.writeMemory(cacheKey, resolved);
+      await _writeRouteCache(cacheKey, resolved);
+      return resolved;
+    }
+
+    return _buildFallbackRouteMetrics(
+      originLatitude: originLatitude,
+      originLongitude: originLongitude,
+      destinationLatitude: destinationLatitude,
+      destinationLongitude: destinationLongitude,
+    );
+  }
+
+  Future<_ResolvedRouteMetrics?> _fetchRouteMetricsFromServer({
+    required double originLatitude,
+    required double originLongitude,
+    required double destinationLatitude,
+    required double destinationLongitude,
+  }) async {
     try {
       final callable = _functions.httpsCallable('computeRouteMetrics');
       final result = await callable
@@ -862,7 +858,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
             'destinationLatitude': destinationLatitude,
             'destinationLongitude': destinationLongitude,
           })
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 10));
 
       final payload = result.data;
       if (payload is! Map) {
@@ -874,18 +870,17 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         return null;
       }
 
-      final metrics = _RouteMetrics(
+      return _ResolvedRouteMetrics(
         distanceKm: distanceMeters / 1000.0,
         durationMinutes: durationSeconds.toDouble() / 60.0,
+        usedFallback: false,
       );
-      await _writeRouteCache(cacheKey, metrics);
-      return metrics;
     } catch (_) {
       return null;
     }
   }
 
-  _RouteMetrics _buildFallbackRouteMetrics({
+  _ResolvedRouteMetrics _buildFallbackRouteMetrics({
     required double originLatitude,
     required double originLongitude,
     required double destinationLatitude,
@@ -897,11 +892,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       destinationLatitude,
       destinationLongitude,
     );
-    final distanceKm = distanceMeters / 1000.0;
+    final distanceKm = (distanceMeters / 1000.0) * _haversineRoadFactor;
     final durationMinutes = distanceKm <= 0 ? 0.0 : (distanceKm / 30.0) * 60.0;
-    return _RouteMetrics(
+    return _ResolvedRouteMetrics(
       distanceKm: distanceKm,
       durationMinutes: durationMinutes,
+      usedFallback: true,
     );
   }
 
@@ -911,10 +907,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required double destinationLatitude,
     required double destinationLongitude,
   }) {
-    return '${originLatitude.toStringAsFixed(5)},${originLongitude.toStringAsFixed(5)}->${destinationLatitude.toStringAsFixed(5)},${destinationLongitude.toStringAsFixed(5)}';
+    String roundCoord(double value) => value.toStringAsFixed(4);
+    return '${roundCoord(originLatitude)},${roundCoord(originLongitude)}->${roundCoord(destinationLatitude)},${roundCoord(destinationLongitude)}';
   }
 
-  Future<_RouteMetrics?> _readRouteCache(String routeKey) async {
+  Future<_ResolvedRouteMetrics?> _readRouteCache(String routeKey) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('$_routeCachePrefix$routeKey');
     if (raw == null || raw.isEmpty) {
@@ -929,30 +926,30 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       final expiresAtMs = decoded['expiresAt'];
       final distanceKm = decoded['distanceKm'];
       final durationMinutes = decoded['durationMinutes'];
-      if (expiresAtMs is! num ||
-          distanceKm is! num ||
-          durationMinutes is! num) {
+      if (expiresAtMs is! num || distanceKm is! num || durationMinutes is! num) {
         return null;
       }
 
-      final expiresAt = DateTime.fromMillisecondsSinceEpoch(
-        expiresAtMs.toInt(),
-      );
+      final expiresAt = DateTime.fromMillisecondsSinceEpoch(expiresAtMs.toInt());
       if (DateTime.now().isAfter(expiresAt)) {
         await prefs.remove('$_routeCachePrefix$routeKey');
         return null;
       }
 
-      return _RouteMetrics(
+      return _ResolvedRouteMetrics(
         distanceKm: distanceKm.toDouble(),
         durationMinutes: durationMinutes.toDouble(),
+        usedFallback: false,
       );
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> _writeRouteCache(String routeKey, _RouteMetrics metrics) async {
+  Future<void> _writeRouteCache(String routeKey, _ResolvedRouteMetrics metrics) async {
+    if (metrics.usedFallback) {
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final payload = jsonEncode(<String, Object>{
       'distanceKm': metrics.distanceKm,
@@ -1001,15 +998,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final totalShortfall = items.fold<int>(
-      0,
-      (shortfallAcc, item) => shortfallAcc + _shortfallQty(item),
-    );
+    final totalShortfall = items.fold<int>(0, (shortfallAcc, item) => shortfallAcc + _shortfallQty(item));
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('คอนเฟิร์มออเดอร์'),
+          title: const Text('Confirm Cash on Delivery'),
           content: SizedBox(
             width: 420,
             child: SingleChildScrollView(
@@ -1042,8 +1036,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
                               'Price THB ${_formatMoney(item.unitPrice)}',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: const Color(0xFF6B7280)),
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: const Color(0xFF6B7280),
+                                  ),
                             ),
                           ),
                           if (_shortfallQty(item) > 0)
@@ -1051,8 +1046,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                               padding: const EdgeInsets.only(top: 2),
                               child: Text(
                                 'Shortfall ${_shortfallQty(item)}',
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: const Color(0xFFB45309),
                                       fontWeight: FontWeight.w700,
                                     ),
@@ -1071,15 +1065,15 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                   Text(
                     'Lat ${widget.customerLatitude.toStringAsFixed(6)} • Lng ${widget.customerLongitude.toStringAsFixed(6)}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF6B7280),
-                    ),
+                          color: const Color(0xFF6B7280),
+                        ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     'Total payable: THB ${_formatMoney(grandTotal)}',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                          fontWeight: FontWeight.w800,
+                        ),
                   ),
                 ],
               ),
@@ -1088,11 +1082,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('ยกเลิก'),
+              child: const Text('Cancel'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('ยืนยันออเดอร์'),
+              child: const Text('Confirm'),
             ),
           ],
         );
@@ -1138,17 +1132,16 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           createdOrderIds.isNotEmpty
               ? 'Order created: ${createdOrderIds.join(', ')}'
               : createError != null
-              ? 'Unable to create order: $createError'
-              : 'Cash on delivery selected. Order ID pending.',
+                  ? 'Unable to create order: $createError'
+                  : 'Cash on delivery selected. Order ID pending.',
         ),
       ),
     );
   }
 
   Future<void> _showTrueMoneyQrDialog({required double grandTotal}) async {
-    _trueMoneyDialogDraft =
-        (_trueMoneyDialogDraft ?? _TrueMoneyDialogDraft(grandTotal: grandTotal))
-            .copyWith(grandTotal: grandTotal);
+    _trueMoneyDialogDraft = (_trueMoneyDialogDraft ?? _TrueMoneyDialogDraft(grandTotal: grandTotal))
+        .copyWith(grandTotal: grandTotal);
     if (_isTrueMoneyDialogShowing) {
       return;
     }
@@ -1159,16 +1152,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       barrierDismissible: false,
       builder: (context) {
         final viewport = MediaQuery.of(context).size;
-        final draft =
-            _trueMoneyDialogDraft ??
-            _TrueMoneyDialogDraft(grandTotal: grandTotal);
+        final draft = _trueMoneyDialogDraft ?? _TrueMoneyDialogDraft(grandTotal: grandTotal);
         return PopScope(
           canPop: false,
           child: Dialog(
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 24,
-            ),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxWidth: 420,
@@ -1183,8 +1171,8 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     Text(
                       'จ่ายด้วยทรูมันนี่',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                            fontWeight: FontWeight.w800,
+                          ),
                     ),
                     const SizedBox(height: 12),
                     SizedBox(
@@ -1193,11 +1181,10 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         grandTotal: draft.grandTotal,
                         initialAttachedSlip: draft.attachedSlip,
                         onAttachedSlipChanged: (slip) {
-                          _trueMoneyDialogDraft =
-                              (_trueMoneyDialogDraft ?? draft).copyWith(
-                                attachedSlip: slip,
-                                clearAttachedSlip: slip == null,
-                              );
+                          _trueMoneyDialogDraft = (_trueMoneyDialogDraft ?? draft).copyWith(
+                            attachedSlip: slip,
+                            clearAttachedSlip: slip == null,
+                          );
                         },
                         onCloseRequested: () {
                           _trueMoneyDialogDraft = null;
@@ -1248,16 +1235,13 @@ class _TrueMoneyQrDialogContent extends StatefulWidget {
   final PlatformFile? initialAttachedSlip;
   final ValueChanged<PlatformFile?> onAttachedSlipChanged;
   final VoidCallback onCloseRequested;
-  final Future<PaymentSlipSubmissionResult> Function(
-    PaymentSlipSubmissionRequest request,
-  )?
-  onSubmitPromptPaySlip;
+  final Future<PaymentSlipSubmissionResult> Function(PaymentSlipSubmissionRequest request)?
+      onSubmitPromptPaySlip;
   final Future<void> Function(List<String> orderIds)? onSubmissionCompleted;
   final VoidCallback onSubmissionSucceeded;
 
   @override
-  State<_TrueMoneyQrDialogContent> createState() =>
-      _TrueMoneyQrDialogContentState();
+  State<_TrueMoneyQrDialogContent> createState() => _TrueMoneyQrDialogContentState();
 }
 
 class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
@@ -1283,15 +1267,11 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
 
   Future<void> _saveQrCode() async {
     final messenger = ScaffoldMessenger.of(context);
-    final boundary =
-        _qrBoundaryKey.currentContext?.findRenderObject()
-            as RenderRepaintBoundary?;
+    final boundary = _qrBoundaryKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
 
     if (boundary == null) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('ยังจับภาพคิวอาร์โค้ดไม่ได้ ลองใหม่อีกครั้ง'),
-        ),
+        const SnackBar(content: Text('ยังจับภาพคิวอาร์โค้ดไม่ได้ ลองใหม่อีกครั้ง')),
       );
       return;
     }
@@ -1333,8 +1313,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
         return;
       }
 
-      final succeeded =
-          result != null && result.toString().toLowerCase() != 'false';
+      final succeeded = result != null && result.toString().toLowerCase() != 'false';
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -1349,9 +1328,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
         return;
       }
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง'),
-        ),
+        const SnackBar(content: Text('บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง')),
       );
     } finally {
       if (mounted) {
@@ -1430,9 +1407,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
     }
   }
 
-  Future<void> _showVerificationFeedback(
-    PaymentSlipSubmissionResult result,
-  ) async {
+  Future<void> _showVerificationFeedback(PaymentSlipSubmissionResult result) async {
     if (!mounted) {
       return;
     }
@@ -1501,8 +1476,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
         widget.onSubmissionSucceeded();
         navigator.pop();
 
-        if (result.orderIds.isNotEmpty &&
-            widget.onSubmissionCompleted != null) {
+        if (result.orderIds.isNotEmpty && widget.onSubmissionCompleted != null) {
           await widget.onSubmissionCompleted!(result.orderIds);
         }
       }
@@ -1510,9 +1484,9 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('ส่งสลิปไม่สำเร็จ: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ส่งสลิปไม่สำเร็จ: $error')),
+      );
     } finally {
       if (mounted) {
         setState(() => _isSubmittingSlip = false);
@@ -1546,9 +1520,9 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
               Text(
                 'ยอดที่ต้องชำระ ฿${_formatDialogMoney(widget.grandTotal)}',
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w900,
-                  color: const Color(0xFFE55A00),
-                ),
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFFE55A00),
+                    ),
               ),
               const SizedBox(height: 10),
               _TrueMoneyQrCard(
@@ -1569,11 +1543,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.download_rounded),
-                  label: Text(
-                    _isSavingQr
-                        ? 'กำลังบันทึก...'
-                        : 'บันทึกคิวอาร์โค้ดลงเครื่อง',
-                  ),
+                  label: Text(_isSavingQr ? 'กำลังบันทึก...' : 'บันทึกคิวอาร์โค้ดลงเครื่อง'),
                 ),
               ),
               const SizedBox(height: 14),
@@ -1591,9 +1561,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _isSubmittingSlip
-                      ? null
-                      : _submitSlipForVerification,
+                  onPressed: _isSubmittingSlip ? null : _submitSlipForVerification,
                   icon: _isSubmittingSlip
                       ? const SizedBox(
                           width: 18,
@@ -1601,11 +1569,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.receipt_long_rounded),
-                  label: Text(
-                    _isSubmittingSlip
-                        ? 'กำลังส่งสลิป...'
-                        : 'ส่งสลิปเพื่อตรวจสอบ',
-                  ),
+                  label: Text(_isSubmittingSlip ? 'กำลังส่งสลิป...' : 'ส่งสลิปเพื่อตรวจสอบ'),
                 ),
               ),
               if (channel.qrPayload == null && !hasPromptPayQr) ...<Widget>[
@@ -1613,14 +1577,16 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
                 Text(
                   'ยังไม่มีข้อมูล PromptPay หรือ Merchant QR สำหรับสร้างคิวอาร์โค้ดจริง',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFFB45309),
-                    fontWeight: FontWeight.w700,
-                  ),
+                        color: const Color(0xFFB45309),
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
                 const SizedBox(height: 6),
                 const Text(
                   'ให้ใส่ค่าใน Firestore ที่ payment_config/collection แล้วคิวอาร์โค้ดจะผูกยอดให้อัตโนมัติ',
-                  style: TextStyle(color: Color(0xFF6B7280)),
+                  style: TextStyle(
+                    color: Color(0xFF6B7280),
+                  ),
                 ),
               ],
             ],
@@ -1696,53 +1662,61 @@ class _ShopShippingFee {
   final double fee;
 }
 
-class _RouteMetrics {
-  const _RouteMetrics({
+class _RouteMetricsCacheStore {
+  _RouteMetricsCacheStore._();
+
+  static final Map<String, _ResolvedRouteMetrics> _memory = {};
+  static final Map<String, Future<_ResolvedRouteMetrics?>> _inFlight = {};
+
+  static _ResolvedRouteMetrics? readMemory(String key) => _memory[key];
+
+  static void writeMemory(String key, _ResolvedRouteMetrics metrics) {
+    _memory[key] = metrics;
+  }
+
+  static Future<_ResolvedRouteMetrics?>? readInFlight(String key) =>
+      _inFlight[key];
+
+  static void trackInFlight(
+    String key,
+    Future<_ResolvedRouteMetrics?> future,
+  ) {
+    _inFlight[key] = future;
+    future.whenComplete(() => _inFlight.remove(key));
+  }
+}
+
+class _ResolvedRouteMetrics {
+  const _ResolvedRouteMetrics({
     required this.distanceKm,
     required this.durationMinutes,
+    required this.usedFallback,
   });
 
   final double distanceKm;
   final double durationMinutes;
+  final bool usedFallback;
 }
 
-enum _PaymentMethod { cashOnDelivery, trueMoney }
+enum _PaymentMethod {
+  cashOnDelivery,
+  card,
+  trueMoney,
+}
 
 class _PaymentMethodChip extends StatelessWidget {
   const _PaymentMethodChip({
     required this.label,
     required this.selected,
     required this.onTap,
-    this.leading,
-    this.iconOnly = false,
   });
 
   final String label;
   final bool selected;
-  final VoidCallback? onTap;
-  final Widget? leading;
-  final bool iconOnly;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    if (iconOnly) {
-      return Semantics(
-        button: true,
-        label: label,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: leading ?? const SizedBox.shrink(),
-            ),
-          ),
-        ),
-      );
-    }
-
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1754,50 +1728,17 @@ class _PaymentMethodChip extends StatelessWidget {
             color: selected ? const Color(0xFFFFEDD5) : const Color(0xFFF3F4F6),
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
-              color: selected
-                  ? const Color(0xFFE55A00)
-                  : const Color(0xFFE5E7EB),
+              color: selected ? const Color(0xFFE55A00) : const Color(0xFFE5E7EB),
             ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (leading != null) ...<Widget>[
-                leading!,
-                const SizedBox(width: 6),
-              ],
-              Text(
-                label,
-                style: TextStyle(
-                  color: selected
-                      ? const Color(0xFF9A3412)
-                      : const Color(0xFF374151),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                ),
-              ),
-            ],
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? const Color(0xFF9A3412) : const Color(0xFF374151),
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TrueMoneyLogoMark extends StatelessWidget {
-  const _TrueMoneyLogoMark();
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: SizedBox(
-        width: 162,
-        height: 84,
-        child: Image.asset(
-          'assets/file_000000002938720996c731fc647871c3.png',
-          fit: BoxFit.cover,
-          alignment: Alignment.center,
         ),
       ),
     );
@@ -1819,17 +1760,14 @@ class _TrueMoneyQrCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasQr =
-        channel.qrPayload != null && channel.qrPayload!.trim().isNotEmpty;
+    final hasQr = channel.qrPayload != null && channel.qrPayload!.trim().isNotEmpty;
     final promptPayId = channel.type == PaymentChannelType.promptPayPhone
         ? settings.promptPayPhoneNumber?.trim()
         : channel.type == PaymentChannelType.promptPayNationalId
-        ? settings.promptPayNationalIdOrTaxId?.trim()
-        : null;
+            ? settings.promptPayNationalIdOrTaxId?.trim()
+            : null;
     final hasPromptPayLibraryQr = promptPayId != null && promptPayId.isNotEmpty;
-    final amountLabel = amount.toStringAsFixed(
-      amount.truncateToDouble() == amount ? 0 : 1,
-    );
+    final amountLabel = amount.toStringAsFixed(amount.truncateToDouble() == amount ? 0 : 1);
 
     return Container(
       width: double.infinity,
@@ -1844,9 +1782,9 @@ class _TrueMoneyQrCard extends StatelessWidget {
         children: <Widget>[
           Text(
             'คิวอาร์โค้ดตามยอด',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
           ),
           if (channel.destinationLabel != null) ...<Widget>[
             const SizedBox(height: 4),
@@ -1865,9 +1803,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
               builder: (context, constraints) {
                 final qrSize = constraints.maxWidth >= 260
                     ? 220.0
-                    : (constraints.maxWidth - 32)
-                          .clamp(160.0, 220.0)
-                          .toDouble();
+                    : (constraints.maxWidth - 32).clamp(160.0, 220.0).toDouble();
 
                 return Center(
                   child: hasPromptPayLibraryQr
@@ -1890,9 +1826,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
                             const SizedBox(height: 8),
                             Text(
                               'สแกนเพื่อชำระ ฿$amountLabel',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
+                              style: const TextStyle(fontWeight: FontWeight.w700),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 4),
@@ -1925,9 +1859,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
                             const SizedBox(height: 8),
                             Text(
                               'สแกนเพื่อชำระ ฿$amountLabel',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
+                              style: const TextStyle(fontWeight: FontWeight.w700),
                               textAlign: TextAlign.center,
                             ),
                           ],
@@ -1942,11 +1874,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
                           child: const Column(
                             mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
-                              Icon(
-                                Icons.qr_code_2_rounded,
-                                size: 42,
-                                color: Color(0xFF9CA3AF),
-                              ),
+                              Icon(Icons.qr_code_2_rounded, size: 42, color: Color(0xFF9CA3AF)),
                               SizedBox(height: 8),
                               Text(
                                 'ยังไม่สามารถสร้างคิวอาร์โค้ดได้',
@@ -1994,9 +1922,9 @@ class _SlipAttachmentSection extends StatelessWidget {
         children: <Widget>[
           Text(
             'แนบสลิป',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
           ),
           const SizedBox(height: 4),
           const Text(
@@ -2040,9 +1968,7 @@ class _SlipAttachmentSection extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: onAttach,
                   icon: const Icon(Icons.attach_file_rounded),
-                  label: Text(
-                    previewBytes == null ? 'เลือกรูปสลิป' : 'เปลี่ยนรูปสลิป',
-                  ),
+                  label: Text(previewBytes == null ? 'เลือกรูปสลิป' : 'เปลี่ยนรูปสลิป'),
                 ),
               ),
               if (onClear != null) ...<Widget>[
@@ -2088,23 +2014,21 @@ class _RiderOnlineStatusCard extends StatelessWidget {
         builder: (context, snapshot) {
           final onlineCount = snapshot.data?.docs.length ?? 0;
           final hasError = snapshot.hasError;
-          final isLoading =
-              snapshot.connectionState == ConnectionState.waiting &&
-              !snapshot.hasData;
+          final isLoading = snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData;
 
           final title = hasError
               ? 'สถานะไรเดอร์ไม่พร้อมใช้งาน'
               : isLoading
-              ? 'กำลังตรวจสอบสถานะไรเดอร์...'
-              : onlineCount > 0
-              ? 'ไรเดอร์ออนไลน์ $onlineCount คน'
-              : 'ยังไม่มีไรเดอร์ออนไลน์';
+                  ? 'กำลังตรวจสอบสถานะไรเดอร์...'
+                  : onlineCount > 0
+                      ? 'ไรเดอร์ออนไลน์ $onlineCount คน'
+                      : 'ยังไม่มีไรเดอร์ออนไลน์';
 
           final subtitle = hasError
               ? 'เช็กสิทธิ์หรือโครงสร้างข้อมูล riders/onlineReady'
               : onlineCount > 0
-              ? 'พร้อมรับออเดอร์จากตะกร้าของคุณ'
-              : 'รอไรเดอร์ออนไลน์เพื่อรับงาน';
+                  ? 'พร้อมรับออเดอร์จากตะกร้าของคุณ'
+                  : 'รอไรเดอร์ออนไลน์เพื่อรับงาน';
 
           return Row(
             children: <Widget>[
@@ -2115,8 +2039,8 @@ class _RiderOnlineStatusCard extends StatelessWidget {
                   color: hasError
                       ? const Color(0xFFFEE2E2)
                       : onlineCount > 0
-                      ? const Color(0xFFDCFCE7)
-                      : const Color(0xFFF3F4F6),
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFF3F4F6),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -2125,8 +2049,8 @@ class _RiderOnlineStatusCard extends StatelessWidget {
                   color: hasError
                       ? const Color(0xFFDC2626)
                       : onlineCount > 0
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF6B7280),
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFF6B7280),
                 ),
               ),
               const SizedBox(width: 10),
@@ -2141,8 +2065,7 @@ class _RiderOnlineStatusCard extends StatelessWidget {
                             title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
+                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                   fontWeight: FontWeight.w700,
                                   color: const Color(0xFF1F2937),
                                 ),
@@ -2150,10 +2073,7 @@ class _RiderOnlineStatusCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: const Color(0xFFDCFCE7),
                             borderRadius: BorderRadius.circular(999),
@@ -2175,8 +2095,8 @@ class _RiderOnlineStatusCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF6B7280),
-                      ),
+                            color: const Color(0xFF6B7280),
+                          ),
                     ),
                   ],
                 ),
@@ -2227,17 +2147,22 @@ class _CustomerLocationCard extends StatelessWidget {
             children: <Widget>[
               Expanded(
                 child: Text(
-                  'พิกัดส่งปัจจุบัน',
+                  'พิกัดลูกค้าที่ใช้งาน',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1F2937),
-                  ),
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1F2937),
+                      ),
                 ),
               ),
+              TextButton.icon(
+                onPressed: onApplySharedLocation,
+                icon: const Icon(Icons.share_location_outlined, size: 18),
+                label: const Text('วางพิกัดแชร์'),
+              ),
               OutlinedButton.icon(
-                onPressed: () => _showDeliveryCoordinateOptions(context),
+                onPressed: onPickLocation,
                 icon: const Icon(Icons.edit_location_alt_outlined, size: 18),
-                label: const Text('เปลี่ยนพิกัดส่ง'),
+                label: const Text('เปลี่ยน'),
               ),
             ],
           ),
@@ -2246,113 +2171,19 @@ class _CustomerLocationCard extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF374151)),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF374151),
+                ),
           ),
           const SizedBox(height: 2),
           Text(
             'Lat ${latitude.toStringAsFixed(6)} • Lng ${longitude.toStringAsFixed(6)}',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF6B7280),
+                ),
           ),
         ],
       ),
     );
   }
-
-  Future<void> _showDeliveryCoordinateOptions(BuildContext context) async {
-    final selectedAction = await showModalBottomSheet<_LocationAction>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'เปลี่ยนพิกัดส่ง',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF1F2937),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF9FAFB),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      const Text(
-                        'พิกัดส่งปัจจุบัน',
-                        style: TextStyle(
-                          color: Color(0xFF6B7280),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        label,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xFF111827),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Lat ${latitude.toStringAsFixed(6)} • Lng ${longitude.toStringAsFixed(6)}',
-                        style: const TextStyle(
-                          color: Color(0xFF6B7280),
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.share_location_outlined),
-                  title: const Text('วางพิกัด'),
-                  subtitle: const Text('วางพิกัดที่แชร์มาหรือ Google Maps URL'),
-                  onTap: () => Navigator.of(context).pop(_LocationAction.paste),
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.edit_location_alt_outlined),
-                  title: const Text('เปลี่ยนพิกัด'),
-                  subtitle: const Text('เลือกตำแหน่งใหม่จากแผนที่'),
-                  onTap: () => Navigator.of(context).pop(_LocationAction.pick),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    switch (selectedAction) {
-      case _LocationAction.paste:
-        onApplySharedLocation();
-      case _LocationAction.pick:
-        onPickLocation();
-      case null:
-        break;
-    }
-  }
 }
-
-enum _LocationAction { paste, pick }

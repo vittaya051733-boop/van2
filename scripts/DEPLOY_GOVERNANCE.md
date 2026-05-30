@@ -1,61 +1,61 @@
 # Van Ecosystem — คู่มือ Deploy ปลอดภัย
 
-> Manifest กลาง: `deploy-governance.ps1` (แก้ ownership ที่นี่ที่เดียว)
+> Manifest: `deploy-governance.ps1`  
+> จุดเสี่ยง: `DEPLOY_RISK_MATRIX.md` | สัญญาณหลุด: `DEPLOY_CONNECTION_SIGNALS.md`
 
-## โครงสร้าง
+## Workflow แนะนำ (ข้อ 1–6)
 
+```powershell
+# ข้อ 5 — dry-run ก่อน (ไม่ deploy จริง)
+van2\scripts\deploy-plan.ps1 -App van2 -Target firestore -DryRunOnly
+
+# deploy จริง — รวมข้อ 1,2,6 อัตโนมัติ + ข้อ 4 หลัง deploy
+van2\scripts\deploy-plan.ps1 -App van2 -Target firestore -Execute `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" `
+  -ConfirmImpact "SHARED:van1,van2,van3,van4" `
+  -FinalAcknowledge "YES I UNDERSTAND"
 ```
-Desktop/
-  van1/my-flutter/   ร้าน      — functions van1, storage SELF, Firestore → delegate van2
-  van2/              ลูกค้า    — Firestore canonical, functions van2, storage SELF
-  van3/              ไรเดอร์   — storage/hosting SELF, Firestore → delegate van2, ไม่มี functions
-  van4/              admin     — storage/hosting SELF, optional DB van4, ไม่มี functions
+
+| ข้อ | ทำอะไร | สคริปต์ |
+|-----|--------|---------|
+| 1 | ดู impact SHARED/SELF + readiness | `deploy-plan.ps1` / `deploy-readiness.ps1` |
+| 2 | deploy ทีละ target | `deploy-self.ps1` (ห้าม firebase deploy รวม) |
+| 3 | smoke test อัตโนมัติหลัง SHARED deploy | `deploy-smoke-test.ps1` (เรียกจาก deploy-self) |
+| 4 | รู้สัญญาณหลุด | แสดงอัตโนมัติหลัง deploy สำเร็จ |
+| 5 | dry-run ก่อน deploy ใหญ่ | `deploy-plan.ps1 -DryRunOnly` |
+| 6 | backup rules ก่อน firestore | อัตโนมัติ → `scripts/deploy-backups/` |
+
+## Smoke test อัตโนมัติ (ข้อ 3)
+
+หลัง deploy **firestore / functions** จะรันอัตโนมัติ:
+1. **Rules emulator** — ทดสอบ rider อ่าน `orders` + `riders` (ทุกครั้ง)
+2. **Live production** (ถ้ามี config) — อ่าน Firestore จริงด้วย test UID
+
+```powershell
+# รันเอง
+van2\scripts\deploy-smoke-test.ps1 -AfterTarget firestore
+
+# เปิด live test: copy config แล้วใส่ rider UID
+copy van2\scripts\smoke-test-config.local.json.example van2\scripts\smoke-test-config.local.json
+# ต้องมี ADC: gcloud auth application-default login
 ```
 
-Manifest กลาง: `deploy-governance.ps1` | Bootstrap: `deploy-governance-import.ps1`
+## Rollback rules
 
-## สิทธิ์ deploy ต่อแอป
+```powershell
+van2\scripts\deploy-restore-firestore-rules.ps1
+van2\scripts\deploy-restore-firestore-rules.ps1 -DeployAfterRestore
+```
 
-| แอป | Firestore default | Firestore DB van4 | Functions | Storage | Hosting |
-|-----|-------------------|-------------------|-----------|---------|---------|
-| van1 | delegate van2 | — | van1 codebase | SELF | SELF |
-| van2 | **canonical** | — | van2 codebase | SELF | SELF |
-| van3 | delegate van2 | — | blocked | SELF | SELF |
-| van4 | delegate van2 (runtime) | SELF optional | blocked | SELF | SELF |
+## คำสั่งอื่น
 
-Project Firebase เดียว: **van-merchant**
-
-## กฎ 5 ข้อ
-
-| # | กฎ |
-|---|-----|
-| 1 | แก้ Firestore rules ที่ `van2/firestore.rules` เท่านั้น |
-| 2 | รัน `sync-firestore-rules.ps1` ก่อน deploy ทุกครั้ง |
-| 3 | Deploy Firestore ผ่าน `deploy-firestore-isolated.ps1` จาก **van2** (van1/van3 delegate มา) |
-| 4 | Deploy Functions ทีละชื่อ จากเจ้าของ codebase เท่านั้น |
-| 5 | ห้าม `deploy-van-merchant-rules.ps1` และ `firebase deploy --only firestore/functions` แบบไม่มี guard |
-
-## คำสั่งที่ใช้ได้
-
-| งาน | คำสั่ง |
-|-----|--------|
-| ดูกฎทั้งหมด | `deploy-safe.ps1 -Action help` |
-| Sync rules | `sync-firestore-rules.ps1` |
-| Preflight | `deploy-preflight.ps1 -App van2 -Target firestore` |
-| Deploy rules | `deploy-safe.ps1 -Action firestore -App van2 -ConfirmDeploy ... -FinalAcknowledge "YES I UNDERSTAND"` |
-| Deploy function | `deploy-safe.ps1 -Action functions -App van2 -FunctionName pushAppNotification -ConfirmDeploy ...` |
+```powershell
+van2\scripts\deploy-readiness.ps1 -App van3 -Target storage
+van2\scripts\deploy-self.ps1 -App van3 -Target storage -ConfirmDeploy "APPROVE:van3:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+```
 
 ## Confirm tokens
 
-- van1: `APPROVE:van1:van-merchant`
-- van2: `APPROVE:van2:van-merchant`
-- van3: `APPROVE:van3:van-merchant`
-- van4: `APPROVE:van4:van-merchant`
+- van1–van4: `APPROVE:vanN:van-merchant`
 - Final: `YES I UNDERSTAND`
-- Firestore impact: `SHARED:van1,van2,van3,van4`
-
-## Function ownership
-
-ดูรายชื่อใน `deploy-governance.ps1` → `FunctionOwnershipVan1` / `FunctionOwnershipVan2`
-
-Deploy ข้าม codebase จะถูก **block อัตโนมัติ**
+- Firestore: `ConfirmImpact "SHARED:van1,van2,van3,van4"`

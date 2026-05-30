@@ -26,6 +26,13 @@ function Assert-Command([string]$name) {
 Assert-Command "docker"
 Assert-Command "firebase"
 
+$jbrJava = "C:\Program Files\Android\Android Studio\jbr\bin\java.exe"
+if ((Test-Path $jbrJava) -and ((java -version 2>&1 | Select-Object -First 1) -notmatch 'version "(2[1-9]|[3-9]\d+)')) {
+  $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+  $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+  Write-Host "Using Java 21 from Android Studio JBR (Firebase emulator requires 21+)" -ForegroundColor Yellow
+}
+
 Write-Host "== ตรวจ Redis container ==" -ForegroundColor Cyan
 $exists = docker ps -a --format "{{.Names}}" | Select-String "^$RedisContainerName$"
 if (-not $exists) {
@@ -49,10 +56,4 @@ $env:REDIS_URL = $RedisUrl
 $env:REDIS_TOKEN = $RedisToken
 
 Write-Host "== เริ่ม Firebase Emulator (functions + firestore) ==" -ForegroundColor Cyan
-Push-Location "C:/Users/TAM/Desktop/van2/_github_my_flutter"
-try {
-  firebase emulators:start --project $ProjectId --only functions,firestore
-}
-finally {
-  Pop-Location
-}
+& (Join-Path $PSScriptRoot 'start-van2-emulator.ps1') -ProjectId $ProjectId

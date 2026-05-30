@@ -17,10 +17,14 @@ import 'cart_screen.dart';
 import 'category_catalog_screen.dart';
 import 'chat_screen.dart';
 import 'firebase_options.dart';
+import 'home_product_discovery_service.dart';
+import 'home_product_shelf.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
+import 'nationwide_cart_screen.dart';
 import 'order_roadmap_screen.dart';
 import 'pricing_config_service.dart';
+import 'public_catalog_service.dart';
 import 'services/notification_service.dart';
 import 'settings_screen.dart';
 import 'shop_map_screen.dart';
@@ -893,6 +897,8 @@ class _HomeScreenState extends State<HomeScreen> {
   _unreadChatSubscription;
   _ActiveCatalog? _activeCatalog;
   final List<CartLineItem> _cartItems = <CartLineItem>[];
+  final List<CartLineItem> _nationwideCartItems = <CartLineItem>[];
+  bool _showNationwideCart = false;
 
   static const List<_QuickActionItem> _quickActions = <_QuickActionItem>[
     _QuickActionItem(
@@ -929,9 +935,10 @@ class _HomeScreenState extends State<HomeScreen> {
       actionKey: 'shop-map',
     ),
     _QuickActionItem(
-      label: 'Coins',
-      icon: Icons.monetization_on_outlined,
+      label: 'สินค้าส่งทั่วประเทศ',
+      icon: Icons.local_shipping_outlined,
       iconColor: Color(0xFFEF8A17),
+      actionKey: 'nationwide-shipping',
     ),
     _QuickActionItem(
       label: 'เพิ่มเติม',
@@ -1510,6 +1517,19 @@ class _HomeScreenState extends State<HomeScreen> {
     return null;
   }
 
+  Future<void> _ensureCatalogFirebaseSession() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+        return;
+      }
+      await user.getIdToken(true);
+    } catch (_) {
+      // PublicCatalogService retries auth and surfaces Firestore errors in UI.
+    }
+  }
+
   Future<void> _handleQuickActionTap(_QuickActionItem item) async {
     if (item.actionKey == 'travel') {
       await _runProtectedAction(() async {
@@ -1519,19 +1539,35 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (item.actionKey == 'shop-map') {
-      await _runProtectedAction(() async {
-        if (!mounted) {
-          return;
-        }
+      await _ensureCatalogFirebaseSession();
+      if (!mounted) {
+        return;
+      }
 
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => ShopMapScreen(
-              userLatitude: _userLocation.latitude,
-              userLongitude: _userLocation.longitude,
-              userLocationLabel: _userLocation.title,
-            ),
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ShopMapScreen(
+            userLatitude: _userLocation.latitude,
+            userLongitude: _userLocation.longitude,
+            userLocationLabel: _userLocation.title,
           ),
+        ),
+      );
+      return;
+    }
+
+    if (item.actionKey == 'nationwide-shipping') {
+      await _ensureCatalogFirebaseSession();
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _selectedBottomTab = 0;
+        _showNationwideCart = false;
+        _activeCatalog = _ActiveCatalog(
+          title: item.label,
+          nationwideShippingOnly: true,
         );
       });
       return;
@@ -1542,14 +1578,30 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    await _runProtectedAction(() {
-      setState(() {
-        _selectedBottomTab = 0;
-        _activeCatalog = _ActiveCatalog(
-          title: item.label,
-          serviceType: item.serviceType!,
-        );
-      });
+    await _ensureCatalogFirebaseSession();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _selectedBottomTab = 0;
+      _activeCatalog = _ActiveCatalog(
+        title: item.label,
+        serviceType: item.serviceType!,
+      );
+    });
+  }
+
+  void _openShopCatalogFromProduct(PublicCatalogProduct product) {
+    setState(() {
+      _selectedBottomTab = 0;
+      _showNationwideCart = false;
+      _activeCatalog = _ActiveCatalog(
+        title: product.shopName?.trim().isNotEmpty == true
+            ? product.shopName!.trim()
+            : 'สินค้าร้าน',
+        shopIdFilter: product.shopId,
+      );
     });
   }
 
@@ -1569,8 +1621,52 @@ class _HomeScreenState extends State<HomeScreen> {
           quantity: selection.quantity,
           availableStock: selection.availableStock,
           preparationTimeMinutes: selection.preparationTimeMinutes,
+          parcelWeightGrams: selection.parcelWeightGrams,
+          parcelLengthCm: selection.parcelLengthCm,
+          parcelWidthCm: selection.parcelWidthCm,
+          parcelHeightCm: selection.parcelHeightCm,
         ),
       );
+    });
+  }
+
+  void _addToNationwideCart(CartProductSelection selection) {
+    setState(() {
+      _nationwideCartItems.add(
+        CartLineItem(
+          productId: selection.productId,
+          shopId: selection.shopId,
+          shopName: selection.shopName,
+          shopLatitude: selection.shopLatitude,
+          shopLongitude: selection.shopLongitude,
+          productName: selection.productName,
+          unitPrice: selection.unitPrice,
+          imageUrl: selection.imageUrl,
+          selectedToppings: selection.selectedToppings,
+          quantity: selection.quantity,
+          availableStock: selection.availableStock,
+          preparationTimeMinutes: selection.preparationTimeMinutes,
+          parcelWeightGrams: selection.parcelWeightGrams,
+          parcelLengthCm: selection.parcelLengthCm,
+          parcelWidthCm: selection.parcelWidthCm,
+          parcelHeightCm: selection.parcelHeightCm,
+        ),
+      );
+    });
+  }
+
+  void _openCartTab() {
+    setState(() {
+      _selectedBottomTab = 1;
+      _showNationwideCart = false;
+    });
+  }
+
+  void _openNationwideCart() {
+    setState(() {
+      _selectedBottomTab = 0;
+      _activeCatalog = null;
+      _showNationwideCart = true;
     });
   }
 
@@ -1580,6 +1676,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     setState(() {
       _cartItems.removeAt(index);
+    });
+  }
+
+  void _removeNationwideCartItem(int index) {
+    if (index < 0 || index >= _nationwideCartItems.length) {
+      return;
+    }
+    setState(() {
+      _nationwideCartItems.removeAt(index);
     });
   }
 
@@ -1910,8 +2015,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final docRef = ordersRef.doc();
         final now = DateTime.now();
         final paymentExpiresAt = paymentMethod == 'promptpay_qr'
-          ? Timestamp.fromDate(now.add(const Duration(minutes: 30)))
-          : null;
+            ? Timestamp.fromDate(now.add(const Duration(minutes: 30)))
+            : null;
         final orderCode =
             'ORD-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${docRef.id.substring(0, 6).toUpperCase()}';
         final subtotal = items.fold<double>(
@@ -2892,6 +2997,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _selectedBottomTab = index;
           _activeCatalog = null;
+          _showNationwideCart = false;
         });
 
         if (index == 1 || index == 2 || index == 3 || index == 4) {
@@ -2916,17 +3022,47 @@ class _HomeScreenState extends State<HomeScreen> {
       0,
       (totalQuantity, item) => totalQuantity + item.quantity,
     );
+    final activeCatalog = _activeCatalog;
+    final isNationwideCatalog = activeCatalog?.nationwideShippingOnly == true;
     final body = switch (_selectedBottomTab) {
       0 =>
-        _activeCatalog == null
+        _showNationwideCart
+            ? NationwideCartScreen(
+                cartItems: _nationwideCartItems,
+                onRemoveItem: _removeNationwideCartItem,
+                onBackToCatalog: () {
+                  setState(() {
+                    _showNationwideCart = false;
+                    _activeCatalog = const _ActiveCatalog(
+                      title: 'สินค้าส่งทั่วประเทศ',
+                      nationwideShippingOnly: true,
+                    );
+                  });
+                },
+                onOrderCreated: (orderIds) async {
+                  setState(() {
+                    _nationwideCartItems.clear();
+                    _showNationwideCart = false;
+                    _activeCatalog = null;
+                  });
+                  await _openOrderRoadmap(orderIds);
+                },
+              )
+            : activeCatalog == null
             ? _buildHomeBody()
             : CategoryCatalogScreen(
-                title: _activeCatalog!.title,
-                serviceType: _activeCatalog!.serviceType,
-                shopIdFilter: _activeCatalog!.shopIdFilter,
+                title: activeCatalog.title,
+                serviceType: activeCatalog.serviceType,
+                shopIdFilter: activeCatalog.shopIdFilter,
+                nationwideShippingOnly: activeCatalog.nationwideShippingOnly,
                 customerLatitude: _userLocation.latitude,
                 customerLongitude: _userLocation.longitude,
-                onConfirmOrder: _addToCart,
+                onConfirmOrder: isNationwideCatalog
+                    ? _addToNationwideCart
+                    : _addToCart,
+                onNavigateToCart: isNationwideCatalog
+                    ? _openNationwideCart
+                    : _openCartTab,
                 embedded: true,
                 onBack: () => setState(() => _activeCatalog = null),
               ),
@@ -3282,22 +3418,19 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisCount: 4,
               mainAxisSpacing: 8,
               crossAxisSpacing: 12,
-              childAspectRatio: 0.82,
+              childAspectRatio: 0.74,
             ),
           ),
         ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
           sliver: SliverToBoxAdapter(
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                _ProductShelfPlaceholder(title: 'สินค้าแนะนำ'),
-                SizedBox(height: 20),
-                _ProductShelfPlaceholder(title: 'สินค้าขายดี'),
-                SizedBox(height: 20),
-                _ProductShelfPlaceholder(title: 'สินค้าที่คุณอาจรู้จัก'),
-              ],
+            child: _HomeProductShelves(
+              customerLatitude: _userLocation.latitude,
+              customerLongitude: _userLocation.longitude,
+              onProductTap: _openShopCatalogFromProduct,
+              onConfirmOrder: _addToCart,
+              onNavigateToCart: _openCartTab,
             ),
           ),
         ),
@@ -3356,13 +3489,15 @@ class _QuickActionItem {
 class _ActiveCatalog {
   const _ActiveCatalog({
     required this.title,
-    required this.serviceType,
+    this.serviceType = '',
     this.shopIdFilter,
+    this.nationwideShippingOnly = false,
   });
 
   final String title;
   final String serviceType;
   final String? shopIdFilter;
+  final bool nationwideShippingOnly;
 }
 
 class _CartNavIcon extends StatelessWidget {
@@ -3480,28 +3615,28 @@ class _DashboardTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final placeholderSize = item.badge == null ? 68.0 : 62.0;
-    final iconLiftOffset = placeholderSize * 0.30;
-    final labelLiftUpOffset = placeholderSize * 0.20;
+    final iconSize = item.badge == null ? 56.0 : 50.0;
+    final labelFontSize = item.label.length > 8 ? 10.5 : 13.0;
 
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
       child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+        padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
         decoration: BoxDecoration(
           color: const Color(0xFFEAF8FA),
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Stack(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             if (item.badge != null)
               Align(
                 alignment: Alignment.topLeft,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
+                    horizontal: 8,
+                    vertical: 3,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFF6A00),
@@ -3511,42 +3646,30 @@ class _DashboardTile extends StatelessWidget {
                     item.badge!,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 10,
+                      fontSize: 9,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
               ),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: <Widget>[
-                Transform.translate(
-                  offset: Offset(0, -iconLiftOffset),
-                  child: _SquareImagePlaceholder(
-                    size: placeholderSize,
-                    assetPath: item.assetPath,
-                    icon: item.icon,
-                    iconColor: item.iconColor,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Transform.translate(
-                  offset: Offset(0, -labelLiftUpOffset),
-                  child: Text(
-                    item.label,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontSize: 13,
-                      height: 1.15,
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF1F2937),
-                    ),
-                  ),
-                ),
-              ],
+            _SquareImagePlaceholder(
+              size: iconSize,
+              assetPath: item.assetPath,
+              icon: item.icon,
+              iconColor: item.iconColor,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              item.label,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontSize: labelFontSize,
+                height: 1.12,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF1F2937),
+              ),
             ),
           ],
         ),
@@ -3619,63 +3742,131 @@ class _SquareImagePlaceholder extends StatelessWidget {
   }
 }
 
-class _ProductShelfPlaceholder extends StatelessWidget {
-  const _ProductShelfPlaceholder({required this.title});
+class _HomeProductShelves extends StatefulWidget {
+  const _HomeProductShelves({
+    required this.customerLatitude,
+    required this.customerLongitude,
+    required this.onProductTap,
+    required this.onConfirmOrder,
+    required this.onNavigateToCart,
+  });
 
-  final String title;
+  final double customerLatitude;
+  final double customerLongitude;
+  final ValueChanged<PublicCatalogProduct> onProductTap;
+  final ValueChanged<CartProductSelection> onConfirmOrder;
+  final VoidCallback onNavigateToCart;
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          child: Text(
-            title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: const Color(0xFF111827),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 160,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            itemCount: 2,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (_, __) => const _ProductPlaceholderTile(),
-          ),
-        ),
-      ],
-    );
-  }
+  State<_HomeProductShelves> createState() => _HomeProductShelvesState();
 }
 
-class _ProductPlaceholderTile extends StatelessWidget {
-  const _ProductPlaceholderTile();
+class _HomeProductShelvesState extends State<_HomeProductShelves> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_ensureCatalogFirebaseSession());
+  }
+
+  Future<void> _ensureCatalogFirebaseSession() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        await FirebaseAuth.instance.signInAnonymously();
+        return;
+      }
+      await user.getIdToken(true);
+    } catch (_) {}
+  }
+
+  Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >
+  _loadSecondaryShelves(Set<String> excludeFeaturedIds) async {
+    final bestSelling = await HomeProductDiscoveryService.loadBestSellingShelf(
+      excludeIds: excludeFeaturedIds,
+    );
+    final combinedExclude = <String>{
+      ...excludeFeaturedIds,
+      ...bestSelling.map((product) => product.id),
+    };
+    final personalized =
+        await HomeProductDiscoveryService.loadPersonalizedShelf(
+          customerLatitude: widget.customerLatitude,
+          customerLongitude: widget.customerLongitude,
+          excludeIds: combinedExclude,
+        );
+    return (bestSelling: bestSelling, personalized: personalized);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return AspectRatio(
-      aspectRatio: 1,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          boxShadow: const <BoxShadow>[
-            BoxShadow(
-              color: Color(0x10000000),
-              blurRadius: 16,
-              offset: Offset(0, 8),
-            ),
-          ],
-        ),
-      ),
+    return StreamBuilder<List<PublicCatalogProduct>>(
+      stream: HomeProductDiscoveryService.streamFeaturedShelf(),
+      builder: (context, featuredSnapshot) {
+        final featured =
+            featuredSnapshot.data ?? const <PublicCatalogProduct>[];
+        final featuredIds = featured.map((product) => product.id).toSet();
+        final loadingFeatured =
+            featuredSnapshot.connectionState == ConnectionState.waiting &&
+            featured.isEmpty;
+
+        return FutureBuilder<
+          ({
+            List<PublicCatalogProduct> bestSelling,
+            List<PublicCatalogProduct> personalized,
+          })
+        >(
+          key: ValueKey<String>(featuredIds.join(',')),
+          future: loadingFeatured ? null : _loadSecondaryShelves(featuredIds),
+          builder: (context, secondarySnapshot) {
+            final secondary = secondarySnapshot.data;
+            final loadingSecondary =
+                secondarySnapshot.connectionState == ConnectionState.waiting;
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                HomeProductShelfSection(
+                  title: 'สินค้าแนะนำ',
+                  products: featured,
+                  isLoading: loadingFeatured,
+                  onProductTap: widget.onProductTap,
+                ),
+                const SizedBox(height: 20),
+                HomeProductShelfSection(
+                  title: 'สินค้าขายดี',
+                  products:
+                      secondary?.bestSelling ?? const <PublicCatalogProduct>[],
+                  isLoading: loadingFeatured || loadingSecondary,
+                  onProductTap: widget.onProductTap,
+                  useCatalogCardStyle: true,
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  onConfirmOrder: widget.onConfirmOrder,
+                  onNavigateToCart: widget.onNavigateToCart,
+                ),
+                const SizedBox(height: 20),
+                HomeProductShelfSection(
+                  title: 'สินค้าที่คุณอาจรู้จัก',
+                  products:
+                      secondary?.personalized ?? const <PublicCatalogProduct>[],
+                  isLoading: loadingFeatured || loadingSecondary,
+                  onProductTap: widget.onProductTap,
+                  useCatalogCardStyle: true,
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  onConfirmOrder: widget.onConfirmOrder,
+                  onNavigateToCart: widget.onNavigateToCart,
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

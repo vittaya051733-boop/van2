@@ -1,11 +1,15 @@
-# Deploy governance (van2 — canonical hub)
+# Deploy (van2 Customer — canonical hub)
 
-Manifest: `scripts/deploy-governance.ps1`
+**อ่านก่อน deploy ทุกครั้ง:**
+- `scripts\DEPLOY_GOVERNANCE.md`
+- `scripts\DEPLOY_RISK_MATRIX.md`
 
 ```powershell
-scripts/deploy-safe.ps1 -Action help
-scripts/sync-firestore-rules.ps1
-scripts/deploy-preflight.ps1 -App van2 -Target firestore
+scripts\deploy-readiness.ps1 -App van2 -Target firestore
+scripts\deploy-self.ps1 -App van2 -Target firestore `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" `
+  -ConfirmImpact "SHARED:van1,van2,van3,van4" `
+  -FinalAcknowledge "YES I UNDERSTAND"
 ```
 
-See: `scripts/DEPLOY_GOVERNANCE.md`
+Manifest: `scripts\deploy-governance.ps1`

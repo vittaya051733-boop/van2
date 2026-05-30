@@ -38,6 +38,7 @@ void main() {
     expect(find.text('กาแฟเย็นหวานน้อยเพิ่มช็อต'), findsOneWidget);
     expect(find.text('2 ชิ้น'), findsOneWidget);
     expect(find.text('1 ชิ้น'), findsOneWidget);
+    expect(find.text('ประวัติ'), findsOneWidget);
     expect(find.textContaining('Order ID: order-small-1'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -134,6 +135,8 @@ void main() {
         'status': 'accepted',
         'shopName': 'ร้านยังไม่รับ',
         'driverId': 'rider-123',
+        'paymentMethod': 'promptpay_qr',
+        'paymentStatus': 'verified',
         'acceptedAt': Timestamp.fromDate(
           DateTime.now().subtract(const Duration(minutes: 16)),
         ),
@@ -185,6 +188,96 @@ void main() {
       expect(orderData['refundBankAccountNumber'], '1234567890');
       expect(orderData['refundAccountName'], 'สมชาย ทดสอบ');
       expect(orderData['refundBankName'], 'ธนาคารทดสอบ');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'cod shop cancel skips refund account dialog',
+    (tester) async {
+      final firestore = FakeFirebaseFirestore();
+      await firestore.collection('orders').doc('order-shop-cod-cancel-1').set({
+        'orderId': 'order-shop-cod-cancel-1',
+        'orderCode': 'ORD-SHOP-COD-01',
+        'status': 'accepted',
+        'shopName': 'ร้านจ่ายปลายทาง',
+        'driverId': 'rider-123',
+        'paymentMethod': 'cash_on_delivery',
+        'paymentStatus': 'cash_on_delivery',
+        'acceptedAt': Timestamp.fromDate(
+          DateTime.now().subtract(const Duration(minutes: 16)),
+        ),
+        'grandTotal': 99.0,
+        'products': [
+          {'name': 'ข้าวผัด', 'quantity': 1},
+        ],
+        'createdAt': DateTime.now(),
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: OrderRoadmapScreen(
+            orderIds: const ['order-shop-cod-cancel-1'],
+            firestore: firestore,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.text('ยกเลิกออเดอร์'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.text('ขอคืนเงิน'), findsNothing);
+      expect(find.text('หมายเลขบัญชี'), findsNothing);
+
+      final orderSnapshot = await firestore
+          .collection('orders')
+          .doc('order-shop-cod-cancel-1')
+          .get();
+      final orderData = orderSnapshot.data()!;
+
+      expect(orderData['status'], 'cancelled');
+      expect(orderData['customerShopChoice'], 'cancel');
+      expect(orderData['refundRequested'], isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'no rider cod order shows cancel instead of refund',
+    (tester) async {
+      final firestore = FakeFirebaseFirestore();
+      await firestore.collection('orders').doc('order-rider-cod-1').set({
+        'orderId': 'order-rider-cod-1',
+        'orderCode': 'ORD-RIDER-COD-01',
+        'status': 'awaiting_rider',
+        'shopName': 'ร้านจ่ายปลายทาง',
+        'paymentMethod': 'cash_on_delivery',
+        'paymentStatus': 'cash_on_delivery',
+        'createdAt': Timestamp.fromDate(
+          DateTime.now().subtract(const Duration(minutes: 16)),
+        ),
+        'grandTotal': 79.0,
+        'products': [
+          {'name': 'กาแฟเย็น', 'quantity': 1},
+        ],
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: OrderRoadmapScreen(
+            orderIds: const ['order-rider-cod-1'],
+            firestore: firestore,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('ยกเลิกออเดอร์'), findsOneWidget);
+      expect(find.text('ขอคืนเงิน'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

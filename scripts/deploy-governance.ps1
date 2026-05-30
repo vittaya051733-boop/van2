@@ -79,6 +79,7 @@ function Get-VanGovernanceConfig {
       'calculateDeliveryTime',
       'askGeminiFlash',
       'analyzeProductWithAi',
+      'onProductCatalogClassify',
       'replaceImageBackgroundWhite',
       'notifyNewChatMessage',
       'notifyLegacyChatMessage',
@@ -406,6 +407,148 @@ function Invoke-VanDeployPreflight {
   Write-Host "[preflight] $App / $Target OK (project $($cfg.ProjectId))" -ForegroundColor Green
 }
 
+function Invoke-VanDeployReadiness {
+  param(
+    [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
+    [string]$Target = 'storage',
+    [switch]$Quiet
+  )
+
+  $targetFirestoreVan4 = 'firestore' + '-van4'
+  $targetSyncRules = 'sync' + '-rules'
+  $allowedTargets = @(
+    'storage'
+    'hosting'
+    'functions'
+    'firestore'
+    $targetFirestoreVan4
+    $targetSyncRules
+  )
+  $impactSummaryTargets = @(
+    'storage'
+    'hosting'
+    'functions'
+    'firestore'
+    $targetFirestoreVan4
+  )
+
+  if ($Target -notin $allowedTargets) {
+    throw "Invalid -Target '$Target'. Allowed: $($allowedTargets -join ', ')"
+  }
+
+  $cfg = Get-VanGovernanceConfig
+  $paths = Get-VanGovernanceRoot
+  $failures = [System.Collections.Generic.List[string]]::new()
+  $warnings = [System.Collections.Generic.List[string]]::new()
+
+  function Write-ReadinessCheck {
+    param(
+      [string]$Label,
+      [bool]$Ok,
+      [string]$Hint = ''
+    )
+
+    if (-not $Quiet) {
+      $status = if ($Ok) { 'OK' } else { 'FAIL' }
+      $color = if ($Ok) { 'Green' } else { 'Red' }
+      $line = '  [' + $status + '] ' + $Label
+      Write-Host $line -ForegroundColor $color
+      if (-not $Ok -and $Hint) {
+        Write-Host ('       ' + $Hint) -ForegroundColor DarkYellow
+      }
+    }
+
+    if (-not $Ok) {
+      $entry = $Label + ' - ' + $Hint
+      $null = $failures.Add($entry)
+    }
+  }
+
+  if (-not $Quiet) {
+    Write-Host ''
+    Write-Host ('=== Deploy Readiness: ' + $App + ' / ' + $Target + ' ===') -ForegroundColor Cyan
+    Write-Host 'Docs: van2\scripts\DEPLOY_GOVERNANCE.md + DEPLOY_RISK_MATRIX.md' -ForegroundColor DarkGray
+    Write-Host ''
+  }
+
+  if ($Target -in $impactSummaryTargets -and -not $Quiet) {
+    Show-VanDeployImpactSummary -App $App -Target $Target
+  }
+
+  Write-ReadinessCheck -Label 'Firebase CLI in PATH' -Ok ([bool](Get-Command firebase -ErrorAction SilentlyContinue)) -Hint 'Install: npm i -g firebase-tools'
+  Write-ReadinessCheck -Label ('App root exists (' + $App + ')') -Ok (Test-Path $cfg.Apps[$App].Root)
+
+  $firebaserc = Join-Path $cfg.Apps[$App].Root '.firebaserc'
+  Write-ReadinessCheck -Label '.firebaserc present' -Ok (Test-Path $firebaserc)
+  if (Test-Path $firebaserc) {
+    $rc = Get-Content $firebaserc -Raw | ConvertFrom-Json
+    $projectOk = $rc.projects.default -eq $cfg.ProjectId
+    $projectHint = 'Expected project ' + $cfg.ProjectId
+    Write-ReadinessCheck -Label 'Project = van-merchant' -Ok $projectOk -Hint $projectHint
+  }
+
+  if ($Target -eq 'firestore') {
+    Write-ReadinessCheck -Label 'Deploying from van2 (canonical)' -Ok ($App -eq 'van2') -Hint 'Firestore default DB is SHARED - deploy from van2 only'
+    if (Test-Path $paths.CanonicalRules) {
+      try {
+        Assert-VanFirestoreRulesSynced -App 'van2'
+        Write-ReadinessCheck -Label 'Canonical rules synced to van1/van3' -Ok $true
+      }
+      catch {
+        Write-ReadinessCheck -Label 'Canonical rules synced to van1/van3' -Ok $false -Hint 'Run: van2\scripts\sync-firestore-rules.ps1'
+      }
+    }
+  }
+
+  if ($Target -in @('firestore', 'functions')) {
+    $null = $warnings.Add('SHARED or critical target - run van3 rider smoke test immediately after deploy')
+  }
+
+  if ($App -eq 'van3' -and $Target -eq 'firestore') {
+    Write-ReadinessCheck -Label 'van3 blocked from Firestore deploy' -Ok $false -Hint 'Use van2 deploy-self -Target firestore'
+  }
+
+  if ($App -in @('van3', 'van4') -and $Target -eq 'functions') {
+    Write-ReadinessCheck -Label ($App + ' has no functions codebase') -Ok $false -Hint 'Deploy functions from van1 or van2 only'
+  }
+
+  if (-not $Quiet -and $warnings.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Warnings:' -ForegroundColor Yellow
+    foreach ($w in $warnings) {
+      Write-Host ('  ! ' + $w) -ForegroundColor Yellow
+    }
+  }
+
+  if (-not $Quiet) {
+    Write-Host ''
+    Write-Host 'Allowed targets for this app:' -ForegroundColor DarkCyan
+    $appCfg = $cfg.Apps[$App]
+    $allowed = @()
+    if ($appCfg.CanDeployStorage) { $allowed += 'storage' }
+    if ($appCfg.CanDeployHosting) { $allowed += 'hosting' }
+    if ($appCfg.CanDeployFunctions) { $allowed += 'functions' }
+    if ($appCfg.CanDeployFirestore) { $allowed += 'firestore' }
+    if ($appCfg.CanDeployIsolatedFirestore) { $allowed += $targetFirestoreVan4 }
+    Write-Host ('  ' + ($allowed -join ', ')) -ForegroundColor Gray
+    Write-Host ''
+  }
+
+  if ($failures.Count -gt 0) {
+    if (-not $Quiet) {
+      $failMsg = 'READINESS FAILED: ' + $failures.Count + ' issue(s)'
+      Write-Host $failMsg -ForegroundColor Red
+    }
+    return 1
+  }
+
+  if (-not $Quiet) {
+    Write-Host 'READINESS OK - use deploy-self.ps1 for isolated deploy' -ForegroundColor Green
+    Write-Host ''
+  }
+  return 0
+}
+
 function Invoke-VanDeployGuardSession {
   param(
     [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
@@ -508,6 +651,153 @@ function Invoke-VanStorageRulesDeploy {
   }
 }
 
+function Get-VanDeployImpactInfo {
+  param(
+    [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
+    [Parameter(Mandatory)][ValidateSet('storage', 'hosting', 'functions', 'firestore', 'firestore-van4')][string]$Target
+  )
+
+  switch ($Target) {
+    'firestore' {
+      return [ordered]@{
+        Scope        = 'SHARED'
+        Risk         = 'HIGH'
+        AffectedApps = @('van1', 'van2', 'van3', 'van4')
+        Summary      = 'Firestore rules on default DB (all apps share one database)'
+        RiderRisk    = 'van3 orders/riders listeners fail if rules are wrong'
+      }
+    }
+    'functions' {
+      $riderNote = if ($App -eq 'van2') {
+        'pushAppNotification affects rider job push'
+      } else {
+        'order/status functions affect shop flow'
+      }
+      return [ordered]@{
+        Scope        = 'SELF'
+        Risk         = 'MEDIUM'
+        AffectedApps = @($App)
+        Summary      = "Cloud Functions codebase $App"
+        RiderRisk    = $riderNote
+      }
+    }
+    'firestore-van4' {
+      return [ordered]@{
+        Scope        = 'SELF'
+        Risk         = 'LOW'
+        AffectedApps = @('van4')
+        Summary      = 'Firestore DB van4 isolated (admin only)'
+        RiderRisk    = 'Does not affect rider app'
+      }
+    }
+    default {
+      return [ordered]@{
+        Scope        = 'SELF'
+        Risk         = 'LOW'
+        AffectedApps = @($App)
+        Summary      = "$Target target for $App only"
+        RiderRisk    = 'Does not affect rider Firestore listeners'
+      }
+    }
+  }
+}
+
+function Show-VanDeployImpactSummary {
+  param(
+    [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
+    [Parameter(Mandatory)][ValidateSet('storage', 'hosting', 'functions', 'firestore', 'firestore-van4')][string]$Target
+  )
+
+  $info = Get-VanDeployImpactInfo -App $App -Target $Target
+  Write-Host ''
+  Write-Host '=== Deploy Impact (step 1) ===' -ForegroundColor Cyan
+  Write-Host ("  App/Target : {0} / {1}" -f $App, $Target)
+  Write-Host ("  Scope      : {0}" -f $info.Scope) -ForegroundColor $(if ($info.Scope -eq 'SHARED') { 'Red' } else { 'Green' })
+  Write-Host ("  Risk       : {0}" -f $info.Risk)
+  Write-Host ("  Affects    : {0}" -f ($info.AffectedApps -join ', '))
+  Write-Host ("  Detail     : {0}" -f $info.Summary)
+  Write-Host ("  Rider note : {0}" -f $info.RiderRisk) -ForegroundColor DarkYellow
+  if ($info.Scope -eq 'SHARED') {
+    Write-Host '  >> Auto backup rules before deploy (step 6)' -ForegroundColor Yellow
+  }
+  Write-Host ''
+}
+
+function Backup-VanFirestoreRules {
+  param(
+    [Parameter(Mandatory)][string]$SourcePath,
+    [Parameter(Mandatory)][string]$Label,
+    [switch]$DryRun
+  )
+
+  if (-not (Test-Path $SourcePath)) {
+    throw "Cannot backup - missing rules file: $SourcePath"
+  }
+
+  $paths = Get-VanGovernanceRoot
+  $backupDir = Join-Path $paths.Van2Root 'scripts\deploy-backups'
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $hash = (Get-FileHash $SourcePath -Algorithm SHA256).Hash
+  $shortHash = $hash.Substring(0, 12)
+  $backupFileName = "${Label}-${stamp}-${shortHash}.rules"
+  $backupPath = Join-Path $backupDir $backupFileName
+
+  if ($DryRun) {
+    Write-Host "(backup) dry-run would save: $backupPath" -ForegroundColor Yellow
+    return $backupPath
+  }
+
+  New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+  Copy-Item -Path $SourcePath -Destination $backupPath -Force
+
+  $latestManifest = Join-Path $backupDir 'LATEST.txt'
+  @(
+    "timestamp=$stamp"
+    "label=$Label"
+    "file=$backupFileName"
+    "sha256=$hash"
+    "source=$SourcePath"
+  ) | Set-Content -Path $latestManifest -Encoding UTF8
+
+  Write-Host "(backup) Rules saved step 6: $backupPath" -ForegroundColor Green
+  return $backupPath
+}
+
+function Show-VanPostDeployConnectionGuide {
+  param(
+    [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
+    [Parameter(Mandatory)][ValidateSet('storage', 'hosting', 'functions', 'firestore', 'firestore-van4')][string]$Target,
+    [string]$BackupPath
+  )
+
+  $info = Get-VanDeployImpactInfo -App $App -Target $Target
+  Write-Host ''
+  Write-Host '=== After deploy - connection signals (step 4) ===' -ForegroundColor Cyan
+  Write-Host 'Docs: van2\scripts\DEPLOY_CONNECTION_SIGNALS.md'
+  Write-Host ''
+
+  if ($info.Scope -eq 'SHARED' -or $Target -eq 'functions') {
+    Write-Host 'Automated smoke test (step 3) runs after deploy via deploy-smoke-test.ps1'
+    Write-Host 'Manual checks (optional):' -ForegroundColor Yellow
+    Write-Host '  [ ] van3: Rider jobs page loads (no permission-denied)'
+    Write-Host '  [ ] van3: online toggle updates riders doc'
+    Write-Host '  [ ] van2: cart/order status loads'
+    Write-Host '  [ ] van1: shop orders load'
+    Write-Host ''
+  }
+
+  Write-Host 'Connection loss signals:' -ForegroundColor DarkYellow
+  Write-Host '  permission-denied  -> Firestore rules issue / rollback'
+  Write-Host '  endless spinner    -> listener error or network'
+  Write-Host '  stale data         -> realtime listener dropped'
+  Write-Host ''
+
+  if ($BackupPath) {
+    Write-Host "Rollback: van2\scripts\deploy-restore-firestore-rules.ps1 -BackupFile `"$BackupPath`""
+  }
+  Write-Host ''
+}
+
 function Show-VanDeployGovernanceHelp {
   $cfg = Get-VanGovernanceConfig
   $paths = Get-VanGovernanceRoot
@@ -530,11 +820,13 @@ function Show-VanDeployGovernanceHelp {
   Write-Host 'RULE 4 — Always pass ConfirmDeploy, ConfirmFile, ConfirmImpact, FinalAcknowledge' -ForegroundColor Yellow
   Write-Host ''
   Write-Host 'Per-app entry (from any repo):' -ForegroundColor Green
-  Write-Host '  van1: my-flutter\scripts\deploy-*-isolated.ps1  (Firestore delegates to van2)'
-  Write-Host '  van2: scripts\deploy-safe.ps1  (canonical Firestore + functions van2)'
-  Write-Host '  van3: scripts\deploy-*-isolated.ps1  (Storage/Hosting SELF only)'
-  Write-Host '  van4: scripts\deploy-*-isolated.ps1  (Storage/Hosting + isolated DB van4)'
+  Write-Host '  ALL APPS: van2\scripts\deploy-readiness.ps1 then deploy-self.ps1 -App <vanN> -Target <one>'
+  Write-Host '  van1: deploy-self -App van1 -Target storage|hosting|functions'
+  Write-Host '  van2: deploy-self -App van2 -Target firestore|storage|hosting|functions'
+  Write-Host '  van3: deploy-self -App van3 -Target storage|hosting ONLY'
+  Write-Host '  van4: deploy-self -App van4 -Target storage|hosting|firestore-van4'
   Write-Host ''
+  Write-Host 'Risk matrix: van2\scripts\DEPLOY_RISK_MATRIX.md' -ForegroundColor Yellow
   Write-Host 'Global help: van2\scripts\deploy-safe.ps1 -Action help' -ForegroundColor Green
   Write-Host ''
 }

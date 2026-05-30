@@ -245,7 +245,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'ไม่สามารถโหลดตำแหน่งร้านได้: ${snapshot.error}',
+                  'ไม่สามารถโหลดตำแหน่งร้านได้ กรุณาตรวจสอบการเชื่อมต่อหรือลองใหม่\n${snapshot.error}',
                   textAlign: TextAlign.center,
                 ),
               ),

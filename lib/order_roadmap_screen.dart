@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'call_screen.dart';
@@ -10,6 +11,22 @@ import 'chat_room_screen.dart';
 import 'models/user_profile.dart';
 import 'services/notification_service.dart';
 import 'widgets/cached_app_image.dart';
+
+const double _kRoadmapProductCarouselHeight = 128;
+
+const List<String> _kOrderShopLookupFields = <String>[
+  'ownerUid',
+  'ownerId',
+  'owner_id',
+  'shopId',
+  'shop_id',
+  'shopOwnerId',
+  'shopOwnerUid',
+  'merchantId',
+  'merchantUid',
+  'owner',
+  'uid',
+];
 
 class OrderRoadmapScreen extends StatelessWidget {
   OrderRoadmapScreen({
@@ -31,6 +48,16 @@ class OrderRoadmapScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
         title: const Text('Roadmap การจัดส่ง'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => _showOrderProductHistorySheet(
+              context: context,
+              firestore: firestore,
+            ),
+            icon: const Icon(Icons.history, size: 20),
+            label: const Text('ประวัติ'),
+          ),
+        ],
       ),
       body: uniqueOrderIds.isNotEmpty
           ? _RoadmapList(orderIds: uniqueOrderIds, firestore: firestore)
@@ -267,7 +294,7 @@ class _OrderRoadmapCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
-                    height: 126,
+                    height: _kRoadmapProductCarouselHeight,
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: productEntries.length,
@@ -685,19 +712,7 @@ class _OrderRoadmapCard extends StatelessWidget {
     return null;
   }
 
-  static const List<String> _shopLookupFields = <String>[
-    'ownerUid',
-    'ownerId',
-    'owner_id',
-    'shopId',
-    'shop_id',
-    'shopOwnerId',
-    'shopOwnerUid',
-    'merchantId',
-    'merchantUid',
-    'owner',
-    'uid',
-  ];
+  static const List<String> _shopLookupFields = _kOrderShopLookupFields;
 
   List<_RoadmapProductEntry> _readProductEntries(Map<String, dynamic> data) {
     final rawProducts = data['products'];
@@ -1124,6 +1139,7 @@ class _RoadmapProductImageCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: 88,
+      height: _kRoadmapProductCarouselHeight,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1146,22 +1162,34 @@ class _RoadmapProductImageCard extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            quantity > 0 ? '$quantity ชิ้น' : '-',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFF6B7280),
-              fontWeight: FontWeight.w600,
+          const SizedBox(height: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  quantity > 0 ? '$quantity ชิ้น' : '-',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    height: 1.1,
+                    color: Color(0xFF6B7280),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1270,6 +1298,145 @@ class _OrderRoadmapState {
   final bool riderScannedPickup;
   final bool delivering;
   final bool delivered;
+}
+
+bool _orderIsCashOnDelivery(Map<String, dynamic> data) {
+  final paymentMethod =
+      (data['paymentMethod'] as String?)?.trim().toLowerCase() ?? '';
+  final paymentStatus =
+      (data['paymentStatus'] as String?)?.trim().toLowerCase() ?? '';
+  return paymentMethod == 'cash_on_delivery' ||
+      paymentStatus == 'cash_on_delivery';
+}
+
+bool _orderCanRequestRefund(Map<String, dynamic> data) {
+  if (_orderIsCashOnDelivery(data)) {
+    return false;
+  }
+
+  final paymentStatus =
+      (data['paymentStatus'] as String?)?.trim().toLowerCase() ?? '';
+  return paymentStatus == 'verified';
+}
+
+Future<Map<String, String>?> _showRefundAccountDialog(BuildContext context) {
+  return showDialog<Map<String, String>>(
+    context: context,
+    builder: (dialogContext) => const _RefundAccountDialog(),
+  );
+}
+
+class _RefundAccountDialog extends StatefulWidget {
+  const _RefundAccountDialog();
+
+  @override
+  State<_RefundAccountDialog> createState() => _RefundAccountDialogState();
+}
+
+class _RefundAccountDialogState extends State<_RefundAccountDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _accountNumberController = TextEditingController();
+  final _accountNameController = TextEditingController();
+  final _bankNameController = TextEditingController();
+
+  @override
+  void dispose() {
+    _accountNumberController.dispose();
+    _accountNameController.dispose();
+    _bankNameController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState?.validate() != true) {
+      return;
+    }
+
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(context, {
+      'refundBankAccountNumber': _accountNumberController.text.trim(),
+      'refundAccountName': _accountNameController.text.trim(),
+      'refundBankName': _bankNameController.text.trim(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('ขอคืนเงิน'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _accountNumberController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'หมายเลขบัญชี',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'กรุณาใส่หมายเลขบัญชี';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _accountNameController,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'ชื่อเจ้าของบัญชี',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'กรุณาใส่ชื่อเจ้าของบัญชี';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _bankNameController,
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  labelText: 'ชื่อธนาคาร',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'กรุณาใส่ชื่อธนาคาร';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('ยกเลิก'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('ยืนยันคืนเงิน'),
+        ),
+      ],
+    );
+  }
 }
 
 class _AwaitingRiderBanner extends StatefulWidget {
@@ -1406,119 +1573,64 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
     }
   }
 
-  Future<void> _requestRefund() async {
+  Future<void> _cancelWithoutRefund({
+    required String cancelReason,
+    required String customerChoiceField,
+    required String customerChoiceValue,
+    required String successMessage,
+  }) async {
     if (_busy) return;
-    final accountNumberController = TextEditingController();
-    final accountNameController = TextEditingController();
-    final bankNameController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
 
-    Map<String, String>? refundInfo;
-    try {
-      refundInfo = await showDialog<Map<String, String>>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('ขอคืนเงิน'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: accountNumberController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'หมายเลขบัญชี',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่หมายเลขบัญชี';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: accountNameController,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(
-                      labelText: 'ชื่อเจ้าของบัญชี',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่ชื่อเจ้าของบัญชี';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: bankNameController,
-                    textInputAction: TextInputAction.done,
-                    decoration: const InputDecoration(
-                      labelText: 'ชื่อธนาคาร',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่ชื่อธนาคาร';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('ยกเลิก'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (formKey.currentState?.validate() != true) return;
-                Navigator.pop(ctx, {
-                  'refundBankAccountNumber': accountNumberController.text
-                      .trim(),
-                  'refundAccountName': accountNameController.text.trim(),
-                  'refundBankName': bankNameController.text.trim(),
-                });
-              },
-              child: const Text('ยืนยันคืนเงิน'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      accountNumberController.dispose();
-      accountNameController.dispose();
-      bankNameController.dispose();
-    }
-
-    if (refundInfo == null) return;
     setState(() => _busy = true);
     try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      await widget.firestore.collection('orders').doc(widget.orderId).set({
+        'status': 'cancelled',
+        'statusLabel': 'ยกเลิกออเดอร์',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelledBy': uid,
+        'cancelReason': cancelReason,
+        customerChoiceField: customerChoiceValue,
+        'needsReassign': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(successMessage)));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('ยกเลิกออเดอร์ไม่สำเร็จ: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _requestRefund() async {
+    if (_busy) return;
+
+    final refundInfo = await _showRefundAccountDialog(context);
+    if (refundInfo == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
       await widget.firestore.collection('orders').doc(widget.orderId).set({
         'status': 'refund',
         'cancelledAt': FieldValue.serverTimestamp(),
         'cancelReason': 'no_rider_available_refund_requested',
         'refundRequested': true,
         'refundRequestedAt': FieldValue.serverTimestamp(),
-        'refundRequestedBy': FirebaseAuth.instance.currentUser?.uid,
+        'refundRequestedBy': uid,
         'refundStatus': 'requested',
         ...refundInfo,
         'customerNoRiderChoice': 'refund',
         'needsReassign': false,
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1537,6 +1649,22 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<void> _handleNoRiderSecondaryAction() async {
+    if (_orderCanRequestRefund(widget.data)) {
+      await _requestRefund();
+      return;
+    }
+
+    await _cancelWithoutRefund(
+      cancelReason: 'no_rider_available_customer_cancelled',
+      customerChoiceField: 'customerNoRiderChoice',
+      customerChoiceValue: 'cancel',
+      successMessage: 'ยกเลิกออเดอร์แล้ว',
+    );
+  }
+
+  bool get _canRequestRefund => _orderCanRequestRefund(widget.data);
 
   @override
   Widget build(BuildContext context) {
@@ -1578,8 +1706,12 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
           const SizedBox(height: 6),
           Text(
             waiting
-                ? 'หากยังไม่ได้ไรเดอร์ภายในเวลาที่กำหนด คุณสามารถขอคืนเงินได้'
-                : 'คุณสามารถเลือกรอเพิ่มอีก 15 นาที หรือขอคืนเงินได้',
+                ? (_canRequestRefund
+                      ? 'หากยังไม่ได้ไรเดอร์ภายในเวลาที่กำหนด คุณสามารถขอคืนเงินได้'
+                      : 'หากยังไม่ได้ไรเดอร์ภายในเวลาที่กำหนด คุณสามารถยกเลิกออเดอร์ได้')
+                : (_canRequestRefund
+                      ? 'คุณสามารถเลือกรอเพิ่มอีก 15 นาที หรือขอคืนเงินได้'
+                      : 'คุณสามารถเลือกรอเพิ่มอีก 15 นาที หรือยกเลิกออเดอร์ได้'),
             style: const TextStyle(color: Color(0xFF7C2D12), fontSize: 13),
           ),
           const SizedBox(height: 10),
@@ -1598,9 +1730,13 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFFDC2626),
                   ),
-                  onPressed: _busy ? null : _requestRefund,
-                  icon: const Icon(Icons.payments_outlined),
-                  label: const Text('ขอคืนเงิน'),
+                  onPressed: _busy ? null : _handleNoRiderSecondaryAction,
+                  icon: Icon(
+                    _canRequestRefund
+                        ? Icons.payments_outlined
+                        : Icons.cancel_outlined,
+                  ),
+                  label: Text(_canRequestRefund ? 'ขอคืนเงิน' : 'ยกเลิกออเดอร์'),
                 ),
               ),
             ],
@@ -1758,125 +1894,44 @@ class _AwaitingShopDecisionBannerState
 
   Future<void> _cancelOrder() async {
     if (_busy) return;
-    final accountNumberController = TextEditingController();
-    final accountNameController = TextEditingController();
-    final bankNameController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
 
     Map<String, String>? refundInfo;
-    try {
-      refundInfo = await showDialog<Map<String, String>>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('ขอคืนเงิน'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: accountNumberController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'หมายเลขบัญชี',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่หมายเลขบัญชี';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: accountNameController,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(
-                      labelText: 'ชื่อเจ้าของบัญชี',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่ชื่อเจ้าของบัญชี';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    controller: bankNameController,
-                    textInputAction: TextInputAction.done,
-                    decoration: const InputDecoration(
-                      labelText: 'ชื่อธนาคาร',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'กรุณาใส่ชื่อธนาคาร';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('ยกเลิก'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (formKey.currentState?.validate() != true) return;
-                Navigator.pop(ctx, {
-                  'refundBankAccountNumber': accountNumberController.text
-                      .trim(),
-                  'refundAccountName': accountNameController.text.trim(),
-                  'refundBankName': bankNameController.text.trim(),
-                });
-              },
-              child: const Text('ยืนยันคืนเงิน'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      accountNumberController.dispose();
-      accountNameController.dispose();
-      bankNameController.dispose();
+    if (_orderCanRequestRefund(widget.data)) {
+      refundInfo = await _showRefundAccountDialog(context);
+      if (refundInfo == null || !mounted) return;
     }
-
-    if (refundInfo == null) return;
 
     setState(() => _busy = true);
     try {
       final currentUid = _currentUserUidOrNull();
-      await widget.firestore.collection('orders').doc(widget.orderId).set({
+      final cancelReason = _shopRejected
+          ? 'customer_cancelled_after_shop_rejected'
+          : 'customer_cancelled_after_shop_no_response';
+      final update = <String, dynamic>{
         'status': 'cancelled',
         'statusLabel': 'ยกเลิกออเดอร์',
         'cancelledAt': FieldValue.serverTimestamp(),
         'cancelledBy': currentUid,
-        'cancelReason': _shopRejected
-            ? 'customer_cancelled_after_shop_rejected'
-            : 'customer_cancelled_after_shop_no_response',
+        'cancelReason': cancelReason,
         'customerShopChoice': 'cancel',
         'customerCancelledAt': FieldValue.serverTimestamp(),
-        'refundRequested': true,
-        'refundRequestedAt': FieldValue.serverTimestamp(),
-        'refundRequestedBy': currentUid,
-        'refundStatus': 'requested',
-        ...refundInfo,
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      };
+
+      if (refundInfo != null) {
+        update.addAll({
+          'refundRequested': true,
+          'refundRequestedAt': FieldValue.serverTimestamp(),
+          'refundRequestedBy': currentUid,
+          'refundStatus': 'requested',
+          ...refundInfo,
+        });
+      }
+
+      await widget.firestore
+          .collection('orders')
+          .doc(widget.orderId)
+          .set(update, SetOptions(merge: true));
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -1892,6 +1947,8 @@ class _AwaitingShopDecisionBannerState
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  bool get _canRequestRefund => _orderCanRequestRefund(widget.data);
 
   @override
   Widget build(BuildContext context) {
@@ -1937,7 +1994,9 @@ class _AwaitingShopDecisionBannerState
           Text(
             waiting
                 ? 'หากร้านค้ายังไม่รับงานภายในเวลาที่กำหนด คุณสามารถยกเลิกออเดอร์ได้'
-                : 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์นี้ได้',
+                : (_canRequestRefund
+                      ? 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์และขอคืนเงินได้'
+                      : 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์นี้ได้'),
             style: const TextStyle(color: Color(0xFF78350F), fontSize: 13),
           ),
           const SizedBox(height: 10),
@@ -1964,6 +2023,548 @@ class _AwaitingShopDecisionBannerState
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProductHistoryLine {
+  const _ProductHistoryLine({
+    required this.name,
+    required this.quantity,
+    this.unitPrice,
+    this.lineTotal,
+    this.imageUrl,
+    this.toppingsLabel,
+  });
+
+  final String name;
+  final int quantity;
+  final num? unitPrice;
+  final num? lineTotal;
+  final String? imageUrl;
+  final String? toppingsLabel;
+}
+
+class _ProductHistoryOrderGroup {
+  const _ProductHistoryOrderGroup({
+    required this.orderId,
+    required this.orderCode,
+    required this.shopName,
+    required this.orderedAt,
+    required this.products,
+  });
+
+  final String orderId;
+  final String? orderCode;
+  final String shopName;
+  final DateTime? orderedAt;
+  final List<_ProductHistoryLine> products;
+}
+
+String _readOrderShopId(Map<String, dynamic> data) {
+  final direct = _roadmapReadFirstNonEmptyValue(data, _kOrderShopLookupFields);
+  if (direct != null) {
+    return direct;
+  }
+
+  final shopSnapshot = data['shopSnapshot'];
+  if (shopSnapshot is Map) {
+    final fromSnapshot = _roadmapReadFirstNonEmptyValue(
+      Map<String, dynamic>.from(shopSnapshot),
+      _kOrderShopLookupFields,
+    );
+    if (fromSnapshot != null) {
+      return fromSnapshot;
+    }
+  }
+
+  final rawProducts = data['products'];
+  if (rawProducts is List) {
+    for (final rawProduct in rawProducts) {
+      if (rawProduct is! Map) {
+        continue;
+      }
+
+      final productMap = Map<String, dynamic>.from(rawProduct);
+      final productShopId = _roadmapReadFirstNonEmptyValue(
+        productMap,
+        _kOrderShopLookupFields,
+      );
+      if (productShopId != null) {
+        return productShopId;
+      }
+    }
+  }
+
+  return '';
+}
+
+String? _roadmapReadFirstNonEmptyValue(
+  Map<String, dynamic> data,
+  List<String> keys,
+) {
+  for (final key in keys) {
+    final value = data[key]?.toString().trim();
+    if (value != null && value.isNotEmpty) {
+      return value;
+    }
+  }
+  return null;
+}
+
+String? _roadmapReadTrimmedString(dynamic first, dynamic second, dynamic third) {
+  for (final value in <dynamic>[first, second, third]) {
+    final trimmed = value?.toString().trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+int _roadmapReadQuantity(dynamic value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  if (value is String) {
+    return int.tryParse(value.trim()) ?? 0;
+  }
+  return 0;
+}
+
+String? _roadmapReadToppingsLabel(dynamic rawToppings) {
+  if (rawToppings is! List) {
+    return null;
+  }
+
+  final labels = rawToppings
+      .map((item) {
+        if (item is Map) {
+          return _roadmapReadTrimmedString(
+            item['name'],
+            item['label'],
+            item['title'],
+          );
+        }
+        return item?.toString().trim();
+      })
+      .whereType<String>()
+      .where((label) => label.isNotEmpty)
+      .toList(growable: false);
+
+  if (labels.isEmpty) {
+    return null;
+  }
+  return labels.join(', ');
+}
+
+List<_ProductHistoryLine> _readProductHistoryLines(Map<String, dynamic> data) {
+  final rawProducts = data['products'];
+  if (rawProducts is! List) {
+    return const <_ProductHistoryLine>[];
+  }
+
+  final results = <_ProductHistoryLine>[];
+  for (final rawProduct in rawProducts) {
+    if (rawProduct is! Map) {
+      continue;
+    }
+
+    final productMap = Map<String, dynamic>.from(rawProduct);
+    final name = _roadmapReadTrimmedString(
+      productMap['name'],
+      productMap['productName'],
+      productMap['title'],
+    );
+    if (name == null) {
+      continue;
+    }
+
+    results.add(
+      _ProductHistoryLine(
+        name: name,
+        quantity: _roadmapReadQuantity(productMap['quantity']),
+        unitPrice: productMap['unitPrice'] as num?,
+        lineTotal: productMap['lineTotal'] as num?,
+        imageUrl: _roadmapReadTrimmedString(
+          productMap['imageUrl'],
+          productMap['productImage'],
+          productMap['photoUrl'],
+        ),
+        toppingsLabel: _roadmapReadToppingsLabel(productMap['selectedToppings']),
+      ),
+    );
+  }
+
+  return results;
+}
+
+DateTime? _readOrderCreatedAt(Map<String, dynamic> data) {
+  final createdAt = data['createdAt'];
+  if (createdAt is Timestamp) {
+    return createdAt.toDate();
+  }
+  if (createdAt is DateTime) {
+    return createdAt;
+  }
+  return null;
+}
+
+Future<List<_ProductHistoryOrderGroup>> _loadCustomerProductHistory({
+  required FirebaseFirestore firestore,
+  required String customerId,
+}) async {
+  final snapshot = await firestore
+      .collection('orders')
+      .where('customerId', isEqualTo: customerId)
+      .get();
+
+  final groups = <_ProductHistoryOrderGroup>[];
+  for (final doc in snapshot.docs) {
+    final data = doc.data();
+    if (_isTravelPassengerOrder(data)) {
+      continue;
+    }
+
+    final products = _readProductHistoryLines(data);
+    if (products.isEmpty) {
+      continue;
+    }
+
+    final shopName = (data['shopName'] as String?)?.trim();
+    groups.add(
+      _ProductHistoryOrderGroup(
+        orderId: doc.id,
+        orderCode: (data['orderCode'] as String?)?.trim(),
+        shopName: shopName?.isNotEmpty == true ? shopName! : 'ร้านค้า',
+        orderedAt: _readOrderCreatedAt(data),
+        products: products,
+      ),
+    );
+  }
+
+  groups.sort((a, b) {
+    final aMs = a.orderedAt?.millisecondsSinceEpoch ?? 0;
+    final bMs = b.orderedAt?.millisecondsSinceEpoch ?? 0;
+    return bMs.compareTo(aMs);
+  });
+
+  return groups;
+}
+
+void _showOrderProductHistorySheet({
+  required BuildContext context,
+  required FirebaseFirestore firestore,
+}) {
+  final customerId = FirebaseAuth.instance.currentUser?.uid;
+  if (customerId == null || customerId.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('กรุณาเข้าสู่ระบบเพื่อดูประวัติสินค้า')),
+    );
+    return;
+  }
+
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (sheetContext) {
+      return DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.45,
+        maxChildSize: 0.95,
+        builder: (context, scrollController) {
+          return _OrderProductHistorySheet(
+            firestore: firestore,
+            customerId: customerId,
+            scrollController: scrollController,
+          );
+        },
+      );
+    },
+  );
+}
+
+class _OrderProductHistorySheet extends StatefulWidget {
+  const _OrderProductHistorySheet({
+    required this.firestore,
+    required this.customerId,
+    required this.scrollController,
+  });
+
+  final FirebaseFirestore firestore;
+  final String customerId;
+  final ScrollController scrollController;
+
+  @override
+  State<_OrderProductHistorySheet> createState() =>
+      _OrderProductHistorySheetState();
+}
+
+class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
+  late final Future<List<_ProductHistoryOrderGroup>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _historyFuture = _loadCustomerProductHistory(
+      firestore: widget.firestore,
+      customerId: widget.customerId,
+    );
+  }
+
+  String _formatOrderedAt(DateTime? value) {
+    if (value == null) {
+      return '-';
+    }
+    return DateFormat('d MMM y, HH:mm').format(value);
+  }
+
+  String _formatPrice(num? value) {
+    if (value == null) {
+      return '-';
+    }
+    return 'THB ${value.toStringAsFixed(value % 1 == 0 ? 0 : 1)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1D5DB),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'ประวัติสินค้า',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'สินค้าที่เคยสั่งทั้งหมด',
+                        style: TextStyle(
+                          color: Color(0xFF6B7280),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: FutureBuilder<List<_ProductHistoryOrderGroup>>(
+              future: _historyFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        'โหลดประวัติสินค้าไม่สำเร็จ: ${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+
+                final groups =
+                    snapshot.data ?? const <_ProductHistoryOrderGroup>[];
+                if (groups.isEmpty) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('ยังไม่มีประวัติสินค้า'),
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  controller: widget.scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  itemCount: groups.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final group = groups[index];
+                    final orderLabel = group.orderCode?.isNotEmpty == true
+                        ? group.orderCode!
+                        : group.orderId;
+
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE5E7EB)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Order $orderLabel',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            group.shopName,
+                            style: const TextStyle(
+                              color: Color(0xFF374151),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _formatOrderedAt(group.orderedAt),
+                            style: const TextStyle(
+                              color: Color(0xFF6B7280),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          for (var productIndex = 0;
+                              productIndex < group.products.length;
+                              productIndex++) ...[
+                            if (productIndex > 0)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: Divider(height: 1),
+                              ),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _ProductHistoryThumb(
+                                  imageUrl: group.products[productIndex].imageUrl,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        group.products[productIndex].name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        group.products[productIndex].quantity > 0
+                                            ? '${group.products[productIndex].quantity} ชิ้น'
+                                            : '-',
+                                        style: const TextStyle(
+                                          color: Color(0xFF6B7280),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      if (group
+                                              .products[productIndex]
+                                              .toppingsLabel !=
+                                          null) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          group
+                                              .products[productIndex]
+                                              .toppingsLabel!,
+                                          style: const TextStyle(
+                                            color: Color(0xFF9CA3AF),
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  _formatPrice(
+                                    group.products[productIndex].lineTotal ??
+                                        group.products[productIndex].unitPrice,
+                                  ),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProductHistoryThumb extends StatelessWidget {
+  const _ProductHistoryThumb({required this.imageUrl});
+
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: CachedAppImage(
+        imageUrl: imageUrl,
+        width: 44,
+        height: 44,
+        fit: BoxFit.cover,
+        borderRadius: BorderRadius.circular(10),
+        errorWidget: Container(
+          width: 44,
+          height: 44,
+          color: const Color(0xFFF3F4F6),
+          child: const Icon(
+            Icons.fastfood_outlined,
+            size: 20,
+            color: Color(0xFF9CA3AF),
+          ),
+        ),
       ),
     );
   }

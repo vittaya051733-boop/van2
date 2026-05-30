@@ -1,0 +1,28 @@
+---
+description: MANDATORY — อ่านก่อน deploy Firebase ทุกครั้ง (van2 Customer)
+alwaysApply: true
+---
+
+# ห้าม Deploy โดยไม่อ่านกฎ (van2 — Canonical Hub)
+
+**ก่อนรัน deploy ใดๆ** ให้อ่าน:
+1. `scripts\DEPLOY_GOVERNANCE.md`
+2. `scripts\DEPLOY_RISK_MATRIX.md`
+
+## van2 — เจ้าของ Firestore shared
+
+| Target | Impact |
+|--------|--------|
+| `firestore` | **SHARED van1,2,3,4** — ไรเดอร์หลุดถ้าผิด |
+| `functions` | SELF van2 — ทีละชื่อ |
+| `storage`, `hosting` | SELF van2 |
+
+## คำสั่งเดียวที่ถูก
+
+```powershell
+# แนะนำ: dry-run ก่อน แล้วค่อย Execute
+scripts\deploy-plan.ps1 -App van2 -Target firestore -DryRunOnly
+scripts\deploy-plan.ps1 -App van2 -Target firestore -Execute ...
+```
+
+Backup rules อัตโนมัติก่อน firestore deploy → `scripts/deploy-backups/`

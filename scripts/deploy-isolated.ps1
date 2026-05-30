@@ -1,6 +1,7 @@
 param(
   [switch]$FunctionsOnly,
   [switch]$HostingOnly,
+  [switch]$StorageOnly,
   [switch]$BuildWeb,
   [string[]]$FunctionName,
   [string]$ConfirmDeploy,
@@ -19,6 +20,8 @@ Set-Location $appRoot
 $expectedProjectId = 'van-merchant'
 $functionsCodebase = 'van2'
 $hostingTarget = 'van2'
+
+$storageScript = Join-Path $scriptRoot 'deploy-storage-isolated.ps1'
 
 if (-not (Get-Command firebase -ErrorAction SilentlyContinue)) {
   Write-Error 'Firebase CLI was not found in PATH.'
@@ -44,9 +47,29 @@ if ($ConfirmDeploy -ne $expectedConfirmation) {
 }
 Write-Host "[guard] Confirmation accepted: $expectedConfirmation" -ForegroundColor Green
 
+$modeCount = @($FunctionsOnly, $HostingOnly, $StorageOnly).Where({ $_ }).Count
+if ($modeCount -eq 0) {
+  Write-Error @"
+Deployment blocked: combined deploy disabled (protects van3 rider connections).
+Specify exactly one mode:
+  -StorageOnly   deploy van2 storage rules only (SELF)
+  -HostingOnly   deploy van2 hosting only (SELF)
+  -FunctionsOnly -FunctionName <name>   deploy one function (SELF)
+For shared Firestore: van2\scripts\deploy-self.ps1 -App van2 -Target firestore
+"@
+  exit 1
+}
+if ($modeCount -gt 1) {
+  Write-Error 'Deployment blocked: specify only ONE of -StorageOnly, -HostingOnly, -FunctionsOnly.'
+  exit 1
+}
+
 $expectedFile = 'firebase.json'
 $expectedImpact = 'SELF:van2'
-if ($FunctionsOnly -and -not $HostingOnly) {
+if ($StorageOnly) {
+  $expectedFile = 'storage.rules'
+  $expectedImpact = 'SELF:van2'
+} elseif ($FunctionsOnly) {
   $expectedFile = 'functions'
   $expectedImpact = 'SELF:van2'
 }
@@ -84,7 +107,13 @@ if ($FinalAcknowledge -ne $expectedFinalAcknowledge) {
 Write-Host "[guard] Final acknowledgement accepted." -ForegroundColor Green
 
 $targets = @()
-if ($FunctionsOnly -and -not $HostingOnly) {
+
+if ($StorageOnly) {
+  & $storageScript -ConfirmDeploy $ConfirmDeploy -ConfirmFile 'storage.rules' -ConfirmImpact 'SELF:van2' -FinalAcknowledge $FinalAcknowledge -DryRun:$DryRun
+  exit $LASTEXITCODE
+}
+
+if ($FunctionsOnly) {
   if (-not $FunctionName -or $FunctionName.Count -eq 0) {
     Write-Error "Functions deploy is locked to explicit function names. Use: scripts/deploy-isolated.ps1 -FunctionsOnly -FunctionName verifyTopUpSlip"
     exit 1
@@ -109,11 +138,8 @@ if ($FunctionsOnly -and -not $HostingOnly) {
   }
 
   $env:FUNCTIONS_DISCOVERY_TIMEOUT = '30000'
-} elseif ($HostingOnly -and -not $FunctionsOnly) {
+} elseif ($HostingOnly) {
   $targets += "hosting:$hostingTarget"
-} else {
-  $targets += "hosting:$hostingTarget"
-  Write-Host 'Routine isolated deploy excludes functions. Use -FunctionsOnly -FunctionName <name> when you need to deploy a van2 function explicitly.' -ForegroundColor DarkYellow
 }
 
 if ($targets -contains "hosting:$hostingTarget") {

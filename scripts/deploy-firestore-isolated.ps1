@@ -50,6 +50,9 @@ if (-not (Test-Path $rulesFile)) {
   exit 1
 }
 
+$backupPath = Backup-VanFirestoreRules -SourcePath (Join-Path $appRoot $rulesFile) -Label 'firestore-default' -DryRun:$DryRun
+$env:VAN_LAST_FIRESTORE_BACKUP = $backupPath
+
 $tempConfig = '.firebase.firestore.van2.tmp.json'
 $config = @{
   firestore = @{

@@ -7,7 +7,7 @@ const logger = require('firebase-functions/logger');
 const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -47,6 +47,7 @@ const AGORA_APP_ID_SECRET = defineSecret('AGORA_APP_ID');
 const AGORA_APP_CERT_SECRET = defineSecret('AGORA_APP_CERTIFICATE');
 const AGORA_TTL_SECRET = defineSecret('AGORA_APP_TTL_SECONDS');
 const SLIPOK_API_KEY_SECRET = defineSecret('SLIPOK_API_KEY');
+const GOOGLE_GEOCODING_API_KEY_SECRET = defineSecret('GOOGLE_GEOCODING_API_KEY');
 
 const CUSTOMER_COLLECTIONS = ['customer_users', 'users'];
 const RIDER_COLLECTIONS = ['riders'];
@@ -58,6 +59,61 @@ let pricingConfigCache = {
   expiresAt: 0,
   rates: null,
 };
+
+function geocodeCacheId(latitude, longitude) {
+  return `${Number(latitude).toFixed(5)}_${Number(longitude).toFixed(5)}`;
+}
+
+function readGoogleAddressComponent(components, type) {
+  const match = components.find((component) => {
+    return Array.isArray(component.types) && component.types.includes(type);
+  });
+  return String(match?.long_name || '').trim();
+}
+
+function parseGoogleReverseGeocodeResult(payload, latitude, longitude) {
+  const result = Array.isArray(payload?.results) ? payload.results[0] : null;
+  if (!result) {
+    return null;
+  }
+
+  const components = Array.isArray(result.address_components)
+    ? result.address_components
+    : [];
+  const route = readGoogleAddressComponent(components, 'route');
+  const streetNumber = readGoogleAddressComponent(components, 'street_number');
+  const premise = readGoogleAddressComponent(components, 'premise');
+  const subPremise = readGoogleAddressComponent(components, 'subpremise');
+  const addressLine = [subPremise, premise, streetNumber, route]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  const subDistrict =
+    readGoogleAddressComponent(components, 'sublocality_level_2') ||
+    readGoogleAddressComponent(components, 'sublocality_level_1') ||
+    readGoogleAddressComponent(components, 'locality');
+  const district =
+    readGoogleAddressComponent(components, 'administrative_area_level_2') ||
+    readGoogleAddressComponent(components, 'locality');
+  const province = readGoogleAddressComponent(
+    components,
+    'administrative_area_level_1',
+  );
+  const postalCode = readGoogleAddressComponent(components, 'postal_code');
+
+  return {
+    latitude,
+    longitude,
+    formattedAddress: String(result.formatted_address || '').trim(),
+    addressLine,
+    subDistrict,
+    district,
+    province,
+    postalCode,
+    placeId: String(result.place_id || '').trim(),
+    source: 'google_geocoding',
+  };
+}
 
 function readRequiredSecret(secret, label) {
   const value = String(secret.value() || '').trim();
@@ -1299,6 +1355,107 @@ exports.calculateCartTotals = onCall(
   },
 );
 
+exports.reverseGeocodeDeliveryLocation = onCall(
+  {
+    region: DEFAULT_REGION,
+    secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนดึงที่อยู่');
+    }
+
+    const latitude = parseNumber(request.data?.latitude);
+    const longitude = parseNumber(request.data?.longitude);
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      throw new HttpsError('invalid-argument', 'พิกัดจัดส่งไม่ถูกต้อง');
+    }
+
+    const cacheId = geocodeCacheId(latitude, longitude);
+    const cacheRef = db.collection('geocode_cache').doc(cacheId);
+    const cacheSnapshot = await cacheRef.get();
+    const cacheData = cacheSnapshot.data();
+    const cacheTtlMs = 30 * 24 * 60 * 60 * 1000;
+    const cachedAtMs = cacheData?.cachedAt?.toMillis?.() || 0;
+    if (
+      cacheSnapshot.exists &&
+      cachedAtMs > 0 &&
+      Date.now() - cachedAtMs < cacheTtlMs &&
+      cacheData?.result
+    ) {
+      return {
+        ...cacheData.result,
+        cacheHit: true,
+      };
+    }
+
+    const apiKey = readRequiredConfiguredSecret(
+      GOOGLE_GEOCODING_API_KEY_SECRET,
+      'GOOGLE_GEOCODING_API_KEY',
+      'Google Geocoding',
+    );
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('latlng', `${latitude},${longitude}`);
+    url.searchParams.set('language', 'th');
+    url.searchParams.set('region', 'th');
+    url.searchParams.set('key', apiKey);
+
+    let response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      logger.error('reverseGeocodeDeliveryLocation network failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError('unavailable', 'เชื่อมต่อ Google Geocoding ไม่สำเร็จ');
+    }
+
+    const payload = await response.json().catch(() => null);
+    const status = String(payload?.status || '').trim();
+    if (!response.ok || status !== 'OK') {
+      logger.warn('reverseGeocodeDeliveryLocation google response not OK', {
+        httpStatus: response.status,
+        googleStatus: status,
+        errorMessage: payload?.error_message,
+      });
+      throw new HttpsError(
+        status === 'ZERO_RESULTS' ? 'not-found' : 'unavailable',
+        status === 'ZERO_RESULTS'
+          ? 'ไม่พบที่อยู่จากพิกัดนี้'
+          : 'ดึงที่อยู่จาก Google ไม่สำเร็จ',
+      );
+    }
+
+    const result = parseGoogleReverseGeocodeResult(payload, latitude, longitude);
+    if (!result) {
+      throw new HttpsError('not-found', 'ไม่พบที่อยู่จากพิกัดนี้');
+    }
+
+    await cacheRef.set(
+      {
+        latitude: Number(latitude.toFixed(7)),
+        longitude: Number(longitude.toFixed(7)),
+        result,
+        cachedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    return {
+      ...result,
+      cacheHit: false,
+    };
+  },
+);
+
 exports.verifyOrderPaymentSlip = onCall(
   {
     region: DEFAULT_REGION,
@@ -2043,6 +2200,104 @@ exports.normalizeVan2SlipOrders = onDocumentCreated(
     } catch (_) {
       // Do not fail the main normalization if timeline logging fails.
     }
+  },
+);
+
+function normalizeOrderStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function readOrderProductLines(data) {
+  const rawProducts = data?.products ?? data?.items;
+  if (!Array.isArray(rawProducts)) {
+    return [];
+  }
+
+  const lines = [];
+  for (const rawProduct of rawProducts) {
+    if (!rawProduct || typeof rawProduct !== 'object') {
+      continue;
+    }
+
+    const productId = String(
+      rawProduct.productId ||
+        rawProduct.product_id ||
+        rawProduct.id ||
+        rawProduct.docId ||
+        rawProduct.documentId ||
+        '',
+    ).trim();
+    if (!productId) {
+      continue;
+    }
+
+    const quantityRaw = Number(rawProduct.quantity);
+    const quantity = Number.isFinite(quantityRaw)
+      ? Math.max(1, Math.min(999, Math.floor(quantityRaw)))
+      : 1;
+    lines.push({ productId, quantity });
+  }
+
+  return lines;
+}
+
+exports.applyProductStatsOnDelivered = onDocumentUpdated(
+  {
+    region: DEFAULT_REGION,
+    document: 'orders/{orderId}',
+  },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (!before || !after) {
+      return;
+    }
+
+    const beforeStatus = normalizeOrderStatus(before.status);
+    const afterStatus = normalizeOrderStatus(after.status);
+    if (beforeStatus === afterStatus || afterStatus !== 'delivered') {
+      return;
+    }
+    if (after.statsApplied === true) {
+      return;
+    }
+
+    const lines = readOrderProductLines(after);
+    if (lines.length === 0) {
+      logger.info('applyProductStatsOnDelivered skipped: no product lines', {
+        orderId: event.params.orderId,
+      });
+      return;
+    }
+
+    const batch = db.batch();
+    for (const line of lines) {
+      batch.set(
+        db.collection('product_stats').doc(line.productId),
+        {
+          soldCount: FieldValue.increment(line.quantity),
+          lastSoldAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    batch.set(
+      event.data.after.ref,
+      {
+        statsApplied: true,
+        statsAppliedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    await batch.commit();
+
+    logger.info('applyProductStatsOnDelivered updated product stats', {
+      orderId: event.params.orderId,
+      lineCount: lines.length,
+    });
   },
 );
 

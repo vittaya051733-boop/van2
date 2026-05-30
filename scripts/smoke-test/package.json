@@ -1,0 +1,17 @@
+{
+  "name": "van-deploy-smoke-test",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test:rules": "node rules-emulator-test.js",
+    "test:live": "node live-firestore-test.js",
+    "test": "node run-all.js"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase-admin": "^13.6.0"
+  }
+}

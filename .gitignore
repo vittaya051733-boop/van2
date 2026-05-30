@@ -1,4 +1,10 @@
-# Miscellaneous
+# Firebase local emulator secrets (never commit real values)
+functions/.secret.local
+scripts/emulator-local.config.json
+
+# Flutter local dev session (machine mode / hot reload)
+.flutter-dev/
+
 *.class
 *.log
 *.pyc
@@ -43,3 +49,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Firestore rules deploy backups (local rollback only)
+scripts/deploy-backups/*.rules
+scripts/deploy-backups/LATEST.txt
+scripts/smoke-test-config.local.json
+scripts/smoke-test/node_modules/

@@ -63,6 +63,36 @@ service cloud.firestore {
       return data != null && data.isActive == true;
     }
 
+    function productCatalogAiFieldKeys() {
+      return [
+        'catalogType',
+        'catalogTypeSlug',
+        'catalogTypeSort',
+        'catalogHeading',
+        'catalogHeadingSlug',
+        'catalogHeadingSort',
+        'aiCatalogClassifiedAt',
+        'aiCatalogClassifierVersion',
+        'aiCatalogInputHash',
+      ];
+    }
+
+    function productCatalogAiFieldsAbsent() {
+      return !request.resource.data.keys().hasAny(productCatalogAiFieldKeys());
+    }
+
+    function productCatalogAiFieldsUnchanged() {
+      return request.resource.data.get('catalogType', null) == resource.data.get('catalogType', null)
+          && request.resource.data.get('catalogTypeSlug', null) == resource.data.get('catalogTypeSlug', null)
+          && request.resource.data.get('catalogTypeSort', null) == resource.data.get('catalogTypeSort', null)
+          && request.resource.data.get('catalogHeading', null) == resource.data.get('catalogHeading', null)
+          && request.resource.data.get('catalogHeadingSlug', null) == resource.data.get('catalogHeadingSlug', null)
+          && request.resource.data.get('catalogHeadingSort', null) == resource.data.get('catalogHeadingSort', null)
+          && request.resource.data.get('aiCatalogClassifiedAt', null) == resource.data.get('aiCatalogClassifiedAt', null)
+          && request.resource.data.get('aiCatalogClassifierVersion', null) == resource.data.get('aiCatalogClassifierVersion', null)
+          && request.resource.data.get('aiCatalogInputHash', null) == resource.data.get('aiCatalogInputHash', null);
+    }
+
     function isOrderParticipant(data) {
       return signedIn()
           && data != null
@@ -87,12 +117,12 @@ service cloud.firestore {
           && data != null
           && (
             (data.customerId != null && data.customerId == uid())
+            || (data.driverId != null && data.driverId == uid())
             || (
               !isUnverifiedPromptPayOrder(data)
               && (
                 (data.shopId != null && data.shopId == uid())
                 || (data.shopOwnerId != null && data.shopOwnerId == uid())
-                || (data.driverId != null && data.driverId == uid())
               )
             )
           );
@@ -157,14 +187,16 @@ service cloud.firestore {
 
       allow create: if signedIn()
           && (
-            request.resource.data.ownerUid == uid()
+            (request.resource.data.ownerUid == uid()
+                && productCatalogAiFieldsAbsent())
             || isPrivilegedAdmin()
           );
 
       allow update: if signedIn()
           && (
             (resource.data.ownerUid == uid()
-                && request.resource.data.ownerUid == uid())
+                && request.resource.data.ownerUid == uid()
+                && productCatalogAiFieldsUnchanged())
             || isPrivilegedAdmin()
           );
 
@@ -220,11 +252,32 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
     }
 
+    // แคชผล AI — เขียนโดย Cloud Function (Admin SDK) เท่านั้น
+    match /catalog_ai_cache/{hashId} {
+      allow get, list: if true;
+      allow write: if false;
+    }
+
+    match /product_ai_cache/{hashId} {
+      allow get, list: if false;
+      allow write: if false;
+    }
+
     // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
     match /public_shops/{shopId} {
-      allow get, list: if signedIn();
+      allow get, list: if true;
       allow create: if isSelf(shopId) || isPrivilegedAdmin();
       allow update, delete: if isSelf(shopId) || isPrivilegedAdmin();
+
+      match /catalog_types/{typeId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
+
+      match /catalog_headings/{headingId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
     }
 
     // เอกสารลงทะเบียนร้านค้า
@@ -383,6 +436,18 @@ service cloud.firestore {
     // ตั้งค่าแอดมิน van4 (อนุมัติอัตโนมัติ ฯลฯ)
     match /admin_config/{docId} {
       allow get, list: if isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ชั้นสินค้าหน้าแรก van2 (แอดมินแก้ไข / ลูกค้าอ่านได้)
+    match /platform_catalog/{docId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ยอดขายสินค้า (Cloud Function เขียน / ลูกค้าอ่านได้)
+    match /product_stats/{productId} {
+      allow get, list: if true;
       allow create, update, delete: if isPrivilegedAdmin();
     }
 

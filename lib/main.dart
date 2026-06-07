@@ -1598,30 +1598,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         longitude <= 180;
   }
 
-  Future<bool> _ensureLocationPermission() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      _showSnackBar('กรุณาเปิดบริการระบุตำแหน่งของอุปกรณ์');
-      return false;
-    }
-
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        _showSnackBar('กรุณาอนุญาตให้แอพเข้าถึงตำแหน่ง');
-        return false;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      _showSnackBar('กรุณาเปิดสิทธิ์ตำแหน่งจากการตั้งค่าเครื่อง');
-      return false;
-    }
-
-    return true;
-  }
-
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(
       context,
@@ -3835,7 +3811,6 @@ class _RiderSearchResult {
 class _QuickActionItem {
   const _QuickActionItem({
     required this.label,
-    this.badge,
     this.icon,
     this.iconColor,
     this.serviceType,
@@ -3843,7 +3818,6 @@ class _QuickActionItem {
   });
 
   final String label;
-  final String? badge;
   final IconData? icon;
   final Color? iconColor;
   final String? serviceType;
@@ -3938,14 +3912,12 @@ class _HeaderCircleButton extends StatelessWidget {
 
 class _HeaderAvatarBadge extends StatelessWidget {
   const _HeaderAvatarBadge({
-    this.label,
-    this.icon,
+    required this.icon,
     required this.backgroundColor,
     required this.foregroundColor,
   });
 
-  final String? label;
-  final IconData? icon;
+  final IconData icon;
   final Color backgroundColor;
   final Color foregroundColor;
 
@@ -3956,16 +3928,7 @@ class _HeaderAvatarBadge extends StatelessWidget {
       height: 48,
       decoration: BoxDecoration(color: backgroundColor, shape: BoxShape.circle),
       child: Center(
-        child: icon != null
-            ? Icon(icon, color: foregroundColor, size: 28)
-            : Text(
-                label ?? '',
-                style: TextStyle(
-                  color: foregroundColor,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 24,
-                ),
-              ),
+        child: Icon(icon, color: foregroundColor, size: 28),
       ),
     );
   }
@@ -3979,7 +3942,6 @@ class _DashboardTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconSize = item.badge == null ? 56.0 : 50.0;
     final labelFontSize = item.label.length > 8 ? 10.5 : 13.0;
 
     return InkWell(
@@ -3994,30 +3956,8 @@ class _DashboardTile extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            if (item.badge != null)
-              Align(
-                alignment: Alignment.topLeft,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFF6A00),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    item.badge!,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ),
             _SquareImagePlaceholder(
-              size: iconSize,
+              size: 56.0,
               icon: item.icon,
               iconColor: item.iconColor,
             ),

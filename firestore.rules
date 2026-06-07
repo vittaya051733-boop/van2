@@ -10,7 +10,9 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+      return signedIn()
+          && ('admin' in request.auth.token)
+          && request.auth.token.admin == true;
     }
 
     function isAdminFromRegistry() {
@@ -60,7 +62,11 @@ service cloud.firestore {
     }
 
     function isPublicProductVisible(data) {
-      return data != null && data.isActive == true;
+      return data != null
+          && (
+            data.isActive == true
+            || data.canShipNationwide == true
+          );
     }
 
     function productCatalogAiFieldKeys() {
@@ -152,6 +158,26 @@ service cloud.firestore {
           );
     }
 
+    function canWriteFriendPreview(userId, friendId) {
+      return isSelf(userId)
+          || (
+            signedIn()
+            && uid() == friendId
+            && request.resource.data.uid == friendId
+          );
+    }
+
+    function canMarkOwnNotificationRead() {
+      return signedIn()
+          && resource.data.recipientUid == uid()
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isRead',
+            'readAt',
+            'read'
+          ]);
+    }
+
     function isCallParticipant(data) {
       return signedIn()
           && data != null
@@ -159,6 +185,311 @@ service cloud.firestore {
             (data.callerId != null && data.callerId == uid())
             || (data.calleeId != null && data.calleeId == uid())
           );
+    }
+
+    function isChatParticipant(chatId) {
+      return signedIn()
+          && exists(/databases/$(database)/documents/chats/$(chatId))
+          && uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function canDeleteExpiredChatMessage(chatId) {
+      return isChatParticipant(chatId)
+          && resource.data.expiresAt != null
+          && resource.data.expiresAt <= request.time;
+    }
+
+    function isDeliveredCustomerOrder(orderId) {
+      return signedIn()
+          && exists(/databases/$(database)/documents/orders/$(orderId))
+          && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == uid()
+          && get(/databases/$(database)/documents/orders/$(orderId)).data.status == 'delivered';
+    }
+
+    function reviewRatingIsValid(data) {
+      return data.rating is number && data.rating >= 1 && data.rating <= 5;
+    }
+
+    function reviewCommentIsValid(data) {
+      return !('comment' in data)
+          || (data.comment is string && data.comment.size() <= 1000);
+    }
+
+    function reviewImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    // รองรับออเดอร์เก่าที่ shopOwnerId ไม่ได้บันทึก แต่ยังผูกกับ shopId เดิม
+    function orderShopOwnerMatches(order, shopOwnerId) {
+      return shopOwnerId is string
+          && (
+            ('shopOwnerId' in order && order.shopOwnerId == shopOwnerId)
+            || (
+              !('shopOwnerId' in order)
+              && 'shopId' in order
+              && order.shopId == shopOwnerId
+            )
+          );
+    }
+
+    // รองรับออเดอร์เก่าที่ไม่มี productIds[] แต่มี products ในออเดอร์
+    function orderIncludesProductId(order, productId) {
+      return !('productIds' in order)
+          || (order.productIds is list && productId in order.productIds);
+    }
+
+    // รองรับ driverId หรือ deliveryProofCapturedById หลังไรเดอร์ส่งสำเร็จ
+    function orderRiderMatches(order, riderId) {
+      return riderId is string
+          && (
+            ('driverId' in order && order.driverId == riderId)
+            || (
+              'deliveryProofCapturedById' in order
+              && order.deliveryProofCapturedById == riderId
+            )
+          );
+    }
+
+    function canCreateProductReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.productId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.productId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && order.shopId == request.resource.data.shopId
+          && orderShopOwnerMatches(order, request.resource.data.shopOwnerId)
+          && orderIncludesProductId(order, request.resource.data.productId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canCreateShopReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.shopId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && order.shopId == request.resource.data.shopId
+          && orderShopOwnerMatches(order, request.resource.data.shopOwnerId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnReview() {
+      return signedIn()
+          && resource.data.customerId == uid()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.orderId == resource.data.orderId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.shopOwnerId == resource.data.shopOwnerId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'rating',
+            'comment',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canReadReview(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.customerId == uid())
+          || (signedIn() && data.shopOwnerId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function canCreateRiderReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.riderId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.riderId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && orderRiderMatches(order, request.resource.data.riderId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnRiderReview() {
+      return signedIn()
+          && resource.data.customerId == uid()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.orderId == resource.data.orderId
+          && request.resource.data.riderId == resource.data.riderId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'rating',
+            'comment',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canReadRiderReview(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.customerId == uid())
+          || (signedIn() && data.riderId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function adminSupportSourceIsValid(sourceApp) {
+      return sourceApp == 'van1' || sourceApp == 'van2' || sourceApp == 'van3';
+    }
+
+    function adminSupportImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    function canCreateAdminSupportTicket() {
+      return signedIn()
+          && request.resource.data.requesterUid == uid()
+          && adminSupportSourceIsValid(request.resource.data.sourceApp)
+          && request.resource.data.sourceLabel is string
+          && request.resource.data.sourceLabel.size() > 0
+          && request.resource.data.sourceLabel.size() <= 40
+          && request.resource.data.requesterName is string
+          && request.resource.data.requesterName.size() <= 120
+          && request.resource.data.topicKey is string
+          && request.resource.data.topicKey.size() > 0
+          && request.resource.data.topicKey.size() <= 64
+          && request.resource.data.topicLabel is string
+          && request.resource.data.topicLabel.size() > 0
+          && request.resource.data.topicLabel.size() <= 120
+          && request.resource.data.message is string
+          && request.resource.data.message.size() > 0
+          && request.resource.data.message.size() <= 2000
+          && request.resource.data.status == 'open'
+          && adminSupportImageUrlsIsValid(request.resource.data)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && (!('requesterPhone' in request.resource.data)
+              || request.resource.data.requesterPhone is string)
+          && (!('unreadForRequester' in request.resource.data)
+              || request.resource.data.unreadForRequester == false)
+          && (!('unreadForAdmin' in request.resource.data)
+              || request.resource.data.unreadForAdmin is bool)
+          && (!('lastMessagePreview' in request.resource.data)
+              || request.resource.data.lastMessagePreview is string)
+          && (!('lastMessageRole' in request.resource.data)
+              || request.resource.data.lastMessageRole == 'requester')
+          && (!('lastMessageAt' in request.resource.data)
+              || request.resource.data.lastMessageAt == request.time);
+    }
+
+    function adminSupportTicketDoc(ticketId) {
+      return get(/databases/$(database)/documents/admin_support_tickets/$(ticketId));
+    }
+
+    function canReadAdminSupportTicket(ticketId) {
+      return isPrivilegedAdmin()
+          || (
+            signedIn()
+            && adminSupportTicketDoc(ticketId).data != null
+            && adminSupportTicketDoc(ticketId).data.requesterUid == uid()
+          );
+    }
+
+    function adminSupportTicketIsOpen(ticketId) {
+      let ticket = adminSupportTicketDoc(ticketId).data;
+      return ticket != null
+          && ticket.status != 'closed'
+          && (!('contactClosed' in ticket) || ticket.contactClosed != true);
+    }
+
+    function canCreateAdminSupportMessage(ticketId) {
+      let ticket = adminSupportTicketDoc(ticketId).data;
+      return signedIn()
+          && adminSupportTicketIsOpen(ticketId)
+          && ticket != null
+          && request.resource.data.senderUid == uid()
+          && request.resource.data.senderRole in ['admin', 'requester']
+          && request.resource.data.senderName is string
+          && request.resource.data.senderName.size() > 0
+          && request.resource.data.senderName.size() <= 120
+          && request.resource.data.message is string
+          && request.resource.data.message.size() > 0
+          && request.resource.data.message.size() <= 2000
+          && adminSupportImageUrlsIsValid(request.resource.data)
+          && request.resource.data.createdAt == request.time
+          && (
+            (isPrivilegedAdmin() && request.resource.data.senderRole == 'admin')
+            || (ticket.requesterUid == uid() && request.resource.data.senderRole == 'requester')
+          );
+    }
+
+    function canRequesterUpdateAdminSupportTicket() {
+      return signedIn()
+          && resource.data.requesterUid == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'lastMessageAt',
+            'lastMessagePreview',
+            'lastMessageRole',
+            'unreadForAdmin',
+            'unreadForRequester',
+            'updatedAt'
+          ])
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['unreadForRequester'])
+            || request.resource.data.unreadForRequester == false
+          );
+    }
+
+    function canAdminUpdateAdminSupportTicket() {
+      return isPrivilegedAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'lastMessageAt',
+            'lastMessagePreview',
+            'lastMessageRole',
+            'unreadForRequester',
+            'unreadForAdmin',
+            'assignedAdminUid',
+            'contactClosed',
+            'closedAt',
+            'closedByAdminUid',
+            'updatedAt'
+          ]);
+    }
+
+    function canCreateAdminSupportKnowledge(ticketId) {
+      return isPrivilegedAdmin()
+          && request.resource.data.ticketId == ticketId
+          && request.resource.data.sourceApp is string
+          && request.resource.data.topicKey is string
+          && request.resource.data.topicLabel is string
+          && request.resource.data.question is string
+          && request.resource.data.question.size() > 0
+          && request.resource.data.transcript is list
+          && request.resource.data.qaPairs is list
+          && request.resource.data.status == 'closed'
+          && request.resource.data.closedAt == request.time;
     }
 
     // แอปเช็คอัปเดต ต้องอ่านได้ก่อนล็อกอิน (ใช้ใน AppUpdateGate)
@@ -177,6 +508,38 @@ service cloud.firestore {
     match /pricing_config/{docId} {
       allow get, list: if true;
       allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // โปรโมชั่นอัตโนมัติ — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน
+    match /promotions/{promotionId} {
+      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // คูปอง — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน (ตรวจโค้ดจริงบน Cloud Functions)
+    match /coupons/{couponId} {
+      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // บันทึกการใช้คูปอง/โปร — เขียนผ่าน Cloud Functions เท่านั้น
+    match /coupon_redemptions/{redemptionId} {
+      allow get: if signedIn() && resource.data.userId == uid();
+      allow list: if isPrivilegedAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // รูปแบบแสดงโปร/คูปองบน van2
+    match /promotion_display_config/{docId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตะกร้า van2 — อ่านได้เฉพาะเจ้าของ (เขียน/คืนสต๊อกผ่าน Cloud Functions เท่านั้น)
+    match /van2_cart_sessions/{customerUid} {
+      allow get: if signedIn() && uid() == customerUid;
+      allow list: if false;
+      allow create, update, delete: if false;
     }
 
     // สินค้า (แอปโหลดจาก collection('products'))
@@ -211,6 +574,37 @@ service cloud.firestore {
       }
     }
 
+    match /product_reviews/{reviewId} {
+      allow get, list: if canReadReview(resource.data);
+      allow create: if canCreateProductReview(reviewId);
+      allow update: if canUpdateOwnReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /shop_reviews/{reviewId} {
+      allow get, list: if canReadReview(resource.data);
+      allow create: if canCreateShopReview(reviewId);
+      allow update: if canUpdateOwnReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /rider_reviews/{reviewId} {
+      allow get, list: if canReadRiderReview(resource.data);
+      allow create: if canCreateRiderReview(reviewId);
+      allow update: if canUpdateOwnRiderReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /product_review_stats/{productId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    match /shop_review_stats/{shopId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
     // โปรไฟล์ผู้ใช้ฝั่งลูกค้า (ใช้เก็บ fcmToken ฯลฯ)
     match /customer_users/{userId} {
       allow get: if isSelf(userId) || isPrivilegedAdmin();
@@ -219,7 +613,8 @@ service cloud.firestore {
 
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
-        allow create, update, delete: if isSelf(userId);
+        allow create, update: if canWriteFriendPreview(userId, friendId);
+        allow delete: if isSelf(userId);
       }
     }
 
@@ -231,7 +626,8 @@ service cloud.firestore {
 
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
-        allow create, update, delete: if isSelf(userId);
+        allow create, update: if canWriteFriendPreview(userId, friendId);
+        allow delete: if isSelf(userId);
       }
     }
 
@@ -260,6 +656,13 @@ service cloud.firestore {
 
     match /product_ai_cache/{hashId} {
       allow get, list: if false;
+      allow write: if false;
+    }
+
+    // คิว AI — ร้านค้าอ่านสถานะคิวของตัวเองได้ (เขียนโดย Cloud Function เท่านั้น)
+    match /ai_processing_queue/{jobId} {
+      allow get: if signedIn() && resource.data.uid == uid();
+      allow list: if false;
       allow write: if false;
     }
 
@@ -330,12 +733,11 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
 
       match /messages/{messageId} {
-        allow get, list: if signedIn()
-            && (uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
-        allow create: if signedIn()
-            && (uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+        allow get, list: if isChatParticipant(chatId);
+        allow create: if isChatParticipant(chatId)
             && request.resource.data.senderId == uid();
-        allow update, delete: if isPrivilegedAdmin();
+        allow update: if isPrivilegedAdmin();
+        allow delete: if isPrivilegedAdmin() || canDeleteExpiredChatMessage(chatId);
       }
     }
 
@@ -394,9 +796,7 @@ service cloud.firestore {
     match /app_notifications/{notificationId} {
       allow create: if canCreateAppNotification();
       allow get, list: if signedIn() && resource.data.recipientUid == uid();
-      allow update: if signedIn()
-          && resource.data.recipientUid == uid()
-          && request.resource.data.recipientUid == resource.data.recipientUid;
+      allow update: if canMarkOwnNotificationRead();
       allow delete: if isPrivilegedAdmin();
     }
 
@@ -420,7 +820,10 @@ service cloud.firestore {
             || isPrivilegedAdmin()
           )
           && request.resource.data.adminReviewStatus == 'pending'
-          && request.resource.data.aiIsLegalInThailand == false;
+          && (
+            request.resource.data.aiIsLegalInThailand == false
+            || request.resource.data.aiRequiresAdminReview == true
+          );
 
       allow get: if signedIn()
           && (
@@ -449,6 +852,31 @@ service cloud.firestore {
     match /product_stats/{productId} {
       allow get, list: if true;
       allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ติดต่อแอดมิน — van1/van2/van3 ส่ง / van4 อ่านและตอบกลับ
+    match /admin_support_tickets/{ticketId} {
+      allow get: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.requesterUid == uid());
+      allow list: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.requesterUid == uid());
+      allow create: if canCreateAdminSupportTicket();
+      allow update: if canAdminUpdateAdminSupportTicket()
+          || canRequesterUpdateAdminSupportTicket();
+      allow delete: if isPrivilegedAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if canReadAdminSupportTicket(ticketId);
+        allow create: if canCreateAdminSupportMessage(ticketId);
+        allow update, delete: if isPrivilegedAdmin();
+      }
+    }
+
+    // คลัง Q&A จากเคสที่ปิดแล้ว — สำหรับแชทบอทในอนาคต (แอดมินเท่านั้น)
+    match /admin_support_knowledge/{ticketId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if canCreateAdminSupportKnowledge(ticketId);
+      allow update, delete: if isPrivilegedAdmin();
     }
 
     // Default deny

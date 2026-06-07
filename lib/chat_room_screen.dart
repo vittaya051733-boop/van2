@@ -12,6 +12,7 @@ import 'models/chat_message.dart';
 import 'models/user_profile.dart';
 import 'services/chat_service.dart';
 import 'services/friend_service.dart';
+import 'widgets/cached_app_avatar.dart';
 import 'widgets/cached_app_image.dart';
 
 class ChatRoomScreen extends StatefulWidget {
@@ -118,13 +119,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            CircleAvatar(
-              backgroundImage: widget.friendProfile.photoUrl != null
-                  ? NetworkImage(widget.friendProfile.photoUrl!)
-                  : null,
-              child: widget.friendProfile.photoUrl == null
-                  ? Text(friendInitial)
-                  : null,
+            CachedAppAvatar(
+              imageUrl: widget.friendProfile.photoUrl,
+              radius: 18,
+              fallback: Text(friendInitial),
             ),
             const SizedBox(width: 12),
             Expanded(

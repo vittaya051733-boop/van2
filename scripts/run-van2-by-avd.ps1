@@ -39,7 +39,7 @@ if (-not $target) {
 }
 
 $apk = Join-Path $appRoot 'build\app\outputs\flutter-apk\app-debug.apk'
-$packageName = 'van.merchant'
+$packageName = 'Van2.com'
 $activityName = 'van.merchant.MainActivity'
 
 Write-Host "Building van2 debug APK for $target" -ForegroundColor Cyan

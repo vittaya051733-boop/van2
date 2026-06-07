@@ -407,6 +407,58 @@ function Invoke-VanDeployPreflight {
   Write-Host "[preflight] $App / $Target OK (project $($cfg.ProjectId))" -ForegroundColor Green
 }
 
+function Get-VanJavaMajorVersion {
+  param([string]$JavaExe = 'java')
+
+  $previousEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = @(& $JavaExe -version 2>&1)
+  }
+  finally {
+    $ErrorActionPreference = $previousEap
+  }
+
+  if (-not $output -or $output.Count -eq 0) {
+    return 0
+  }
+
+  $text = $output[0].ToString()
+  if ($text -match 'version "(\d+)') {
+    return [int]$Matches[1]
+  }
+  return 0
+}
+
+function Test-VanJava21Ready {
+  if ((Get-VanJavaMajorVersion) -ge 21) {
+    return $true
+  }
+
+  if ($env:JAVA_HOME) {
+    $fromHome = Join-Path $env:JAVA_HOME 'bin\java.exe'
+    if ((Test-Path $fromHome) -and (Get-VanJavaMajorVersion -JavaExe $fromHome) -ge 21) {
+      return $true
+    }
+  }
+
+  $knownPatterns = @(
+    'C:\Program Files\Android\Android Studio\jbr\bin\java.exe'
+    'C:\Program Files\Eclipse Adoptium\jdk-21*\bin\java.exe'
+    'C:\Program Files\Microsoft\jdk-21*\bin\java.exe'
+    'C:\Program Files\Java\jdk-21*\bin\java.exe'
+  )
+  foreach ($pattern in $knownPatterns) {
+    Get-Item $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+      if ((Get-VanJavaMajorVersion -JavaExe $_.FullName) -ge 21) {
+        return $true
+      }
+    }
+  }
+
+  return $false
+}
+
 function Invoke-VanDeployReadiness {
   param(
     [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
@@ -498,6 +550,10 @@ function Invoke-VanDeployReadiness {
         Write-ReadinessCheck -Label 'Canonical rules synced to van1/van3' -Ok $false -Hint 'Run: van2\scripts\sync-firestore-rules.ps1'
       }
     }
+
+    $javaOk = Test-VanJava21Ready
+    Write-ReadinessCheck -Label 'Java 21+ for emulator pre-deploy gate' -Ok $javaOk -Hint 'Install JDK 21+ or set JAVA_HOME to Android Studio JBR'
+    Write-ReadinessCheck -Label 'Node.js in PATH (smoke test)' -Ok ([bool](Get-Command node -ErrorAction SilentlyContinue)) -Hint 'Install Node 20+'
   }
 
   if ($Target -in @('firestore', 'functions')) {

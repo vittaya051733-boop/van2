@@ -30,7 +30,9 @@ param(
   [switch]$DryRun,
   [switch]$BuildWeb,
   [switch]$SkipReadiness,
-  [switch]$SkipPostGuide
+  [switch]$SkipPostGuide,
+  [switch]$SkipPreDeploySmoke,
+  [switch]$AllowSkipEmulatorSmoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +52,43 @@ if (-not $SkipReadiness) {
 }
 
 $script:VanLastFirestoreBackupPath = $null
+
+function Invoke-VanFirestoreSmokeGate {
+  param(
+    [Parameter(Mandatory)][ValidateSet('PreDeploy', 'PostDeploy')][string]$Phase
+  )
+
+  $smokeScript = Join-Path $scriptRoot 'deploy-smoke-test.ps1'
+  if (-not (Test-Path $smokeScript)) {
+    throw "Missing smoke test script: $smokeScript"
+  }
+
+  $smokeArgs = @{
+    AfterTarget = 'firestore'
+    Phase       = $Phase
+    SkipLive    = $true
+  }
+  if ($AllowSkipEmulatorSmoke) {
+    $smokeArgs.AllowSkipEmulator = $true
+  }
+  if ($Phase -eq 'PostDeploy') {
+    $smokeArgs.Remove('SkipLive')
+  }
+
+  if ($Phase -eq 'PreDeploy') {
+    Write-Host ''
+    Write-Host '=== Pre-Deploy Firestore Gate ===' -ForegroundColor Cyan
+  }
+
+  & $smokeScript @smokeArgs
+  if ($LASTEXITCODE -ne 0) {
+    if ($Phase -eq 'PreDeploy') {
+      throw 'Pre-deploy smoke gate failed — Firestore deploy blocked. Fix rules/emulator (Java 21+) first.'
+    }
+    return $false
+  }
+  return $true
+}
 
 function Invoke-VanDeploySelfTarget {
   param(
@@ -130,18 +169,32 @@ function Invoke-VanDeploySelfTarget {
   }
 }
 
+if ($Target -eq 'firestore' -and $App -eq 'van2' -and -not $SkipPreDeploySmoke -and -not $DryRun) {
+  Invoke-VanFirestoreSmokeGate -Phase PreDeploy
+}
+
 Invoke-VanDeploySelfTarget
 $exitCode = $LASTEXITCODE
 
 if (-not $SkipPostGuide -and -not $DryRun -and $exitCode -eq 0) {
   $needsSmoke = $Target -in @('firestore', 'functions', 'firestore-van4')
   if ($needsSmoke) {
-    $smokeScript = Join-Path $scriptRoot 'deploy-smoke-test.ps1'
-    if (Test-Path $smokeScript) {
-      & $smokeScript -AfterTarget $Target
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host 'WARNING: Smoke test failed after deploy. Consider rollback.' -ForegroundColor Red
-        exit $LASTEXITCODE
+    if ($Target -eq 'firestore') {
+      $postOk = Invoke-VanFirestoreSmokeGate -Phase PostDeploy
+      if (-not $postOk) {
+        Write-Host 'WARNING: Post-deploy emulator smoke failed. Consider rollback (see DEPLOY_CONNECTION_SIGNALS.md).' -ForegroundColor Red
+        Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $script:VanLastFirestoreBackupPath
+        exit 1
+      }
+    }
+    else {
+      $smokeScript = Join-Path $scriptRoot 'deploy-smoke-test.ps1'
+      if (Test-Path $smokeScript) {
+        & $smokeScript -AfterTarget $Target -Phase PostDeploy
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host 'WARNING: Smoke test failed after deploy. Consider rollback.' -ForegroundColor Red
+          exit $LASTEXITCODE
+        }
       }
     }
   }

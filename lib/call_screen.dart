@@ -9,7 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'models/user_profile.dart';
 import 'services/notification_service.dart';
-import 'widgets/cached_app_image.dart';
+import 'widgets/cached_app_avatar.dart';
 
 class CallScreen extends StatefulWidget {
   final String channelName;
@@ -105,7 +105,7 @@ class _CallScreenState extends State<CallScreen> {
     } else {
       // ฝั่งผู้รับเล่นเสียงเรียกเข้าจากไฟล์ K-pop
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _startRingtone('k-pop-ringtone-no-copyright-357142.mp3');
+        _startRingtone('ringback-incoming.m4a');
       });
     }
   }
@@ -114,7 +114,7 @@ class _CallScreenState extends State<CallScreen> {
     if (!await _ensurePermissions()) return;
     await _initAgora();
     if (!mounted || _fatalError != null) return;
-    _startRingtone('topping-pop-sound-245150.mp3');
+    _startRingtone('ringback-outgoing.m4a');
   }
 
   Future<bool> _ensurePermissions() async {
@@ -495,19 +495,18 @@ class _CallScreenState extends State<CallScreen> {
                 ],
               ),
             ),
-            Container(
-              width: 160,
-              height: 160,
-              decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
-              child: ClipOval(
-                child: widget.targetProfile.photoUrl != null
-                  ? CachedAppImage(imageUrl: widget.targetProfile.photoUrl!, fit: BoxFit.cover)
-                    : Center(
-                        child: Text(
-                          displayInitial,
-                          style: const TextStyle(fontSize: 64, color: Colors.white70, fontWeight: FontWeight.w600),
-                        ),
-                      ),
+            CachedAppAvatar(
+              imageUrl: widget.targetProfile.photoUrl,
+              radius: 80,
+              backgroundColor: Colors.white10,
+              maxCachePx: 150,
+              fallback: Text(
+                displayInitial,
+                style: const TextStyle(
+                  fontSize: 64,
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             Padding(
@@ -652,19 +651,18 @@ class _CallScreenState extends State<CallScreen> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Container(
-          width: 160,
-          height: 160,
-          decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
-          child: ClipOval(
-            child: widget.targetProfile.photoUrl != null
-              ? CachedAppImage(imageUrl: widget.targetProfile.photoUrl!, fit: BoxFit.cover)
-                : Center(
-                    child: Text(
-                      displayInitial,
-                      style: const TextStyle(fontSize: 64, color: Colors.white70, fontWeight: FontWeight.w600),
-                    ),
-                  ),
+        CachedAppAvatar(
+          imageUrl: widget.targetProfile.photoUrl,
+          radius: 80,
+          backgroundColor: Colors.white10,
+          maxCachePx: 150,
+          fallback: Text(
+            displayInitial,
+            style: const TextStyle(
+              fontSize: 64,
+              color: Colors.white70,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         const SizedBox(height: 24),

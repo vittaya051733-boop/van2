@@ -22,6 +22,8 @@ param(
 
   [switch]$DryRunOnly,
   [switch]$Execute,
+  [switch]$SkipPreDeploySmoke,
+  [switch]$AllowSkipEmulatorSmoke,
 
   [string]$ConfirmDeploy,
   [string]$ConfirmFile,
@@ -66,9 +68,26 @@ if ($ConfirmDeploy) { $selfArgs.ConfirmDeploy = $ConfirmDeploy }
 if ($ConfirmFile) { $selfArgs.ConfirmFile = $ConfirmFile }
 if ($ConfirmImpact) { $selfArgs.ConfirmImpact = $ConfirmImpact }
 if ($FunctionName) { $selfArgs.FunctionName = $FunctionName }
+if ($SkipPreDeploySmoke) { $selfArgs.SkipPreDeploySmoke = $true }
+if ($AllowSkipEmulatorSmoke) { $selfArgs.AllowSkipEmulatorSmoke = $true }
 
 if ($DryRunOnly) {
   Write-Host '(plan) Dry-run mode - item 5 - no real deploy' -ForegroundColor Yellow
+  if ($Target -eq 'firestore' -and $App -eq 'van2' -and -not $SkipPreDeploySmoke) {
+    Write-Host '(plan) Running pre-deploy smoke gate (rules compile + emulator)...' -ForegroundColor Cyan
+    $smokeScript = Join-Path $scriptRoot 'deploy-smoke-test.ps1'
+    $smokeArgs = @{
+      AfterTarget = 'firestore'
+      Phase       = 'PreDeploy'
+      SkipLive    = $true
+    }
+    if ($AllowSkipEmulatorSmoke) { $smokeArgs.AllowSkipEmulator = $true }
+    & $smokeScript @smokeArgs
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'Pre-deploy gate failed — fix rules/emulator before deploy.' -ForegroundColor Red
+      exit $LASTEXITCODE
+    }
+  }
   & $selfScript @selfArgs -DryRun
   exit $LASTEXITCODE
 }

@@ -1,33 +1,25 @@
-﻿import 'dart:async';
+import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'catalog_search_utils.dart';
 import 'public_catalog_service.dart';
+import 'services/catalog_share.dart';
+import 'services/favorites_service.dart';
+import 'services/app_image_prefetch.dart';
+import 'services/catalog_product_media_prefetch.dart';
 import 'tax_pricing_policy.dart';
+import 'utils/catalog_product_image_url.dart';
+import 'widgets/cached_app_image.dart';
+import 'widgets/catalog_product_media_carousel.dart';
+import 'widgets/product_discount_badge.dart';
+import 'widgets/product_discount_price.dart';
 
 part 'catalog_product_detail_pager.dart';
 part 'catalog_shop_browser.dart';
-
-class _LocalFirstImageCacheManager extends CacheManager {
-  _LocalFirstImageCacheManager._()
-    : super(
-        Config(
-          'van2_local_first_images',
-          stalePeriod: const Duration(days: 3650),
-          maxNrOfCacheObjects: 2000,
-        ),
-      );
-
-  static final _LocalFirstImageCacheManager instance =
-      _LocalFirstImageCacheManager._();
-}
-
-final CacheManager _localFirstImageCacheManager =
-    _LocalFirstImageCacheManager.instance;
 
 class CartProductSelection {
   const CartProductSelection({
@@ -38,6 +30,9 @@ class CartProductSelection {
     required this.shopLongitude,
     required this.productName,
     required this.unitPrice,
+    required this.merchantBasePrice,
+    required this.discountPercent,
+    required this.merchantUnitPayout,
     required this.imageUrl,
     required this.selectedToppings,
     required this.quantity,
@@ -56,6 +51,9 @@ class CartProductSelection {
   final double? shopLongitude;
   final String productName;
   final num unitPrice;
+  final num merchantBasePrice;
+  final double discountPercent;
+  final num merchantUnitPayout;
   final String? imageUrl;
   final List<String> selectedToppings;
   final int quantity;
@@ -70,11 +68,13 @@ class CartProductSelection {
 class _ToppingOption {
   const _ToppingOption({
     required this.label,
+    required this.rawPrice,
     required this.adjustedPrice,
     required this.displayLabel,
   });
 
   final String label;
+  final num rawPrice;
   final num adjustedPrice;
   final String displayLabel;
 }
@@ -159,7 +159,16 @@ class CategoryCatalogScreen extends StatelessWidget {
               Expanded(
                 child: ColoredBox(
                   color: const Color(0xFFF4FAFB),
-                  child: _buildCatalogList(),
+                  child: _CategoryCatalogBody(
+                    title: title,
+                    serviceType: serviceType,
+                    shopIdFilter: shopIdFilter,
+                    nationwideShippingOnly: nationwideShippingOnly,
+                    customerLatitude: customerLatitude,
+                    customerLongitude: customerLongitude,
+                    onConfirmOrder: onConfirmOrder,
+                    onNavigateToCart: onNavigateToCart,
+                  ),
                 ),
               ),
             ],
@@ -180,12 +189,144 @@ class CategoryCatalogScreen extends StatelessWidget {
           statusBarBrightness: Brightness.dark,
         ),
       ),
-      body: _buildCatalogList(),
+      body: _CategoryCatalogBody(
+        title: title,
+        serviceType: serviceType,
+        shopIdFilter: shopIdFilter,
+        nationwideShippingOnly: nationwideShippingOnly,
+        customerLatitude: customerLatitude,
+        customerLongitude: customerLongitude,
+        onConfirmOrder: onConfirmOrder,
+        onNavigateToCart: onNavigateToCart,
+      ),
+    );
+  }
+}
+
+class _CategoryCatalogBody extends StatefulWidget {
+  const _CategoryCatalogBody({
+    required this.title,
+    required this.serviceType,
+    this.shopIdFilter,
+    this.nationwideShippingOnly = false,
+    this.customerLatitude,
+    this.customerLongitude,
+    this.onConfirmOrder,
+    this.onNavigateToCart,
+  });
+
+  final String title;
+  final String serviceType;
+  final String? shopIdFilter;
+  final bool nationwideShippingOnly;
+  final double? customerLatitude;
+  final double? customerLongitude;
+  final ValueChanged<CartProductSelection>? onConfirmOrder;
+  final VoidCallback? onNavigateToCart;
+
+  @override
+  State<_CategoryCatalogBody> createState() => _CategoryCatalogBodyState();
+}
+
+class _CategoryCatalogBodyState extends State<_CategoryCatalogBody> {
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  List<PublicCatalogSection>? _initialSections;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_hydrateFromLocalCache());
+  }
+
+  Future<List<PublicCatalogSection>> _loadSectionsFromLocalCache() {
+    final normalizedShopId = widget.shopIdFilter?.trim();
+    if (normalizedShopId != null && normalizedShopId.isNotEmpty) {
+      return PublicCatalogService.sectionsFromLocalCache(
+        shopId: normalizedShopId,
+      );
+    }
+    if (widget.nationwideShippingOnly) {
+      return PublicCatalogService.sectionsFromLocalCache(
+        nationwideShippingOnly: true,
+      );
+    }
+    if (widget.serviceType.trim().isNotEmpty) {
+      return PublicCatalogService.sectionsFromLocalCache(
+        serviceType: widget.serviceType,
+      );
+    }
+    return Future<List<PublicCatalogSection>>.value(
+      const <PublicCatalogSection>[],
+    );
+  }
+
+  String? get _prefetchCategoryKey {
+    if (widget.nationwideShippingOnly) {
+      return AppImagePrefetch.nationwideKey;
+    }
+    if (widget.serviceType.trim().isNotEmpty) {
+      return AppImagePrefetch.serviceTypeKey(widget.serviceType);
+    }
+    return null;
+  }
+
+  Future<void> _hydrateFromLocalCache() async {
+    try {
+      final sections = await _loadSectionsFromLocalCache();
+      if (!mounted || sections.isEmpty) {
+        return;
+      }
+      setState(() => _initialSections = sections);
+      if (widget.nationwideShippingOnly) {
+        await AppImagePrefetch.continueWarmNationwide();
+      } else if (widget.serviceType.trim().isNotEmpty) {
+        await AppImagePrefetch.continueWarmForServiceType(widget.serviceType);
+      } else {
+        await AppImagePrefetch.prefetchCatalogSectionsImmediate(sections);
+      }
+    } catch (_) {
+      // StreamBuilder still paints from network/cache.
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String get _searchHint {
+    if (widget.nationwideShippingOnly) {
+      return 'ค้นหาสินค้าส่งทั่วประเทศ';
+    }
+    final normalizedShopId = widget.shopIdFilter?.trim();
+    if (normalizedShopId != null && normalizedShopId.isNotEmpty) {
+      return 'ค้นหาสินค้าในร้านนี้';
+    }
+    if (widget.serviceType.trim().isNotEmpty) {
+      return 'ค้นหาสินค้าในหมวด${widget.title}';
+    }
+    return 'ค้นหาสินค้า';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        CatalogSearchBar(
+          controller: _searchController,
+          hintText: _searchHint,
+          onChanged: (value) => setState(() => _searchQuery = value),
+        ),
+        Expanded(child: _buildCatalogList()),
+      ],
     );
   }
 
   Widget _buildCatalogList() {
-    final normalizedShopId = shopIdFilter?.trim();
+    final normalizedShopId = widget.shopIdFilter?.trim();
     final bool filterByShop =
         normalizedShopId != null && normalizedShopId.isNotEmpty;
 
@@ -194,23 +335,18 @@ class CategoryCatalogScreen extends StatelessWidget {
       sectionsStream = PublicCatalogService.streamSectionsByShopId(
         normalizedShopId,
       );
-    } else if (nationwideShippingOnly) {
+    } else if (widget.nationwideShippingOnly) {
       sectionsStream = PublicCatalogService.streamNationwideShippingSections();
     } else {
       sectionsStream = PublicCatalogService.streamSectionsByServiceType(
-        serviceType,
+        widget.serviceType,
       );
     }
 
     return StreamBuilder<List<PublicCatalogSection>>(
       stream: sectionsStream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            !snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (snapshot.hasError) {
+        if (snapshot.hasError && !snapshot.hasData && _initialSections == null) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -222,13 +358,33 @@ class CategoryCatalogScreen extends StatelessWidget {
           );
         }
 
-        final sections = snapshot.data ?? const <PublicCatalogSection>[];
+        final rawSections = snapshot.hasData
+            ? snapshot.data!
+            : (_initialSections ?? const <PublicCatalogSection>[]);
+        if (rawSections.isEmpty &&
+            snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final sections = CatalogSearchUtils.filterSections(
+          rawSections,
+          _searchQuery,
+        );
+        if (sections.isNotEmpty) {
+          AppImagePrefetch.scheduleCatalogSectionsPrefetch(
+            sections,
+            categoryKey: _prefetchCategoryKey,
+          );
+        }
+
         if (sections.isEmpty) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                filterByShop
+                _searchQuery.trim().isNotEmpty
+                    ? 'ไม่พบสินค้าที่ตรงกับ "${_searchQuery.trim()}"'
+                    : filterByShop
                     ? 'ร้านนี้ยังไม่มีสินค้า active ให้สั่งออนไลน์ตอนนี้'
                     : 'ยังไม่มีร้านที่เปิดอยู่ในหมวดนี้ หรือร้านยังไม่ได้เลือกสินค้าแสดง',
                 textAlign: TextAlign.center,
@@ -240,19 +396,19 @@ class CategoryCatalogScreen extends StatelessWidget {
         if (filterByShop) {
           return _ShopCatalogPage(
             section: sections.first,
-            customerLatitude: customerLatitude,
-            customerLongitude: customerLongitude,
-            onConfirmOrder: onConfirmOrder,
-            onNavigateToCart: onNavigateToCart,
+            customerLatitude: widget.customerLatitude,
+            customerLongitude: widget.customerLongitude,
+            onConfirmOrder: widget.onConfirmOrder,
+            onNavigateToCart: widget.onNavigateToCart,
           );
         }
 
-        return _CatalogShopPager(
+        return _CatalogShopsFeed(
           sections: sections,
-          customerLatitude: customerLatitude,
-          customerLongitude: customerLongitude,
-          onConfirmOrder: onConfirmOrder,
-          onNavigateToCart: onNavigateToCart,
+          customerLatitude: widget.customerLatitude,
+          customerLongitude: widget.customerLongitude,
+          onConfirmOrder: widget.onConfirmOrder,
+          onNavigateToCart: widget.onNavigateToCart,
         );
       },
     );
@@ -270,6 +426,7 @@ class CatalogProductCard extends StatelessWidget {
     this.onConfirmOrder,
     this.onNavigateToCart,
     this.compact = false,
+    this.showRatingSummary = true,
   });
 
   final PublicCatalogProduct product;
@@ -280,36 +437,15 @@ class CatalogProductCard extends StatelessWidget {
   final ValueChanged<CartProductSelection>? onConfirmOrder;
   final VoidCallback? onNavigateToCart;
   final bool compact;
+  final bool showRatingSummary;
 
   @override
   Widget build(BuildContext context) {
     final data = product.data;
-    final List<String> thumbnails =
-        ((data['thumbnailUrls'] as List?) ?? const <dynamic>[])
-            .whereType<String>()
-            .where((url) => url.trim().isNotEmpty)
-            .toList();
-    final List<String> images =
-        ((data['imageUrls'] as List?) ?? const <dynamic>[])
-            .whereType<String>()
-            .where((url) => url.trim().isNotEmpty)
-            .toList();
-    final String? imageUrl = thumbnails.isNotEmpty
-        ? thumbnails.first
-        : (images.isNotEmpty ? images.first : null);
     final String name = (data['name'] ?? '').toString();
     final String description = (data['description'] ?? '').toString();
     final String cleanDescription = _cleanDescriptionWithoutToppings(
       description,
-    );
-    final bool taxable = TaxPricingPolicy.isTaxableProduct(data);
-    final num basePrice = TaxPricingPolicy.parseNumber(data['price']);
-    final num adjustedBasePrice = TaxPricingPolicy.applyProductMarkup(
-      basePrice,
-      taxable,
-    );
-    final String adjustedPriceText = TaxPricingPolicy.formatPrice(
-      adjustedBasePrice,
     );
     final String? distanceText = compact
         ? null
@@ -318,30 +454,37 @@ class CatalogProductCard extends StatelessWidget {
     void openProductDetails() =>
         unawaited(_openProductDetailPager(context, shopProducts: shopProducts));
 
-    final Widget imageTile = _buildProductImageTile(
-      context: context,
-      imageUrl: imageUrl,
-      name: name,
-      onTap: openProductDetails,
-      fixedHeight: compact ? 92 : null,
+    final Widget imageTile = wrapCatalogImageWithDiscountBadge(
+      productData: data,
+      productId: product.id,
+      shopId: product.shopId,
+      compact: compact,
+      child: CatalogProductMediaCarousel(
+        productData: data,
+        name: name,
+        compact: compact,
+        fixedHeight: compact ? 92 : null,
+        borderRadius: compact ? 14 : 18,
+        onTap: openProductDetails,
+      ),
     );
 
     final Widget priceRow = Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         Expanded(
-          child: Text(
-            '฿$adjustedPriceText',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style:
-                (compact
-                        ? Theme.of(context).textTheme.titleSmall
-                        : Theme.of(context).textTheme.titleMedium)
-                    ?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFFE55A00),
-                    ),
+          child: ProductDiscountPrice(
+            productData: data,
+            productId: product.id,
+            shopId: product.shopId,
+            compact: compact,
+            style: (compact
+                    ? Theme.of(context).textTheme.titleSmall
+                    : Theme.of(context).textTheme.titleMedium)
+                ?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFFE55A00),
+            ),
           ),
         ),
         Material(
@@ -389,6 +532,8 @@ class CatalogProductCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (showRatingSummary)
+                    _ProductRatingSummary(productId: product.id, compact: true),
                   priceRow,
                 ],
               ),
@@ -412,6 +557,7 @@ class CatalogProductCard extends StatelessWidget {
             color: const Color(0xFF111827),
           ),
         ),
+        if (showRatingSummary) _ProductRatingSummary(productId: product.id),
         if (cleanDescription.isNotEmpty) ...<Widget>[
           const SizedBox(height: 4),
           Text(
@@ -453,45 +599,6 @@ class CatalogProductCard extends StatelessWidget {
     );
   }
 
-  Widget _buildProductImageTile({
-    required BuildContext context,
-    required String? imageUrl,
-    required String name,
-    required VoidCallback onTap,
-    double? fixedHeight,
-  }) {
-    final Widget imageContent = Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(compact ? 14 : 18),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: imageUrl != null
-          ? CachedNetworkImage(
-              imageUrl: imageUrl,
-              cacheManager: _localFirstImageCacheManager,
-              useOldImageOnUrlChange: true,
-              width: double.infinity,
-              height: fixedHeight,
-              fit: BoxFit.cover,
-              errorWidget: (_, __, ___) => _ProductPlaceholder(name: name),
-            )
-          : _ProductPlaceholder(name: name),
-    );
-
-    return GestureDetector(
-      onTap: onTap,
-      child: fixedHeight == null
-          ? AspectRatio(aspectRatio: 1.05, child: imageContent)
-          : SizedBox(
-              height: fixedHeight,
-              width: double.infinity,
-              child: imageContent,
-            ),
-    );
-  }
-
   Future<void> _openProductDetailPager(
     BuildContext context, {
     List<PublicCatalogProduct>? shopProducts,
@@ -522,6 +629,225 @@ class CatalogProductCard extends StatelessWidget {
       initialIndex: initialIndex,
       onConfirmOrder: onConfirmOrder,
       onNavigateToCart: onNavigateToCart,
+    );
+  }
+}
+
+class _ProductRatingSummary extends StatelessWidget {
+  const _ProductRatingSummary({required this.productId, this.compact = false});
+
+  final String productId;
+  final bool compact;
+
+  static final Map<String, Future<DocumentSnapshot<Map<String, dynamic>>>>
+  _ratingFutures = <String, Future<DocumentSnapshot<Map<String, dynamic>>>>{};
+
+  static Future<DocumentSnapshot<Map<String, dynamic>>> _ratingFuture(
+    String productId,
+  ) {
+    return _ratingFutures.putIfAbsent(
+      productId,
+      () => FirebaseFirestore.instance
+          .collection('product_review_stats')
+          .doc(productId)
+          .get(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedId = productId.trim();
+    if (normalizedId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _ratingFuture(normalizedId),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data();
+        final count = (data?['ratingCount'] as num?)?.toInt() ?? 0;
+        final average = (data?['ratingAverage'] as num?)?.toDouble() ?? 0;
+        if (count <= 0 || average <= 0) {
+          return const SizedBox.shrink();
+        }
+
+        final label = '${average.toStringAsFixed(1)} ($count)';
+        return Padding(
+          padding: EdgeInsets.only(top: compact ? 2 : 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                Icons.star_rounded,
+                size: compact ? 14 : 16,
+                color: const Color(0xFFF59E0B),
+              ),
+              const SizedBox(width: 3),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      (compact
+                              ? Theme.of(context).textTheme.labelSmall
+                              : Theme.of(context).textTheme.bodySmall)
+                          ?.copyWith(
+                            color: const Color(0xFF92400E),
+                            fontWeight: FontWeight.w800,
+                          ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ProductRecentReviews extends StatelessWidget {
+  const _ProductRecentReviews({required this.productId});
+
+  final String productId;
+
+  @override
+  Widget build(BuildContext context) {
+    if (productId.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('product_reviews')
+          .where('productId', isEqualTo: productId)
+          .where('status', isEqualTo: 'visible')
+          .limit(3)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? const [];
+        if (docs.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final reviews = docs.map((doc) => doc.data()).toList(growable: false)
+          ..sort((left, right) {
+            final leftTs = left['updatedAt'] ?? left['createdAt'];
+            final rightTs = right['updatedAt'] ?? right['createdAt'];
+            final leftMs = leftTs is Timestamp
+                ? leftTs.millisecondsSinceEpoch
+                : 0;
+            final rightMs = rightTs is Timestamp
+                ? rightTs.millisecondsSinceEpoch
+                : 0;
+            return rightMs.compareTo(leftMs);
+          });
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'รีวิวล่าสุด',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final review in reviews) ...<Widget>[
+                  _ProductReviewPreview(review: review),
+                  if (review != reviews.last) const Divider(height: 16),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ProductReviewPreview extends StatelessWidget {
+  const _ProductReviewPreview({required this.review});
+
+  final Map<String, dynamic> review;
+
+  @override
+  Widget build(BuildContext context) {
+    final rating = (review['rating'] as num?)?.toInt() ?? 0;
+    final comment = (review['comment'] as String?)?.trim() ?? '';
+    final imageUrls = ((review['imageUrls'] as List?) ?? const <dynamic>[])
+        .whereType<String>()
+        .where((url) => url.trim().isNotEmpty)
+        .toList(growable: false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            for (var index = 1; index <= 5; index++)
+              Icon(
+                index <= rating
+                    ? Icons.star_rounded
+                    : Icons.star_border_rounded,
+                size: 16,
+                color: const Color(0xFFF59E0B),
+              ),
+          ],
+        ),
+        if (comment.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 4),
+          Text(
+            comment,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF374151),
+              height: 1.35,
+            ),
+          ),
+        ],
+        if (imageUrls.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 56,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: imageUrls.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 56,
+                    height: 56,
+                    child: CachedAppImage(
+                      imageUrl: imageUrls[index],
+                      width: 120,
+                      height: 120,
+                      fit: BoxFit.cover,
+                      lightweight: true,
+                      errorWidget: const ColoredBox(
+                        color: Color(0xFFF3F4F6),
+                        child: Icon(Icons.image_not_supported_outlined),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -759,14 +1085,25 @@ _ToppingOption _buildToppingOption(String value, {num? explicitPrice}) {
   final label = value.trim();
   final num rawPrice = explicitPrice ?? _extractTrailingPrice(label) ?? 0;
   final adjusted = TaxPricingPolicy.applyToppingMarkup(rawPrice);
+  final cleanName = _cleanToppingLabel(label, rawPrice);
   final display = adjusted > 0
-      ? '$label (+฿${TaxPricingPolicy.formatPrice(adjusted)})'
-      : label;
+      ? '$cleanName +฿${TaxPricingPolicy.formatPrice(adjusted)}'
+      : cleanName;
   return _ToppingOption(
-    label: label,
+    label: cleanName,
+    rawPrice: rawPrice,
     adjustedPrice: adjusted,
     displayLabel: display,
   );
+}
+
+String _cleanToppingLabel(String label, num rawPrice) {
+  var name = label.trim();
+  if (rawPrice > 0) {
+    name = name.replaceAll(RegExp(r'(\d+(?:\.\d+)?)\s*$'), '').trim();
+    name = name.replaceAll(RegExp(r'[+\-–—]\s*$'), '').trim();
+  }
+  return name.isEmpty ? label.trim() : name;
 }
 
 num? _extractTrailingPrice(String value) {
@@ -792,34 +1129,6 @@ String _cleanDescriptionWithoutToppings(String source) {
   return cleaned;
 }
 
-class _ProductPlaceholder extends StatelessWidget {
-  const _ProductPlaceholder({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    final String display = name.isEmpty
-        ? 'สินค้า'
-        : name.substring(0, name.length > 18 ? 18 : name.length);
-    return Container(
-      color: const Color(0xFFFFEDD5),
-      alignment: Alignment.center,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Text(
-          display,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF9A3412),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _ShopAvatar extends StatelessWidget {
   const _ShopAvatar({this.imageUrl});
 
@@ -837,12 +1146,13 @@ class _ShopAvatar extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: hasImage
-          ? CachedNetworkImage(
+          ? CachedAppImage(
               imageUrl: imageUrl!,
-              cacheManager: _localFirstImageCacheManager,
-              useOldImageOnUrlChange: true,
+              width: 40,
+              height: 40,
               fit: BoxFit.cover,
-              errorWidget: (_, __, ___) =>
+              lightweight: true,
+              errorWidget:
                   const Icon(Icons.storefront, color: Color(0xFF9A3412)),
             )
           : const Icon(Icons.storefront, color: Color(0xFF9A3412)),

@@ -3,14 +3,16 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cart_screen.dart';
 import 'map_picker_screen.dart';
 import 'services/nationwide_shipping_service.dart';
+import 'storage_helper.dart';
+import 'widgets/cached_app_image.dart';
 
 class NationwideCartScreen extends StatefulWidget {
   const NationwideCartScreen({
@@ -522,7 +524,9 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     return _readAddress(validate: true);
   }
 
-  Future<void> _submitOrder() async {
+  Future<void> _showNationwideScanPayDialog({
+    required double grandTotal,
+  }) async {
     if (_isSubmitting || widget.cartItems.isEmpty) {
       return;
     }
@@ -531,42 +535,163 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       return;
     }
 
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final viewport = MediaQuery.of(context).size;
+        return PopScope(
+          canPop: false,
+          child: Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 420,
+                maxHeight: viewport.height * 0.78,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'สแกนจ่าย',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'ระบบจะสร้างออเดอร์และแจ้งร้านค้าหลังตรวจสลิปผ่านเท่านั้น',
+                      style: TextStyle(
+                        color: Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: viewport.height * 0.56,
+                      child: TrueMoneyQrDialogContent(
+                        grandTotal: grandTotal,
+                        initialAttachedSlip: null,
+                        onAttachedSlipChanged: (_) {},
+                        onCloseRequested: () => Navigator.of(context).pop(),
+                        onSubmitPromptPaySlip: _submitNationwidePromptPaySlip,
+                        onSubmissionCompleted: widget.onOrderCreated,
+                        onSubmissionSucceeded: () {},
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('ปิด'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<PaymentSlipSubmissionResult> _submitNationwidePromptPaySlip(
+    PaymentSlipSubmissionRequest request,
+  ) async {
+    if (_isSubmitting || widget.cartItems.isEmpty) {
+      throw Exception('ไม่มีสินค้าในตะกร้าส่งทั่วประเทศ');
+    }
+    final address = _readCheckoutAddress();
+    if (address == null) {
+      throw Exception('กรุณายืนยันที่อยู่จัดส่งก่อนสแกนจ่าย');
+    }
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาเข้าสู่ระบบก่อนสั่งซื้อ')),
-      );
-      return;
+      throw Exception('กรุณาเข้าสู่ระบบก่อนสั่งซื้อ');
+    }
+    if (request.bytes.isEmpty) {
+      throw Exception('ไฟล์สลิปว่างเปล่า');
     }
 
     setState(() => _isSubmitting = true);
     try {
+      final paymentGroupId = 'NWPAY-${DateTime.now().millisecondsSinceEpoch}';
+      final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
+      final storagePath =
+          'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
+      final uploadTask = await StorageHelper.instance
+          .ref(storagePath)
+          .putData(
+            request.bytes,
+            SettableMetadata(
+              contentType: request.contentType ?? 'image/jpeg',
+              customMetadata: <String, String>{
+                'uploadedBy': user.uid,
+                'paymentGroupId': paymentGroupId,
+                'checkoutType': 'nationwide_parcel',
+              },
+            ),
+          );
+      final downloadUrl = await uploadTask.ref.getDownloadURL();
+
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('verifyStandalonePaymentSlip');
+      final response = await callable.call(<String, dynamic>{
+        'storagePath': storagePath,
+        'paymentGroupId': paymentGroupId,
+        'fileName': sanitizedFileName,
+        'expectedAmount': request.grandTotal,
+        if (request.contentType != null) 'contentType': request.contentType,
+      });
+      final payload = response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : const <String, dynamic>{};
+      final status = (payload['status'] ?? 'submitted').toString().trim();
+      final message = (payload['message'] ?? '').toString().trim();
+
+      if (status != 'verified') {
+        return PaymentSlipSubmissionResult(
+          orderIds: const <String>[],
+          verificationStatus: status,
+          message: message.isEmpty ? 'สลิปยังไม่ผ่านการตรวจสอบ' : message,
+        );
+      }
+
       final orderIds = await _createNationwideOrders(
         user: user,
         address: address,
+        paymentGroupId: paymentGroupId,
+        slipStoragePath: storagePath,
+        slipDownloadUrl: downloadUrl,
+        slipFileName: sanitizedFileName,
+        slipContentType: request.contentType,
+        slipSizeBytes: request.sizeBytes,
+        expectedCombinedAmount: request.grandTotal,
+        verificationFeedbackId: (payload['feedbackId'] ?? '').toString(),
+        verifiedSlipAmount: (payload['verifiedSlipAmount'] as num?)?.toDouble(),
+        verificationMessage: message,
       );
       await _saveAddressForReuse(address);
-      if (!mounted) {
-        return;
-      }
-      await widget.onOrderCreated(orderIds);
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'สร้างคำสั่งซื้อส่งทั่วประเทศแล้ว ${orderIds.length} รายการ',
-          ),
-        ),
+
+      return PaymentSlipSubmissionResult(
+        orderIds: orderIds,
+        verificationStatus: status,
+        message: message.isEmpty
+            ? 'ตรวจสลิปผ่านและสร้างออเดอร์ส่งทั่วประเทศแล้ว'
+            : '$message\nสร้างออเดอร์ส่งทั่วประเทศแล้ว ${orderIds.length} รายการ',
       );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('สร้างคำสั่งซื้อไม่สำเร็จ: $error')),
-      );
+      rethrow;
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
@@ -574,9 +699,28 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     }
   }
 
+  String _sanitizeSlipFileName(String fileName) {
+    final trimmed = fileName.trim();
+    final safe = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    if (safe.isEmpty) {
+      return 'slip_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    }
+    return safe;
+  }
+
   Future<List<String>> _createNationwideOrders({
     required User user,
     required NationwideDeliveryAddress address,
+    required String paymentGroupId,
+    required String slipStoragePath,
+    required String slipDownloadUrl,
+    required String slipFileName,
+    required String? slipContentType,
+    required int slipSizeBytes,
+    required double expectedCombinedAmount,
+    required String verificationFeedbackId,
+    required double? verifiedSlipAmount,
+    required String verificationMessage,
   }) async {
     final groupedByShop = <String, List<CartLineItem>>{};
     for (final item in widget.cartItems) {
@@ -600,6 +744,11 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
         0,
         (runningTotal, item) => runningTotal + (item.unitPrice * item.quantity),
       );
+      final merchantSubtotal = items.fold<double>(
+        0,
+        (runningTotal, item) =>
+            runningTotal + (item.merchantUnitPayout * item.quantity),
+      );
       final totalQuantity = items.fold<int>(
         0,
         (runningTotal, item) => runningTotal + item.quantity,
@@ -611,11 +760,16 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       final products = items
           .map((item) {
             final imageUrl = item.imageUrl?.trim();
+            final merchantLinePayout = item.merchantUnitPayout * item.quantity;
             return <String, dynamic>{
               'productId': item.productId,
               'name': item.productName,
               'quantity': item.quantity,
               'unitPrice': item.unitPrice,
+              'merchantBasePrice': item.merchantBasePrice,
+              'discountPercent': item.discountPercent,
+              'merchantUnitPayout': item.merchantUnitPayout,
+              'merchantLinePayout': merchantLinePayout,
               'lineTotal': item.unitPrice * item.quantity,
               'selectedToppings': item.selectedToppings,
               'preparationTimeMinutes': item.preparationTimeMinutes,
@@ -630,6 +784,11 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
             };
           })
           .toList(growable: false);
+      final productIds = items
+          .map((item) => item.productId.trim())
+          .where((productId) => productId.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
 
       await orderRef.set(<String, dynamic>{
         'orderId': orderRef.id,
@@ -643,10 +802,33 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
         'shippingProviderLabel': quote.providerLabel,
         'shippingStatus': 'awaiting_booking',
         'shippingStatusLabel': 'รอจองขนส่ง',
-        'paymentMethod': 'manual_nationwide',
-        'paymentMethodLabel': 'ชำระตามขั้นตอนส่งทั่วประเทศ',
-        'paymentStatus': 'awaiting_payment',
-        'paymentStatusLabel': 'รอชำระเงิน',
+        'paymentMethod': 'promptpay_qr',
+        'paymentMethodLabel': 'สแกนจ่าย',
+        'paymentStatus': 'verified',
+        'paymentStatusLabel': 'ชำระเงินแล้ว',
+        'paymentGroupId': paymentGroupId,
+        'paymentSubmittedAt': FieldValue.serverTimestamp(),
+        'paymentSlip': <String, dynamic>{
+          'storagePath': slipStoragePath,
+          'downloadUrl': slipDownloadUrl,
+          'fileName': slipFileName,
+          'contentType': slipContentType,
+          'sizeBytes': slipSizeBytes,
+          'uploadedBy': user.uid,
+          'uploadedAt': FieldValue.serverTimestamp(),
+        },
+        'paymentVerification': <String, dynamic>{
+          'provider': 'slipok',
+          'providerLabel': 'Slip OK',
+          'feedbackId': verificationFeedbackId,
+          'paymentGroupId': paymentGroupId,
+          'expectedCombinedAmount': expectedCombinedAmount,
+          'verifiedSlipAmount': verifiedSlipAmount,
+          'status': 'verified',
+          'statusLabel': 'ตรวจสอบสลิปผ่าน',
+          'message': verificationMessage,
+          'checkedAt': FieldValue.serverTimestamp(),
+        },
         'sourceApp': 'van2_customer',
         'customerId': user.uid,
         'customerEmail': user.email,
@@ -663,10 +845,12 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
         'itemCount': items.length,
         'totalQuantity': totalQuantity,
         'products': products,
+        'productIds': productIds,
         'parcel': quote.parcel.toJson(),
         'shippingQuote': quote.toJson(),
         'totalPrice': subtotal,
         'subtotal': subtotal,
+        'merchantSubtotal': merchantSubtotal,
         'shippingFee': quote.shippingFee,
         'grandTotal': subtotal + quote.shippingFee,
         'audit': <String, dynamic>{
@@ -682,7 +866,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       unawaited(
         orderRef.collection('timeline').add(<String, dynamic>{
           'event': 'nationwide_order_created',
-          'eventLabel': 'ลูกค้าสร้างออเดอร์ส่งทั่วประเทศ',
+          'eventLabel': 'ลูกค้าชำระเงินแล้ว ระบบสร้างออเดอร์ส่งทั่วประเทศ',
           'actorRole': 'customer',
           'actorId': user.uid,
           'timestamp': FieldValue.serverTimestamp(),
@@ -823,15 +1007,19 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: _isSubmitting ? null : _submitOrder,
+                    onPressed: _isSubmitting
+                        ? null
+                        : () => _showNationwideScanPayDialog(
+                            grandTotal: grandTotal,
+                          ),
                     icon: _isSubmitting
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.local_shipping_outlined),
-                    label: const Text('ยืนยันคำสั่งซื้อส่งทั่วประเทศ'),
+                        : const Icon(Icons.qr_code_2_rounded),
+                    label: const Text('สแกนจ่าย'),
                   ),
                 ),
               ),
@@ -935,16 +1123,19 @@ class _NationwideCartItemTile extends StatelessWidget {
                           size: 34,
                         ),
                       )
-                    : CachedNetworkImage(
+                    : CachedAppImage(
                         imageUrl: imageUrl,
+                        width: 82,
+                        height: 82,
                         fit: BoxFit.cover,
-                        placeholder: (_, _) => Container(
+                        lightweight: true,
+                        placeholder: Container(
                           color: const Color(0xFFFFF7ED),
                           child: const Center(
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ),
-                        errorWidget: (_, _, _) => Container(
+                        errorWidget: Container(
                           color: const Color(0xFFFFF7ED),
                           child: const Icon(
                             Icons.broken_image_outlined,

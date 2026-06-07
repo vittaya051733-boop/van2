@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -10,9 +12,46 @@ import 'call_screen.dart';
 import 'chat_room_screen.dart';
 import 'models/user_profile.dart';
 import 'services/notification_service.dart';
+import 'services/review_service.dart';
 import 'widgets/cached_app_image.dart';
 
 const double _kRoadmapProductCarouselHeight = 128;
+
+const Set<String> _kArchivedRoadmapOrderStatuses = <String>{
+  'cancelled',
+  'canceled',
+  'refund',
+  'refunded',
+};
+
+bool _isArchivedRoadmapOrder(Map<String, dynamic> data) {
+  final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
+  return _kArchivedRoadmapOrderStatuses.contains(status);
+}
+
+bool _isActiveRoadmapOrder(Map<String, dynamic> data) {
+  return !_isArchivedRoadmapOrder(data);
+}
+
+String _readOrderStatusLabel(Map<String, dynamic> data) {
+  final label = (data['statusLabel'] as String?)?.trim();
+  if (label != null && label.isNotEmpty) {
+    return label;
+  }
+  final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
+  switch (status) {
+    case 'cancelled':
+    case 'canceled':
+      return 'ยกเลิกออเดอร์';
+    case 'refund':
+    case 'refunded':
+      return 'ขอคืนเงิน';
+    case 'delivered':
+      return 'ส่งสำเร็จ';
+    default:
+      return status.isEmpty ? 'ออเดอร์' : status;
+  }
+}
 
 const List<String> _kOrderShopLookupFields = <String>[
   'ownerUid',
@@ -59,12 +98,15 @@ class OrderRoadmapScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: uniqueOrderIds.isNotEmpty
-          ? _RoadmapList(orderIds: uniqueOrderIds, firestore: firestore)
-          : _RecentCustomerRoadmapList(
-              uid: FirebaseAuth.instance.currentUser?.uid,
-              firestore: firestore,
-            ),
+      body: _CustomerActiveRoadmapList(
+        preferredOrderIds: uniqueOrderIds,
+        uid: FirebaseAuth.instance.currentUser?.uid,
+        firestore: firestore,
+        onOpenHistory: () => _showOrderProductHistorySheet(
+          context: context,
+          firestore: firestore,
+        ),
+      ),
     );
   }
 }
@@ -89,14 +131,18 @@ class _RoadmapList extends StatelessWidget {
   }
 }
 
-class _RecentCustomerRoadmapList extends StatelessWidget {
-  const _RecentCustomerRoadmapList({
+class _CustomerActiveRoadmapList extends StatelessWidget {
+  const _CustomerActiveRoadmapList({
+    required this.preferredOrderIds,
     required this.uid,
     required this.firestore,
+    required this.onOpenHistory,
   });
 
+  final List<String> preferredOrderIds;
   final String? uid;
   final FirebaseFirestore firestore;
+  final VoidCallback onOpenHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -133,17 +179,15 @@ class _RecentCustomerRoadmapList extends StatelessWidget {
             (snapshot.data?.docs ??
                     <QueryDocumentSnapshot<Map<String, dynamic>>>[])
                 .toList(growable: false);
+        final dataById = <String, Map<String, dynamic>>{
+          for (final doc in docs) doc.id: doc.data(),
+        };
 
-        if (docs.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('ยังไม่มีออเดอร์สำหรับแสดงโรดแมป'),
-            ),
-          );
-        }
+        final activeDocs = docs
+            .where((doc) => _isActiveRoadmapOrder(doc.data()))
+            .toList(growable: false);
 
-        docs.sort((a, b) {
+        activeDocs.sort((a, b) {
           final aTs = a.data()['createdAt'];
           final bTs = b.data()['createdAt'];
           final aMs = aTs is Timestamp ? aTs.millisecondsSinceEpoch : 0;
@@ -151,7 +195,48 @@ class _RecentCustomerRoadmapList extends StatelessWidget {
           return bMs.compareTo(aMs);
         });
 
-        final orderIds = docs.map((doc) => doc.id).toList(growable: false);
+        final List<String> orderIds;
+        if (preferredOrderIds.isNotEmpty) {
+          orderIds = preferredOrderIds
+              .where((id) {
+                final data = dataById[id];
+                return data == null || _isActiveRoadmapOrder(data);
+              })
+              .toList(growable: false);
+        } else {
+          orderIds = activeDocs.map((doc) => doc.id).toList(growable: false);
+        }
+
+        if (orderIds.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'ไม่มีออเดอร์ที่กำลังดำเนินการ',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'ออเดอร์ที่ยกเลิกหรือขอคืนเงินแล้วจะอยู่ในปุ่มประวัติ',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF6B7280)),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: onOpenHistory,
+                    icon: const Icon(Icons.history),
+                    label: const Text('ดูประวัติออเดอร์'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
         return _RoadmapList(orderIds: orderIds, firestore: firestore);
       },
     );
@@ -320,19 +405,17 @@ class _OrderRoadmapCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      deliveryProofImageUrl,
+                    child: CachedAppImage(
+                      imageUrl: deliveryProofImageUrl,
                       width: double.infinity,
                       height: 220,
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          height: 120,
-                          color: const Color(0xFFF3F4F6),
-                          alignment: Alignment.center,
-                          child: const Text('โหลดรูปยืนยันไม่สำเร็จ'),
-                        );
-                      },
+                      errorWidget: Container(
+                        height: 120,
+                        color: const Color(0xFFF3F4F6),
+                        alignment: Alignment.center,
+                        child: const Text('โหลดรูปยืนยันไม่สำเร็จ'),
+                      ),
                     ),
                   ),
                   if (deliveryProofMeta != null) ...[
@@ -451,6 +534,13 @@ class _OrderRoadmapCard extends StatelessWidget {
                       : Icons.task_alt_outlined,
                   isLast: true,
                 ),
+                if (!isTravelOrder && roadmap.delivered)
+                  _OrderReviewPanel(
+                    orderId: orderId,
+                    data: data,
+                    products: productEntries,
+                    firestore: firestore,
+                  ),
               ],
             ),
           ),
@@ -731,6 +821,10 @@ class _OrderRoadmapCard extends StatelessWidget {
         rawProduct['productImage'],
         rawProduct['photoUrl'],
       );
+      final productId = _readFirstNonEmptyValue(
+        Map<String, dynamic>.from(rawProduct),
+        const <String>['productId', 'product_id', 'id', 'docId', 'documentId'],
+      );
       final name = _readTrimmedString(
         rawProduct['name'],
         rawProduct['productName'],
@@ -743,6 +837,7 @@ class _OrderRoadmapCard extends StatelessWidget {
 
       results.add(
         _RoadmapProductEntry(
+          productId: productId,
           name: name ?? 'สินค้า',
           imageUrl: imageUrl,
           quantity: quantity,
@@ -1114,6 +1209,7 @@ class _ShopRoadmapImage extends StatelessWidget {
         width: 52,
         height: 52,
         fit: BoxFit.cover,
+        lightweight: true,
         borderRadius: BorderRadius.circular(14),
         errorWidget: const Icon(
           Icons.storefront_outlined,
@@ -1148,6 +1244,7 @@ class _RoadmapProductImageCard extends StatelessWidget {
             width: 88,
             height: 68,
             fit: BoxFit.cover,
+            lightweight: true,
             borderRadius: BorderRadius.circular(12),
             errorWidget: Container(
               width: 88,
@@ -1200,14 +1297,799 @@ class _RoadmapProductImageCard extends StatelessWidget {
 
 class _RoadmapProductEntry {
   const _RoadmapProductEntry({
+    required this.productId,
     required this.name,
     required this.imageUrl,
     required this.quantity,
   });
 
+  final String? productId;
   final String name;
   final String? imageUrl;
   final int quantity;
+}
+
+class _OrderReviewPanel extends StatelessWidget {
+  const _OrderReviewPanel({
+    required this.orderId,
+    required this.data,
+    required this.products,
+    required this.firestore,
+  });
+
+  final String orderId;
+  final Map<String, dynamic> data;
+  final List<_RoadmapProductEntry> products;
+  final FirebaseFirestore firestore;
+
+  @override
+  Widget build(BuildContext context) {
+    final customerId = FirebaseAuth.instance.currentUser?.uid;
+    final orderCustomerId = (data['customerId'] as String?)?.trim();
+    final reviewableProducts = products
+        .where((product) => product.productId?.trim().isNotEmpty == true)
+        .toList(growable: false);
+    final shopId = _readOrderShopId(data);
+    final driverId = _readOrderRiderId(data);
+    final hasShopReview = shopId.isNotEmpty;
+    final hasRiderReview = driverId.isNotEmpty;
+    final hasProductReview = reviewableProducts.isNotEmpty;
+
+    if (customerId == null ||
+        customerId.isEmpty ||
+        orderCustomerId != customerId ||
+        (!hasShopReview && !hasRiderReview && !hasProductReview)) {
+      return const SizedBox.shrink();
+    }
+
+    final panelTitle = hasProductReview || hasShopReview
+        ? (hasRiderReview ? 'รีวิวสินค้า ร้านค้า และไรเดอร์' : 'รีวิวสินค้าและร้านค้า')
+        : 'รีวิวไรเดอร์';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFFED7AA)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(Icons.star_rate_rounded, color: Color(0xFFF59E0B)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    panelTitle,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF9A3412),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'รีวิวจากออเดอร์ที่ส่งสำเร็จ ช่วยให้ลูกค้าคนอื่นตัดสินใจง่ายขึ้น',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF92400E)),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: () => _showOrderReviewSheet(context, customerId),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFF57C00),
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.rate_review_outlined),
+              label: const Text('รีวิว / แก้ไขรีวิว'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showOrderReviewSheet(
+    BuildContext context,
+    String customerId,
+  ) async {
+    final shopId = _readOrderShopId(data);
+    final shopOwnerId = _resolveReviewShopOwnerId(data, shopId);
+    final shopName = (data['shopName'] as String?)?.trim() ?? 'ร้านค้า';
+    final hasShopReview = shopId.isNotEmpty;
+    final allowedProductIds = _readOrderProductIds(data);
+    final reviewableProducts = products
+        .where((product) => product.productId?.trim().isNotEmpty == true)
+        .where(
+          (product) =>
+              allowedProductIds.isEmpty ||
+              allowedProductIds.contains(product.productId!.trim()),
+        )
+        .toList(growable: false);
+
+    final productDrafts = <_ReviewDraft>[];
+    for (final product in reviewableProducts) {
+      final productId = product.productId!.trim();
+      final reviewId = '${orderId}_$productId';
+      final doc = await firestore
+          .collection('product_reviews')
+          .doc(reviewId)
+          .get();
+      final review = doc.data();
+      productDrafts.add(
+        _ReviewDraft(
+          id: reviewId,
+          title: product.name,
+          subtitle: product.quantity > 0 ? 'จำนวน ${product.quantity}' : null,
+          imageUrl: product.imageUrl,
+          rating: _readReviewRating(review),
+          comment: (review?['comment'] as String?) ?? '',
+          imageUrls: _readReviewImageUrls(review),
+          exists: doc.exists,
+          metadata: <String, dynamic>{
+            'orderId': orderId,
+            'productId': productId,
+            'shopId': shopId,
+            'shopOwnerId': shopOwnerId,
+            'customerId': customerId,
+            'productNameSnapshot': product.name,
+            'productImageUrlSnapshot': product.imageUrl,
+            'shopNameSnapshot': shopName,
+            'status': 'visible',
+          },
+        ),
+      );
+    }
+
+    final shopReviewId = '${orderId}_$shopId';
+    final shopReviewDoc = hasShopReview
+        ? await firestore.collection('shop_reviews').doc(shopReviewId).get()
+        : null;
+    final shopReview = shopReviewDoc?.data();
+    final shopDraft = hasShopReview
+        ? _ReviewDraft(
+            id: shopReviewId,
+            title: shopName,
+            subtitle: 'รีวิวร้านค้า',
+            imageUrl: _roadmapReadTrimmedString(
+              data['shopImageUrl'],
+              data['imageUrl'],
+              data['photoUrl'],
+            ),
+            rating: _readReviewRating(shopReview),
+            comment: (shopReview?['comment'] as String?) ?? '',
+            imageUrls: _readReviewImageUrls(shopReview),
+            exists: shopReviewDoc?.exists ?? false,
+            metadata: <String, dynamic>{
+              'orderId': orderId,
+              'shopId': shopId,
+              'shopOwnerId': shopOwnerId,
+              'customerId': customerId,
+              'shopNameSnapshot': shopName,
+              'status': 'visible',
+            },
+          )
+        : null;
+
+    final driverId = _readOrderRiderId(data);
+    _ReviewDraft? riderDraft;
+    if (driverId.isNotEmpty) {
+      final riderReviewId = '${orderId}_$driverId';
+      final riderReviewDoc = await firestore
+          .collection('rider_reviews')
+          .doc(riderReviewId)
+          .get();
+      final riderReview = riderReviewDoc.data();
+      final riderName = _roadmapReadFirstNonEmptyValue(data, const <String>[
+            'riderName',
+            'driverName',
+            'deliveryProofCapturedByName',
+          ]) ??
+          'ไรเดอร์';
+      riderDraft = _ReviewDraft(
+        id: riderReviewId,
+        title: riderName,
+        subtitle: 'รีวิวไรเดอร์',
+        imageUrl: null,
+        rating: _readReviewRating(riderReview),
+        comment: (riderReview?['comment'] as String?) ?? '',
+        imageUrls: _readReviewImageUrls(riderReview),
+        exists: riderReviewDoc.exists,
+        metadata: <String, dynamic>{
+          'orderId': orderId,
+          'riderId': driverId,
+          'customerId': customerId,
+          'riderNameSnapshot': riderName,
+          'status': 'visible',
+        },
+      );
+    }
+
+    if (!context.mounted) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _OrderReviewSheet(
+        firestore: firestore,
+        productDrafts: productDrafts,
+        shopDraft: shopDraft,
+        riderDraft: riderDraft,
+      ),
+    );
+  }
+}
+
+int _readReviewRating(Map<String, dynamic>? review) {
+  final existing = (review?['rating'] as num?)?.round();
+  if (existing != null && existing >= 1 && existing <= 5) {
+    return existing;
+  }
+  return 5;
+}
+
+String _reviewCollectionForDraft(_ReviewDraft draft) {
+  if (draft.metadata.containsKey('productId')) {
+    return 'product_reviews';
+  }
+  if (draft.metadata.containsKey('riderId')) {
+    return 'rider_reviews';
+  }
+  return 'shop_reviews';
+}
+
+List<String> _readReviewImageUrls(Map<String, dynamic>? review) {
+  return ((review?['imageUrls'] as List?) ?? const <dynamic>[])
+      .whereType<String>()
+      .map((url) => url.trim())
+      .where((url) => url.isNotEmpty)
+      .toList(growable: false);
+}
+
+String _resolveReviewShopOwnerId(Map<String, dynamic> data, String shopId) {
+  final shopOwnerId = (data['shopOwnerId'] as String?)?.trim();
+  if (shopOwnerId != null && shopOwnerId.isNotEmpty) {
+    return shopOwnerId;
+  }
+  return shopId;
+}
+
+String _readOrderRiderId(Map<String, dynamic> data) {
+  final driverId = (data['driverId'] as String?)?.trim();
+  if (driverId != null && driverId.isNotEmpty) {
+    return driverId;
+  }
+  return (data['deliveryProofCapturedById'] as String?)?.trim() ?? '';
+}
+
+List<String> _readOrderProductIds(Map<String, dynamic> data) {
+  final fromField = (data['productIds'] as List?) ?? const <dynamic>[];
+  final productIds = fromField
+      .map((value) => value?.toString().trim() ?? '')
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  if (productIds.isNotEmpty) {
+    return productIds.toList(growable: false);
+  }
+
+  final rawProducts = data['products'];
+  if (rawProducts is! List) {
+    return const <String>[];
+  }
+
+  for (final rawProduct in rawProducts) {
+    if (rawProduct is! Map) {
+      continue;
+    }
+    final productMap = Map<String, dynamic>.from(rawProduct);
+    final productId = _roadmapReadFirstNonEmptyValue(productMap, const <String>[
+      'productId',
+      'product_id',
+      'id',
+      'docId',
+      'documentId',
+    ]);
+    if (productId != null) {
+      productIds.add(productId);
+    }
+  }
+  return productIds.toList(growable: false);
+}
+
+class _ReviewDraft {
+  _ReviewDraft({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.imageUrl,
+    required this.rating,
+    required this.comment,
+    required this.imageUrls,
+    required this.exists,
+    required this.metadata,
+    List<File>? pendingImages,
+  }) : pendingImages = pendingImages ?? <File>[];
+
+  final String id;
+  final String title;
+  final String? subtitle;
+  final String? imageUrl;
+  int rating;
+  String comment;
+  List<String> imageUrls;
+  List<File> pendingImages;
+  bool exists;
+  final Map<String, dynamic> metadata;
+
+  int get totalImageCount => imageUrls.length + pendingImages.length;
+}
+
+class _OrderReviewSheet extends StatefulWidget {
+  const _OrderReviewSheet({
+    required this.firestore,
+    required this.productDrafts,
+    this.shopDraft,
+    this.riderDraft,
+  });
+
+  final FirebaseFirestore firestore;
+  final List<_ReviewDraft> productDrafts;
+  final _ReviewDraft? shopDraft;
+  final _ReviewDraft? riderDraft;
+
+  @override
+  State<_OrderReviewSheet> createState() => _OrderReviewSheetState();
+}
+
+class _OrderReviewSheetState extends State<_OrderReviewSheet> {
+  bool _saving = false;
+
+  Future<void> _saveReviewDraft(_ReviewDraft draft) async {
+    final collection = _reviewCollectionForDraft(draft);
+    final ref = widget.firestore.collection(collection).doc(draft.id);
+    final comment = draft.comment.trim();
+    final customerId = (draft.metadata['customerId'] ?? '').toString();
+
+    var imageUrls = List<String>.from(draft.imageUrls);
+    if (draft.pendingImages.isNotEmpty && customerId.isNotEmpty) {
+      final remainingSlots =
+          ReviewService.maxImagesPerReview - imageUrls.length;
+      if (remainingSlots > 0) {
+        final uploaded = await ReviewService.uploadReviewImages(
+          customerId: customerId,
+          reviewId: draft.id,
+          files: draft.pendingImages
+              .take(remainingSlots)
+              .toList(growable: false),
+        );
+        imageUrls = <String>[
+          ...imageUrls,
+          ...uploaded,
+        ].take(ReviewService.maxImagesPerReview).toList(growable: false);
+      }
+    }
+
+    if (draft.exists) {
+      await ref.set(<String, dynamic>{
+        'rating': draft.rating,
+        'comment': comment,
+        'imageUrls': imageUrls,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
+    await ref.set(<String, dynamic>{
+      ...draft.metadata,
+      'rating': draft.rating,
+      'comment': comment,
+      'imageUrls': imageUrls,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _submit() async {
+    final allDrafts = <_ReviewDraft>[
+      ...widget.productDrafts,
+      if (widget.shopDraft != null) widget.shopDraft!,
+      if (widget.riderDraft != null) widget.riderDraft!,
+    ];
+    final draftsToSave = allDrafts.where((draft) => draft.rating > 0).toList();
+    if (draftsToSave.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('กรุณาให้คะแนนอย่างน้อย 1 รายการ')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+    var savedCount = 0;
+    String? firstError;
+    try {
+      for (final draft in draftsToSave) {
+        try {
+          await _saveReviewDraft(draft);
+          savedCount += 1;
+        } catch (error) {
+          firstError ??= '$error';
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      if (savedCount == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              firstError == null
+                  ? 'บันทึกรีวิวไม่สำเร็จ'
+                  : 'บันทึกรีวิวไม่สำเร็จ: $firstError',
+            ),
+          ),
+        );
+        return;
+      }
+
+      Navigator.of(context).pop();
+      final message = savedCount == draftsToSave.length
+          ? 'บันทึกรีวิวเรียบร้อยแล้ว'
+          : 'บันทึกรีวิวได้ $savedCount/${draftsToSave.length} รายการ';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('บันทึกรีวิวไม่สำเร็จ: $error')));
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final hasShopOrProduct =
+        widget.productDrafts.isNotEmpty || widget.shopDraft != null;
+    final sheetTitle = hasShopOrProduct
+        ? (widget.riderDraft != null
+            ? 'รีวิวสินค้า ร้านค้า และไรเดอร์'
+            : 'รีวิวสินค้าและร้านค้า')
+        : 'รีวิวไรเดอร์';
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(
+                sheetTitle,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFF111827),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'ให้คะแนนและแนบรูปได้สูงสุด ${ReviewService.maxImagesPerReview} รูปต่อรายการ ค่าเริ่มต้นคือ 5 ดาว',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+              ),
+              const SizedBox(height: 14),
+              for (final draft in widget.productDrafts) ...<Widget>[
+                _ReviewDraftTile(
+                  draft: draft,
+                  onChanged: () => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (widget.shopDraft != null) ...<Widget>[
+                _ReviewDraftTile(
+                  draft: widget.shopDraft!,
+                  onChanged: () => setState(() {}),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (widget.riderDraft != null)
+                _ReviewDraftTile(
+                  draft: widget.riderDraft!,
+                  onChanged: () => setState(() {}),
+                ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _saving ? null : _submit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFF57C00),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: Text(_saving ? 'กำลังบันทึก...' : 'บันทึกรีวิว'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReviewDraftTile extends StatefulWidget {
+  const _ReviewDraftTile({required this.draft, required this.onChanged});
+
+  final _ReviewDraft draft;
+  final VoidCallback onChanged;
+
+  @override
+  State<_ReviewDraftTile> createState() => _ReviewDraftTileState();
+}
+
+class _ReviewDraftTileState extends State<_ReviewDraftTile> {
+  late final TextEditingController _commentController;
+
+  @override
+  void initState() {
+    super.initState();
+    _commentController = TextEditingController(text: widget.draft.comment);
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final draft = widget.draft;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              _ReviewThumb(imageUrl: draft.imageUrl, title: draft.title),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      draft.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (draft.subtitle?.isNotEmpty == true)
+                      Text(
+                        draft.subtitle!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF6B7280),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List<Widget>.generate(5, (index) {
+              final value = index + 1;
+              return IconButton(
+                visualDensity: VisualDensity.compact,
+                onPressed: () {
+                  setState(() => draft.rating = value);
+                  widget.onChanged();
+                },
+                icon: Icon(
+                  value <= draft.rating
+                      ? Icons.star_rounded
+                      : Icons.star_border_rounded,
+                  color: const Color(0xFFF59E0B),
+                  size: 30,
+                ),
+              );
+            }),
+          ),
+          TextField(
+            controller: _commentController,
+            maxLines: 2,
+            maxLength: 1000,
+            decoration: const InputDecoration(
+              labelText: 'ความคิดเห็น (ไม่บังคับ)',
+              border: OutlineInputBorder(),
+              counterText: '',
+            ),
+            onChanged: (value) => draft.comment = value,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final url in draft.imageUrls)
+                _ReviewImageChip(
+                  imageUrl: url,
+                  onRemove: () {
+                    setState(() => draft.imageUrls.remove(url));
+                    widget.onChanged();
+                  },
+                ),
+              for (final file in draft.pendingImages)
+                _ReviewImageChip(
+                  localFile: file,
+                  onRemove: () {
+                    setState(() => draft.pendingImages.remove(file));
+                    widget.onChanged();
+                  },
+                ),
+              if (draft.totalImageCount < ReviewService.maxImagesPerReview)
+                OutlinedButton.icon(
+                  onPressed: _pickImages,
+                  icon: const Icon(
+                    Icons.add_photo_alternate_outlined,
+                    size: 18,
+                  ),
+                  label: const Text('เพิ่มรูป'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickImages() async {
+    final draft = widget.draft;
+    final remaining = ReviewService.maxImagesPerReview - draft.totalImageCount;
+    if (remaining <= 0) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'อัปโหลดได้สูงสุด ${ReviewService.maxImagesPerReview} รูปต่อรีวิว',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final picked = await ImagePicker().pickMultiImage(imageQuality: 90);
+    if (picked.isEmpty || !mounted) {
+      return;
+    }
+
+    setState(() {
+      draft.pendingImages.addAll(
+        picked
+            .take(remaining)
+            .map((file) => File(file.path))
+            .where((file) => file.path.isNotEmpty),
+      );
+    });
+    widget.onChanged();
+  }
+}
+
+class _ReviewImageChip extends StatelessWidget {
+  const _ReviewImageChip({
+    this.imageUrl,
+    this.localFile,
+    required this.onRemove,
+  });
+
+  final String? imageUrl;
+  final File? localFile;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: 72,
+            height: 72,
+            child: localFile != null
+                ? Image.file(localFile!, fit: BoxFit.cover)
+                : CachedAppImage(imageUrl: imageUrl!, fit: BoxFit.cover),
+          ),
+        ),
+        Positioned(
+          top: -6,
+          right: -6,
+          child: Material(
+            color: Colors.black87,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onRemove,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 14, color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewThumb extends StatelessWidget {
+  const _ReviewThumb({required this.imageUrl, required this.title});
+
+  final String? imageUrl;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl?.trim();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 52,
+        height: 52,
+        color: const Color(0xFFF3F4F6),
+        child: url != null && url.isNotEmpty
+            ? CachedAppImage(
+                imageUrl: url,
+                width: 52,
+                height: 52,
+                fit: BoxFit.cover,
+                lightweight: true,
+              )
+            : Center(
+                child: Text(
+                  title.characters.take(1).toString(),
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+      ),
+    );
+  }
 }
 
 class _RiderContactState {
@@ -1430,10 +2312,7 @@ class _RefundAccountDialogState extends State<_RefundAccountDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('ยกเลิก'),
         ),
-        FilledButton(
-          onPressed: _submit,
-          child: const Text('ยืนยันคืนเงิน'),
-        ),
+        FilledButton(onPressed: _submit, child: const Text('ยืนยันคืนเงิน')),
       ],
     );
   }
@@ -1736,7 +2615,9 @@ class _AwaitingRiderBannerState extends State<_AwaitingRiderBanner> {
                         ? Icons.payments_outlined
                         : Icons.cancel_outlined,
                   ),
-                  label: Text(_canRequestRefund ? 'ขอคืนเงิน' : 'ยกเลิกออเดอร์'),
+                  label: Text(
+                    _canRequestRefund ? 'ขอคืนเงิน' : 'ยกเลิกออเดอร์',
+                  ),
                 ),
               ),
             ],
@@ -2053,6 +2934,8 @@ class _ProductHistoryOrderGroup {
     required this.shopName,
     required this.orderedAt,
     required this.products,
+    required this.statusLabel,
+    required this.isArchived,
   });
 
   final String orderId;
@@ -2060,6 +2943,8 @@ class _ProductHistoryOrderGroup {
   final String shopName;
   final DateTime? orderedAt;
   final List<_ProductHistoryLine> products;
+  final String statusLabel;
+  final bool isArchived;
 }
 
 String _readOrderShopId(Map<String, dynamic> data) {
@@ -2113,7 +2998,11 @@ String? _roadmapReadFirstNonEmptyValue(
   return null;
 }
 
-String? _roadmapReadTrimmedString(dynamic first, dynamic second, dynamic third) {
+String? _roadmapReadTrimmedString(
+  dynamic first,
+  dynamic second,
+  dynamic third,
+) {
   for (final value in <dynamic>[first, second, third]) {
     final trimmed = value?.toString().trim();
     if (trimmed != null && trimmed.isNotEmpty) {
@@ -2195,7 +3084,9 @@ List<_ProductHistoryLine> _readProductHistoryLines(Map<String, dynamic> data) {
           productMap['productImage'],
           productMap['photoUrl'],
         ),
-        toppingsLabel: _roadmapReadToppingsLabel(productMap['selectedToppings']),
+        toppingsLabel: _roadmapReadToppingsLabel(
+          productMap['selectedToppings'],
+        ),
       ),
     );
   }
@@ -2243,6 +3134,8 @@ Future<List<_ProductHistoryOrderGroup>> _loadCustomerProductHistory({
         shopName: shopName?.isNotEmpty == true ? shopName! : 'ร้านค้า',
         orderedAt: _readOrderCreatedAt(data),
         products: products,
+        statusLabel: _readOrderStatusLabel(data),
+        isArchived: _isArchivedRoadmapOrder(data),
       ),
     );
   }
@@ -2358,7 +3251,7 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'ประวัติสินค้า',
+                        'ประวัติออเดอร์',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -2366,7 +3259,7 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                       ),
                       const SizedBox(height: 2),
                       const Text(
-                        'สินค้าที่เคยสั่งทั้งหมด',
+                        'รวมออเดอร์ที่ยกเลิกและสินค้าที่เคยสั่ง',
                         style: TextStyle(
                           color: Color(0xFF6B7280),
                           fontWeight: FontWeight.w600,
@@ -2435,11 +3328,39 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Order $orderLabel',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Order $orderLabel',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: group.isArchived
+                                      ? const Color(0xFFFEE2E2)
+                                      : const Color(0xFFDCFCE7),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  group.statusLabel,
+                                  style: TextStyle(
+                                    color: group.isArchived
+                                        ? const Color(0xFFB91C1C)
+                                        : const Color(0xFF166534),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 2),
                           Text(
@@ -2460,9 +3381,11 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          for (var productIndex = 0;
-                              productIndex < group.products.length;
-                              productIndex++) ...[
+                          for (
+                            var productIndex = 0;
+                            productIndex < group.products.length;
+                            productIndex++
+                          ) ...[
                             if (productIndex > 0)
                               const Padding(
                                 padding: EdgeInsets.symmetric(vertical: 8),
@@ -2472,7 +3395,8 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 _ProductHistoryThumb(
-                                  imageUrl: group.products[productIndex].imageUrl,
+                                  imageUrl:
+                                      group.products[productIndex].imageUrl,
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
@@ -2488,7 +3412,8 @@ class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        group.products[productIndex].quantity > 0
+                                        group.products[productIndex].quantity >
+                                                0
                                             ? '${group.products[productIndex].quantity} ชิ้น'
                                             : '-',
                                         style: const TextStyle(
@@ -2554,6 +3479,7 @@ class _ProductHistoryThumb extends StatelessWidget {
         width: 44,
         height: 44,
         fit: BoxFit.cover,
+        lightweight: true,
         borderRadius: BorderRadius.circular(10),
         errorWidget: Container(
           width: 44,

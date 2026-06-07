@@ -8,23 +8,38 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 import 'cart_screen.dart';
+import 'catalog_product_search_screen.dart';
 import 'category_catalog_screen.dart';
-import 'chat_screen.dart';
+import 'favorites_screen.dart';
 import 'firebase_options.dart';
 import 'home_product_discovery_service.dart';
 import 'home_product_shelf.dart';
+import 'public_catalog_local_cache.dart';
+import 'services/home_catalog_bootstrap.dart';
+import 'services/home_product_image_prefetch.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
 import 'nationwide_cart_screen.dart';
+import 'notification_screen.dart';
 import 'order_roadmap_screen.dart';
+import 'models/promotion_models.dart';
 import 'pricing_config_service.dart';
+import 'services/locale_service.dart';
+import 'services/promotion_catalog_service.dart';
+import 'services/promotion_display_config_service.dart';
+import 'widgets/home_promo_carousel.dart';
+import 'market_pricing_policy.dart';
+import 'shipping_pricing_policy.dart';
 import 'public_catalog_service.dart';
+import 'services/cart_session_service.dart';
+import 'services/favorites_service.dart';
 import 'services/notification_service.dart';
 import 'settings_screen.dart';
 import 'shop_map_screen.dart';
@@ -104,9 +119,24 @@ Future<void> main() async {
   } catch (_) {}
 
   try {
+    await LocaleService.instance.load();
+  } catch (_) {}
+
+  try {
     await PricingConfigService.instance.loadAndApplyOnce();
   } catch (_) {}
 
+  try {
+    await PublicCatalogLocalCache.ensureProductsHydrated();
+    await PublicCatalogLocalCache.ensurePublicShopsHydrated();
+    await AppImagePrefetch.warmBootstrapQuickActionCategories().timeout(
+      const Duration(seconds: 15),
+    );
+  } catch (_) {
+    // Home + catalog still warm images after launch.
+  }
+
+  unawaited(HomeCatalogBootstrap.warmForHome());
   runApp(const MyApp());
 }
 
@@ -218,11 +248,21 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     PricingConfigService.instance.startRealtimeSync();
+    PromotionDisplayConfigService.instance.start();
+    LocaleService.instance.addListener(_onLocaleChanged);
+  }
+
+  void _onLocaleChanged() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
+    LocaleService.instance.removeListener(_onLocaleChanged);
     unawaited(PricingConfigService.instance.dispose());
+    PromotionDisplayConfigService.instance.dispose();
     super.dispose();
   }
 
@@ -232,7 +272,7 @@ class _MyAppState extends State<MyApp> {
       title: 'VANTALAD',
       debugShowCheckedModeBanner: false,
       navigatorKey: MyApp.navigatorKey,
-      locale: const Locale('th', 'TH'),
+      locale: LocaleService.instance.locale,
       supportedLocales: const <Locale>[Locale('th', 'TH'), Locale('en', 'US')],
       localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
         GlobalMaterialLocalizations.delegate,
@@ -284,6 +324,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(HomeCatalogBootstrap.warmForHome());
     _navigationTimer = Timer(const Duration(seconds: 2), _proceedFromSplash);
   }
 
@@ -879,7 +920,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const PickedLocation _defaultDestination = PickedLocation(
     latitude: 13.7563,
     longitude: 100.5018,
@@ -890,54 +931,62 @@ class _HomeScreenState extends State<HomeScreen> {
   late PickedLocation _userLocation;
   PickedLocation _destinationLocation = _defaultDestination;
   TravelRideSelection? _travelRideSelection;
-  bool _isFetchingCurrentLocation = false;
   int _selectedBottomTab = 0;
-  int _unreadChatCount = 0;
+  List<String> _roadmapFocusOrderIds = const <String>[];
+  int _unreadNotificationCount = 0;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-  _unreadChatSubscription;
+  _unreadNotificationSubscription;
   _ActiveCatalog? _activeCatalog;
   final List<CartLineItem> _cartItems = <CartLineItem>[];
   final List<CartLineItem> _nationwideCartItems = <CartLineItem>[];
   bool _showNationwideCart = false;
+  Timer? _cartSyncDebounce;
+  Timer? _cartExpiryTimer;
+  DateTime? _lastRootBackPressAt;
+
+  static const Color _quickActionIconColor = Color(0xFFEF8A17);
 
   static const List<_QuickActionItem> _quickActions = <_QuickActionItem>[
     _QuickActionItem(
       label: 'เดินทาง',
-      badge: 'ใหม่',
-      assetPath: 'assets/rider.png',
+      icon: Icons.directions_car_outlined,
+      iconColor: _quickActionIconColor,
       actionKey: 'travel',
     ),
     _QuickActionItem(
       label: 'ร้านอาหาร',
-      assetPath: 'assets/food.png',
+      icon: Icons.restaurant_outlined,
+      iconColor: _quickActionIconColor,
       serviceType: 'ร้านอาหาร',
     ),
     _QuickActionItem(
       label: 'ตลาด',
-      assetPath: 'assets/market.png',
+      icon: Icons.storefront_outlined,
+      iconColor: _quickActionIconColor,
       serviceType: 'ตลาด',
     ),
     _QuickActionItem(
       label: 'ร้านค้า',
-      badge: 'ดีล',
-      assetPath: 'assets/shopping.png',
+      icon: Icons.shopping_bag_outlined,
+      iconColor: _quickActionIconColor,
       serviceType: 'ร้านค้า',
     ),
     _QuickActionItem(
       label: 'ร้านขายยา',
-      assetPath: 'assets/pharmacy.png',
+      icon: Icons.local_pharmacy_outlined,
+      iconColor: _quickActionIconColor,
       serviceType: 'ร้านขายยา',
     ),
     _QuickActionItem(
       label: 'แผนที่',
-      icon: Icons.map_outlined,
-      iconColor: Color(0xFFEF8A17),
+      icon: Icons.location_on_outlined,
+      iconColor: _quickActionIconColor,
       actionKey: 'shop-map',
     ),
     _QuickActionItem(
       label: 'สินค้าส่งทั่วประเทศ',
-      icon: Icons.local_shipping_outlined,
-      iconColor: Color(0xFFEF8A17),
+      icon: Icons.inventory_2_outlined,
+      iconColor: _quickActionIconColor,
       actionKey: 'nationwide-shipping',
     ),
     _QuickActionItem(
@@ -950,81 +999,230 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _userLocation = widget.userLocation;
-    _listenUnreadChats();
+    _listenUnreadNotifications();
+    unawaited(FavoritesService.instance.ensureLoaded());
+    unawaited(_restorePersistedCart());
   }
 
   @override
   void dispose() {
-    _unreadChatSubscription?.cancel();
+    _cartSyncDebounce?.cancel();
+    _cartExpiryTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _unreadNotificationSubscription?.cancel();
+    unawaited(
+      CartSessionService.saveLocalCart(
+        cartItems: List<CartLineItem>.from(_cartItems),
+        nationwideCartItems: List<CartLineItem>.from(_nationwideCartItems),
+      ),
+    );
     super.dispose();
   }
 
-  void _listenUnreadChats() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(
+        CartSessionService.saveLocalCart(
+          cartItems: List<CartLineItem>.from(_cartItems),
+          nationwideCartItems: List<CartLineItem>.from(_nationwideCartItems),
+        ),
+      );
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_restorePersistedCart());
+    }
+  }
+
+  List<CartLineItem> get _allCartItems => <CartLineItem>[
+    ..._cartItems,
+    ..._nationwideCartItems,
+  ];
+
+  void _resetCartExpiryTimer() {
+    _cartExpiryTimer?.cancel();
+    if (_allCartItems.isEmpty) {
+      return;
+    }
+    _cartExpiryTimer = Timer(CartSessionService.cartHoldDuration, () {
+      unawaited(_expireCartDueToTimeout());
+    });
+  }
+
+  Future<void> _expireCartDueToTimeout() async {
+    await CartSessionService.restoreStockHold();
+    await CartSessionService.clearLocalCart();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _cartItems.clear();
+      _nationwideCartItems.clear();
+      _showNationwideCart = false;
+      if (_selectedBottomTab == 1) {
+        _selectedBottomTab = 0;
+      }
+    });
+    _showSnackBar('ตะกร้าหมดเวลา 1 ชั่วโมง คืนสต๊อกสินค้าแล้ว');
+  }
+
+  void _scheduleCartSessionSync() {
+    _cartSyncDebounce?.cancel();
+    _cartSyncDebounce = Timer(const Duration(milliseconds: 600), () {
+      unawaited(_syncCartSession());
+    });
+  }
+
+  Future<void> _syncCartSession() async {
+    final items = _allCartItems;
+    if (items.isEmpty) {
+      await CartSessionService.restoreStockHold();
+      await CartSessionService.clearLocalCart();
+      _cartExpiryTimer?.cancel();
+      return;
+    }
+
+    try {
+      await CartSessionService.syncStockHold(items);
+      await CartSessionService.saveLocalCart(
+        cartItems: List<CartLineItem>.from(_cartItems),
+        nationwideCartItems: List<CartLineItem>.from(_nationwideCartItems),
+      );
+      _resetCartExpiryTimer();
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      final message = error.message?.trim();
+      _showSnackBar(
+        message == null || message.isEmpty
+            ? 'ไม่สามารถจองสต๊อกสินค้าได้'
+            : 'ไม่สามารถจองสต๊อกสินค้าได้ ($message)',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnackBar('ไม่สามารถจองสต๊อกสินค้าได้');
+    }
+  }
+
+  Future<void> _restorePersistedCart() async {
+    final loaded = await CartSessionService.loadLocalCart();
+    if (loaded.expired) {
+      await CartSessionService.restoreStockHold();
+      await CartSessionService.clearLocalCart();
+      if (!mounted) {
+        return;
+      }
+      if (_cartItems.isNotEmpty || _nationwideCartItems.isNotEmpty) {
+        setState(() {
+          _cartItems.clear();
+          _nationwideCartItems.clear();
+          _showNationwideCart = false;
+        });
+        _showSnackBar('ตะกร้าหมดเวลา 1 ชั่วโมง คืนสต๊อกสินค้าแล้ว');
+      }
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    if (loaded.cart.isEmpty && loaded.nationwide.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _cartItems
+        ..clear()
+        ..addAll(loaded.cart);
+      _nationwideCartItems
+        ..clear()
+        ..addAll(loaded.nationwide);
+    });
+    await _syncCartSession();
+  }
+
+  Future<void> _clearCartAfterCheckout() async {
+    await CartSessionService.consumeStockHold();
+    await CartSessionService.clearLocalCart();
+    _cartExpiryTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _cartItems.clear();
+      _nationwideCartItems.clear();
+    });
+  }
+
+  bool _handleRootBackPress() {
+    if (_activeCatalog != null || _showNationwideCart) {
+      setState(() {
+        _activeCatalog = null;
+        _showNationwideCart = false;
+        _selectedBottomTab = 0;
+      });
+      return true;
+    }
+
+    if (_selectedBottomTab != 0) {
+      setState(() {
+        _selectedBottomTab = 0;
+        _activeCatalog = null;
+        _showNationwideCart = false;
+      });
+      return true;
+    }
+
+    final now = DateTime.now();
+    if (_lastRootBackPressAt != null &&
+        now.difference(_lastRootBackPressAt!) < const Duration(seconds: 2)) {
+      return false;
+    }
+    _lastRootBackPressAt = now;
+    _showSnackBar('กดปุ่มกลับอีกครั้งเพื่อออกจากแอป');
+    return true;
+  }
+
+  void _listenUnreadNotifications() {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       return;
     }
 
-    _unreadChatSubscription?.cancel();
-    _unreadChatSubscription = FirebaseFirestore.instance
-        .collection('chats')
-        .where('participants', arrayContains: user.uid)
+    _unreadNotificationSubscription?.cancel();
+    _unreadNotificationSubscription = FirebaseFirestore.instance
+        .collection('app_notifications')
+        .where('recipientUid', isEqualTo: user.uid)
         .snapshots()
         .listen((snapshot) {
           var totalUnread = 0;
           for (final doc in snapshot.docs) {
-            final unreadMap =
-                doc.data()['unreadCounts'] as Map<String, dynamic>?;
-            final unreadValue = unreadMap?[user.uid];
-            if (unreadValue is int) {
-              totalUnread += unreadValue;
-            } else if (unreadValue is num) {
-              totalUnread += unreadValue.toInt();
+            final data = doc.data();
+            final targetApp = (data['targetApp'] ?? '').toString().trim();
+            if (targetApp.isNotEmpty && targetApp != 'van2') {
+              continue;
             }
+            if (data['isRead'] == true ||
+                data['read'] == true ||
+                data['readAt'] != null) {
+              continue;
+            }
+            totalUnread += 1;
           }
 
           if (!mounted) {
             return;
           }
-          setState(() => _unreadChatCount = totalUnread);
+          setState(() => _unreadNotificationCount = totalUnread);
         });
-  }
-
-  Future<void> _setCurrentLocation() async {
-    setState(() => _isFetchingCurrentLocation = true);
-
-    try {
-      final granted = await _ensureLocationPermission();
-      if (!granted) {
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-      final pickedLocation = await buildPickedLocation(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        fallbackTitle: 'พิกัดปัจจุบันของฉัน',
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _userLocation = pickedLocation;
-      });
-    } catch (error) {
-      _showSnackBar('ไม่สามารถดึงตำแหน่งปัจจุบันได้: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _isFetchingCurrentLocation = false);
-      }
-    }
   }
 
   Future<void> _pickCartCustomerLocation() async {
@@ -1524,7 +1722,7 @@ class _HomeScreenState extends State<HomeScreen> {
         await FirebaseAuth.instance.signInAnonymously();
         return;
       }
-      await user.getIdToken(true);
+      await user.getIdToken();
     } catch (_) {
       // PublicCatalogService retries auth and surfaces Firestore errors in UI.
     }
@@ -1557,11 +1755,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (item.actionKey == 'nationwide-shipping') {
-      await _ensureCatalogFirebaseSession();
       if (!mounted) {
         return;
       }
-
       setState(() {
         _selectedBottomTab = 0;
         _showNationwideCart = false;
@@ -1570,6 +1766,8 @@ class _HomeScreenState extends State<HomeScreen> {
           nationwideShippingOnly: true,
         );
       });
+      unawaited(AppImagePrefetch.continueWarmNationwide());
+      unawaited(_ensureCatalogFirebaseSession());
       return;
     }
 
@@ -1578,11 +1776,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    await _ensureCatalogFirebaseSession();
     if (!mounted) {
       return;
     }
-
     setState(() {
       _selectedBottomTab = 0;
       _activeCatalog = _ActiveCatalog(
@@ -1590,6 +1786,47 @@ class _HomeScreenState extends State<HomeScreen> {
         serviceType: item.serviceType!,
       );
     });
+    unawaited(AppImagePrefetch.continueWarmForServiceType(item.serviceType!));
+    unawaited(_ensureCatalogFirebaseSession());
+  }
+
+  Future<void> _openGlobalProductSearch() async {
+    await _ensureCatalogFirebaseSession();
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => CatalogProductSearchScreen(
+          title: 'ค้นหาสินค้า',
+          sectionsStream: PublicCatalogService.streamAllSections(),
+          searchHint: 'ค้นหาทุกสินค้าในแว๊นตลาด',
+          customerLatitude: _userLocation.latitude,
+          customerLongitude: _userLocation.longitude,
+          onConfirmOrder: _addToCart,
+          onNavigateToCart: _openCartTab,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFavoritesScreen() async {
+    await _ensureCatalogFirebaseSession();
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => FavoritesScreen(
+          customerLatitude: _userLocation.latitude,
+          customerLongitude: _userLocation.longitude,
+          onConfirmOrder: _addToCart,
+          onNavigateToCart: _openCartTab,
+        ),
+      ),
+    );
   }
 
   void _openShopCatalogFromProduct(PublicCatalogProduct product) {
@@ -1616,6 +1853,9 @@ class _HomeScreenState extends State<HomeScreen> {
           shopLongitude: selection.shopLongitude,
           productName: selection.productName,
           unitPrice: selection.unitPrice,
+          merchantBasePrice: selection.merchantBasePrice,
+          discountPercent: selection.discountPercent,
+          merchantUnitPayout: selection.merchantUnitPayout,
           imageUrl: selection.imageUrl,
           selectedToppings: selection.selectedToppings,
           quantity: selection.quantity,
@@ -1628,6 +1868,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     });
+    _scheduleCartSessionSync();
   }
 
   void _addToNationwideCart(CartProductSelection selection) {
@@ -1641,6 +1882,9 @@ class _HomeScreenState extends State<HomeScreen> {
           shopLongitude: selection.shopLongitude,
           productName: selection.productName,
           unitPrice: selection.unitPrice,
+          merchantBasePrice: selection.merchantBasePrice,
+          discountPercent: selection.discountPercent,
+          merchantUnitPayout: selection.merchantUnitPayout,
           imageUrl: selection.imageUrl,
           selectedToppings: selection.selectedToppings,
           quantity: selection.quantity,
@@ -1653,6 +1897,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     });
+    _scheduleCartSessionSync();
   }
 
   void _openCartTab() {
@@ -1677,6 +1922,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _cartItems.removeAt(index);
     });
+    _scheduleCartSessionSync();
   }
 
   void _removeNationwideCartItem(int index) {
@@ -1686,6 +1932,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _nationwideCartItems.removeAt(index);
     });
+    _scheduleCartSessionSync();
   }
 
   Future<User> _requireCheckoutUser() async {
@@ -1708,7 +1955,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return user;
   }
 
-  Future<List<String>> _confirmCashOnDeliveryOrder() async {
+  Future<List<String>> _confirmCashOnDeliveryOrder(
+    CartCheckoutContext checkoutContext,
+  ) async {
     final user = await _requireCheckoutUser();
     final result = await _createCheckoutOrders(
       user: user,
@@ -1720,6 +1969,7 @@ class _HomeScreenState extends State<HomeScreen> {
       riderNotifyReady: true,
       notifyRider: true,
       createdEventLabel: 'ลูกค้าสร้างออเดอร์แบบจ่ายปลายทาง',
+      checkoutContext: checkoutContext,
     );
     return result.orderIds;
   }
@@ -1761,6 +2011,7 @@ class _HomeScreenState extends State<HomeScreen> {
       riderNotifyReady: false,
       notifyRider: false,
       createdEventLabel: 'ลูกค้าสร้างออเดอร์และแนบสลิปรอตรวจ',
+      checkoutContext: request.checkoutContext,
     );
 
     if (creation.orderIds.isEmpty) {
@@ -1975,6 +2226,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _recordCheckoutDiscounts({
+    required List<String> orderIds,
+    required CartDiscountSnapshot discounts,
+  }) async {
+    if (orderIds.isEmpty || discounts.discountTotal <= 0) {
+      return;
+    }
+    try {
+      final functions = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      );
+      await functions.httpsCallable('recordCheckoutDiscounts').call(
+        <String, dynamic>{
+          'orderIds': orderIds,
+          'discountTotal': discounts.discountTotal,
+          'discountLines': discounts.discountLines
+              .map((line) => line.toPayload())
+              .toList(growable: false),
+        },
+      );
+    } catch (_) {}
+  }
+
   Future<({List<String> orderIds, double combinedGrandTotal})>
   _createCheckoutOrders({
     required User user,
@@ -1986,6 +2260,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required bool riderNotifyReady,
     required bool notifyRider,
     required String createdEventLabel,
+    CartCheckoutContext? checkoutContext,
   }) async {
     if (_cartItems.isEmpty) {
       throw Exception('ไม่มีสินค้าในตะกร้า');
@@ -2004,6 +2279,29 @@ class _HomeScreenState extends State<HomeScreen> {
       final failedShops = <String>[];
       final shopsWithoutRider = <String>[];
       String? lastError;
+      final marketFees = MarketPricingPolicy.computeCheckoutFees(
+        groupedByShop.entries.map(
+          (entry) => MarketShopLocation(
+            shopId: entry.key,
+            latitude: entry.value.first.shopLatitude,
+            longitude: entry.value.first.shopLongitude,
+          ),
+        ),
+      );
+      var marketCollectionAssigned = false;
+      final discounts =
+          checkoutContext?.discounts ?? CartDiscountSnapshot.empty;
+      final shopSubtotals = <String, double>{
+        for (final entry in groupedByShop.entries)
+          entry.key: entry.value.fold<double>(
+            0,
+            (sumAcc, item) => sumAcc + (item.unitPrice * item.quantity),
+          ),
+      };
+      final combinedSubtotal = shopSubtotals.values.fold<double>(
+        0,
+        (sumAcc, value) => sumAcc + value,
+      );
 
       for (final entry in groupedByShop.entries) {
         final shopId = entry.key;
@@ -2023,6 +2321,11 @@ class _HomeScreenState extends State<HomeScreen> {
           0,
           (sumAcc, item) => sumAcc + (item.unitPrice * item.quantity),
         );
+        final merchantSubtotal = items.fold<double>(
+          0,
+          (sumAcc, item) =>
+              sumAcc + (item.merchantUnitPayout * item.quantity),
+        );
 
         final totalQuantity = items.fold<int>(
           0,
@@ -2040,11 +2343,16 @@ class _HomeScreenState extends State<HomeScreen> {
         final products = items
             .map((item) {
               final imageUrl = item.imageUrl?.trim();
+              final merchantLinePayout = item.merchantUnitPayout * item.quantity;
               return <String, dynamic>{
                 'productId': item.productId,
                 'name': item.productName,
                 'quantity': item.quantity,
                 'unitPrice': item.unitPrice,
+                'merchantBasePrice': item.merchantBasePrice,
+                'discountPercent': item.discountPercent,
+                'merchantUnitPayout': item.merchantUnitPayout,
+                'merchantLinePayout': merchantLinePayout,
                 'preparationTimeMinutes': item.preparationTimeMinutes,
                 'preparingDuration': item.preparationTimeMinutes * 60 * 1000,
                 'selectedToppings': item.selectedToppings,
@@ -2056,6 +2364,11 @@ class _HomeScreenState extends State<HomeScreen> {
               };
             })
             .toList(growable: false);
+        final productIds = items
+            .map((item) => item.productId.trim())
+            .where((productId) => productId.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
 
         final firstItem = items.first;
         final shippingFee = _estimateShippingFeeForOrder(
@@ -2064,7 +2377,33 @@ class _HomeScreenState extends State<HomeScreen> {
           customerLatitude: _userLocation.latitude,
           customerLongitude: _userLocation.longitude,
         );
-        final grandTotal = subtotal + shippingFee;
+        final shopQualifiesForMarket = marketFees.shopQualifies(shopId);
+        final orderServiceFee = shopQualifiesForMarket
+            ? marketFees.serviceFeePerOrder
+            : 0.0;
+        final orderCollectionFee =
+            !marketCollectionAssigned && shopQualifiesForMarket
+            ? marketFees.collectionFee
+            : 0.0;
+        if (orderCollectionFee > 0) {
+          marketCollectionAssigned = true;
+        }
+        final discountShare = combinedSubtotal > 0
+            ? discounts.discountTotal * (subtotal / combinedSubtotal)
+            : 0.0;
+        final promotionShare = combinedSubtotal > 0
+            ? discounts.promotionDiscount * (subtotal / combinedSubtotal)
+            : 0.0;
+        final couponShare = combinedSubtotal > 0
+            ? discounts.couponDiscount * (subtotal / combinedSubtotal)
+            : 0.0;
+        final grandTotal = (subtotal +
+                shippingFee +
+                orderServiceFee +
+                orderCollectionFee -
+                discountShare)
+            .clamp(0.0, double.infinity)
+            .toDouble();
         combinedGrandTotal += grandTotal;
         final riderSearch = await _findNearestRiderForShop(
           shopLatitude: firstItem.shopLatitude,
@@ -2143,10 +2482,28 @@ class _HomeScreenState extends State<HomeScreen> {
             'preparationTimeMinutes': preparationTimeMinutes,
             'preparingDuration': preparingDuration,
             'products': products,
+            'productIds': productIds,
             'totalPrice': subtotal,
             'subtotal': subtotal,
+            'merchantSubtotal': merchantSubtotal,
             'shippingFee': shippingFee,
+            'serviceFee': orderServiceFee,
+            'multiShopCollectionFee': orderCollectionFee,
+            if (marketFees.applies && shopQualifiesForMarket)
+              'marketHubFeesApplied': true,
+            if (marketFees.applies && shopQualifiesForMarket)
+              'marketQualifyingShopCount': marketFees.qualifyingShopCount,
             'grandTotal': grandTotal,
+            if (discountShare > 0) ...<String, dynamic>{
+              'promotionDiscount': promotionShare,
+              'couponDiscount': couponShare,
+              'discountTotal': discountShare,
+              if (checkoutContext?.couponCode != null)
+                'appliedCouponCode': checkoutContext!.couponCode,
+              'discountLines': discounts.discountLines
+                  .map((line) => line.toPayload())
+                  .toList(growable: false),
+            },
             'riderSearch': <String, dynamic>{
               'stepKm': 2,
               'maxRadiusKm': 10,
@@ -2239,10 +2596,13 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (mounted) {
-        setState(() {
-          _cartItems.clear();
-        });
+        await _clearCartAfterCheckout();
       }
+
+      await _recordCheckoutDiscounts(
+        orderIds: createdOrderIds,
+        discounts: discounts,
+      );
 
       return (
         orderIds: createdOrderIds,
@@ -2462,7 +2822,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required double customerLongitude,
   }) {
     if (shopLatitude == null || shopLongitude == null) {
-      return 25;
+      return ShippingPricingPolicy.shippingMissingCoordsFee;
     }
 
     final meters = Geolocator.distanceBetween(
@@ -2472,9 +2832,7 @@ class _HomeScreenState extends State<HomeScreen> {
       customerLongitude,
     );
     final km = meters <= 0 ? 0.0 : meters / 1000.0;
-    final billableKm = km < 1 ? 1.0 : km;
-    final fee = 25 + ((billableKm - 1) * 12.5);
-    return double.parse(fee.toStringAsFixed(2));
+    return ShippingPricingPolicy.computeLocalShippingFee(km);
   }
 
   double _estimateTravelFare({
@@ -2490,9 +2848,25 @@ class _HomeScreenState extends State<HomeScreen> {
       destinationLongitude,
     );
     final km = meters <= 0 ? 0.0 : meters / 1000.0;
-    final billableKm = km < 1 ? 1.0 : km;
-    final fee = 25 + ((billableKm - 1) * 12.5);
-    return double.parse(fee.toStringAsFixed(2));
+    return ShippingPricingPolicy.computeTravelFare(km);
+  }
+
+  void _focusRoadmapOrders(List<String> orderIds) {
+    final uniqueOrderIds = orderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (!mounted || uniqueOrderIds.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _roadmapFocusOrderIds = uniqueOrderIds;
+      _selectedBottomTab = 2;
+      _activeCatalog = null;
+      _showNationwideCart = false;
+    });
   }
 
   Future<void> _openOrderRoadmap(List<String> orderIds) async {
@@ -2500,11 +2874,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => OrderRoadmapScreen(orderIds: orderIds),
-      ),
-    );
+    _focusRoadmapOrders(orderIds);
   }
 
   Future<_RiderSearchResult> _findNearestRiderForShop({
@@ -2998,6 +3368,9 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedBottomTab = index;
           _activeCatalog = null;
           _showNationwideCart = false;
+          if (index == 2) {
+            _roadmapFocusOrderIds = const <String>[];
+          }
         });
 
         if (index == 1 || index == 2 || index == 3 || index == 4) {
@@ -3008,7 +3381,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'โฮม',
           'ตะกร้า',
           'โรดแมป',
-          'ข้อความ',
+          'แจ้งเตือน',
           'ตั้งค่า',
         ];
         _showSnackBar('หน้า ${labels[index]} กำลังพัฒนา');
@@ -3045,6 +3418,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     _showNationwideCart = false;
                     _activeCatalog = null;
                   });
+                  if (_cartItems.isEmpty) {
+                    await CartSessionService.consumeStockHold();
+                  } else {
+                    await CartSessionService.syncStockHold(
+                      List<CartLineItem>.from(_cartItems),
+                    );
+                  }
+                  await CartSessionService.saveLocalCart(
+                    cartItems: List<CartLineItem>.from(_cartItems),
+                    nationwideCartItems: const <CartLineItem>[],
+                  );
+                  _resetCartExpiryTimer();
                   await _openOrderRoadmap(orderIds);
                 },
               )
@@ -3082,8 +3467,8 @@ class _HomeScreenState extends State<HomeScreen> {
         onSubmitPromptPaySlip: _submitPromptPaySlipOrder,
         onOpenOrderRoadmap: _openOrderRoadmap,
       ),
-      2 => OrderRoadmapScreen(),
-      3 => const ChatScreen(),
+      2 => OrderRoadmapScreen(orderIds: _roadmapFocusOrderIds),
+      3 => NotificationScreen(onOpenOrder: _focusRoadmapOrders),
       _ => SettingsScreen(
         onLoggedOut: () {
           if (!mounted) {
@@ -3110,8 +3495,20 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     };
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4FAFB),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          return;
+        }
+        if (!_handleRootBackPress()) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+      backgroundColor: _selectedBottomTab == 4
+          ? Colors.white
+          : const Color(0xFFF4FAFB),
       body: body,
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -3180,14 +3577,14 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               NavigationDestination(
                 icon: _CartNavIcon(
-                  icon: Icons.message_outlined,
-                  count: _unreadChatCount,
+                  icon: Icons.notifications_none_rounded,
+                  count: _unreadNotificationCount,
                 ),
                 selectedIcon: _CartNavIcon(
-                  icon: Icons.message,
-                  count: _unreadChatCount,
+                  icon: Icons.notifications_rounded,
+                  count: _unreadNotificationCount,
                 ),
-                label: 'ข้อความ',
+                label: 'แจ้งเตือน',
               ),
               const NavigationDestination(
                 icon: Icon(Icons.settings_outlined),
@@ -3197,6 +3594,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -3286,43 +3684,54 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: Container(
-                              height: 54,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
                                 borderRadius: BorderRadius.circular(28),
-                              ),
-                              child: Row(
-                                children: <Widget>[
-                                  const Icon(
-                                    Icons.search,
-                                    color: Color(0xFF6B7280),
+                                onTap: _openGlobalProductSearch,
+                                child: Container(
+                                  height: 54,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      'ค้นหาในแอพ แว๊นตลาด',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium
-                                          ?.copyWith(
-                                            color: const Color(0xFF6B7280),
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                    ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(28),
                                   ),
-                                ],
+                                  child: Row(
+                                    children: <Widget>[
+                                      const Icon(
+                                        Icons.search,
+                                        color: Color(0xFF6B7280),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          'ค้นหาทุกสินค้าในแว๊นตลาด',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(
+                                                color: const Color(0xFF6B7280),
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                           const SizedBox(width: 12),
-                          _HeaderAvatarBadge(
-                            label: 'G',
-                            backgroundColor: const Color(0xFFFFC928),
-                            foregroundColor: const Color(0xFF7A4B00),
+                          InkWell(
+                            onTap: _openFavoritesScreen,
+                            borderRadius: BorderRadius.circular(24),
+                            child: _HeaderAvatarBadge(
+                              icon: Icons.favorite_border,
+                              backgroundColor: const Color(0xFFFFC928),
+                              foregroundColor: const Color(0xFF7A4B00),
+                            ),
                           ),
                           const SizedBox(width: 10),
                           const _HeaderAvatarBadge(
@@ -3331,68 +3740,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             foregroundColor: Colors.white,
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 18),
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: const Color(0x26FFF7EE),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0x4DFFF3DB)),
-                        ),
-                        child: Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  const Text(
-                                    'ตำแหน่งของคุณ',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _userLocation.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            FilledButton(
-                              onPressed: _isFetchingCurrentLocation
-                                  ? null
-                                  : _setCurrentLocation,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                foregroundColor: const Color(0xFFB64700),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                              ),
-                              child: _isFetchingCurrentLocation
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Text('อัปเดตพิกัด'),
-                            ),
-                          ],
-                        ),
                       ),
                     ],
                   ),
@@ -3422,6 +3769,25 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+        if (PromotionDisplayConfigService.instance.current.homePromoBanner)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+            sliver: SliverToBoxAdapter(
+              child: StreamBuilder<List<PromotionOffer>>(
+                stream: PromotionCatalogService.instance.watchActivePromotions(),
+                builder: (context, snapshot) {
+                  final promotions = snapshot.data ?? const <PromotionOffer>[];
+                  if (promotions.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return HomePromoCarousel(
+                    promotions: promotions,
+                    onTap: _openCartTab,
+                  );
+                },
+              ),
+            ),
+          ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
           sliver: SliverToBoxAdapter(
@@ -3470,7 +3836,6 @@ class _QuickActionItem {
   const _QuickActionItem({
     required this.label,
     this.badge,
-    this.assetPath,
     this.icon,
     this.iconColor,
     this.serviceType,
@@ -3479,7 +3844,6 @@ class _QuickActionItem {
 
   final String label;
   final String? badge;
-  final String? assetPath;
   final IconData? icon;
   final Color? iconColor;
   final String? serviceType;
@@ -3654,7 +4018,6 @@ class _DashboardTile extends StatelessWidget {
               ),
             _SquareImagePlaceholder(
               size: iconSize,
-              assetPath: item.assetPath,
               icon: item.icon,
               iconColor: item.iconColor,
             ),
@@ -3681,43 +4044,22 @@ class _DashboardTile extends StatelessWidget {
 class _SquareImagePlaceholder extends StatelessWidget {
   const _SquareImagePlaceholder({
     required this.size,
-    this.assetPath,
     this.icon,
     this.iconColor,
   });
 
   final double size;
-  final String? assetPath;
   final IconData? icon;
   final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
-    if (assetPath != null) {
-      return Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFFFFF),
-          borderRadius: BorderRadius.circular(size * 0.28),
-          border: Border.all(color: const Color(0x66DDEEF1)),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(size * 0.24),
-          child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Image.asset(assetPath!, fit: BoxFit.contain),
-          ),
-        ),
-      );
-    }
-
     if (icon != null) {
       return Container(
         width: size,
         height: size,
         decoration: BoxDecoration(
-          color: const Color(0x14FFFFFF),
+          color: const Color(0xFFFFFFFF),
           borderRadius: BorderRadius.circular(size * 0.28),
           border: Border.all(color: const Color(0x66DDEEF1)),
         ),
@@ -3762,10 +4104,40 @@ class _HomeProductShelves extends StatefulWidget {
 }
 
 class _HomeProductShelvesState extends State<_HomeProductShelves> {
+  late final Future<List<PublicCatalogProduct>> _featuredFuture;
+  Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >?
+  _secondaryFuture;
+  String? _secondaryFutureKey;
+  String? _scheduledShelfPrefetchKey;
+
   @override
   void initState() {
     super.initState();
     unawaited(_ensureCatalogFirebaseSession());
+    _featuredFuture = HomeProductDiscoveryService.streamFeaturedShelf()
+        .first
+        .timeout(const Duration(seconds: 15));
+    HomeProductImagePrefetch.startHomeWarmOnce(
+      featuredFuture: _featuredFuture,
+      secondaryFuture: _secondaryFutureForWarm(),
+    );
+  }
+
+  Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >
+  _secondaryFutureForWarm() async {
+    final featured = await _featuredFuture;
+    final featuredIds = featured.map((product) => product.id).toSet();
+    return _loadSecondaryShelves(featuredIds);
   }
 
   Future<void> _ensureCatalogFirebaseSession() async {
@@ -3775,7 +4147,7 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
         await FirebaseAuth.instance.signInAnonymously();
         return;
       }
-      await user.getIdToken(true);
+      await user.getIdToken();
     } catch (_) {}
   }
 
@@ -3799,7 +4171,30 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
           customerLongitude: widget.customerLongitude,
           excludeIds: combinedExclude,
         );
-    return (bestSelling: bestSelling, personalized: personalized);
+    final fallbackPersonalized = personalized.isNotEmpty
+        ? personalized
+        : await HomeProductDiscoveryService.loadPersonalizedShelf(
+            customerLatitude: widget.customerLatitude,
+            customerLongitude: widget.customerLongitude,
+            excludeIds: excludeFeaturedIds,
+          );
+    return (bestSelling: bestSelling, personalized: fallbackPersonalized);
+  }
+
+  Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >
+  _secondaryFutureForKey(Set<String> featuredIds) {
+    final key = featuredIds.join(',');
+    if (_secondaryFuture != null && _secondaryFutureKey == key) {
+      return _secondaryFuture!;
+    }
+    _secondaryFutureKey = key;
+    _secondaryFuture = _loadSecondaryShelves(featuredIds);
+    return _secondaryFuture!;
   }
 
   @override
@@ -3821,11 +4216,30 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
           })
         >(
           key: ValueKey<String>(featuredIds.join(',')),
-          future: loadingFeatured ? null : _loadSecondaryShelves(featuredIds),
+          future: loadingFeatured
+              ? null
+              : _secondaryFutureForKey(featuredIds),
           builder: (context, secondarySnapshot) {
             final secondary = secondarySnapshot.data;
             final loadingSecondary =
                 secondarySnapshot.connectionState == ConnectionState.waiting;
+
+            if (!loadingFeatured && featured.isNotEmpty) {
+              final prefetchKey = featuredIds.join(',');
+              if (_scheduledShelfPrefetchKey != prefetchKey) {
+                _scheduledShelfPrefetchKey = prefetchKey;
+                HomeProductImagePrefetch.scheduleShelfPrefetch(featured);
+              }
+            }
+            if (secondary != null && !loadingSecondary) {
+              HomeProductImagePrefetch.scheduleShelfPrefetch(
+                <PublicCatalogProduct>[
+                  ...featured,
+                  ...secondary.bestSelling,
+                  ...secondary.personalized,
+                ],
+              );
+            }
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3835,6 +4249,11 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
                   products: featured,
                   isLoading: loadingFeatured,
                   onProductTap: widget.onProductTap,
+                  useCatalogCardStyle: true,
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  onConfirmOrder: widget.onConfirmOrder,
+                  onNavigateToCart: widget.onNavigateToCart,
                 ),
                 const SizedBox(height: 20),
                 HomeProductShelfSection(
@@ -3861,6 +4280,8 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
                   customerLongitude: widget.customerLongitude,
                   onConfirmOrder: widget.onConfirmOrder,
                   onNavigateToCart: widget.onNavigateToCart,
+                  showWhenEmpty: true,
+                  emptyMessage: 'ยังไม่มีสินค้าที่ตรงกับประวัติของคุณ',
                 ),
               ],
             );

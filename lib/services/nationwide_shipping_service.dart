@@ -1,4 +1,5 @@
 import '../cart_screen.dart';
+import '../shipping_pricing_policy.dart';
 
 class NationwideDeliveryAddress {
   const NationwideDeliveryAddress({
@@ -103,11 +104,11 @@ class NationwideShippingService {
     required NationwideDeliveryAddress address,
   }) {
     final parcel = summarizeParcel(items);
-    final weightKg = (parcel.totalWeightGrams / 1000).ceil().clamp(1, 30);
-    final remoteAreaSurcharge = _looksRemotePostalCode(address.postalCode)
-        ? 30
-        : 0;
-    final fee = 45 + (weightKg * 18) + remoteAreaSurcharge;
+    final remoteArea = _looksRemotePostalCode(address.postalCode);
+    final fee = ShippingPricingPolicy.computeNationwideFee(
+      weightGrams: parcel.totalWeightGrams,
+      remoteArea: remoteArea,
+    );
 
     return NationwideShippingQuote(
       provider: 'manual',

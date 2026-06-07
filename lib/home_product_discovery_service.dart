@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'services/home_catalog_bootstrap.dart';
+import 'services/home_product_image_prefetch.dart';
 import 'public_catalog_service.dart';
 
 class HomeProductDiscoveryService {
@@ -14,13 +16,32 @@ class HomeProductDiscoveryService {
 
   static Stream<List<PublicCatalogProduct>> streamFeaturedShelf({
     Set<String> excludeIds = const <String>{},
-  }) {
-    return PublicCatalogService.streamFeaturedProductIds().asyncMap(
-      (featuredIds) => _buildFeaturedShelf(
+  }) async* {
+    final cached = HomeCatalogBootstrap.peekFeaturedShelf();
+    if (cached != null && cached.isNotEmpty) {
+      yield cached;
+    }
+
+    await for (final featuredIds in PublicCatalogService.streamFeaturedProductIds()) {
+      final fresh = await _buildFeaturedShelf(
         featuredIds,
         excludeIds: excludeIds,
-      ),
-    );
+      );
+      if (fresh.isEmpty) {
+        continue;
+      }
+      HomeCatalogBootstrap.updateFeaturedShelf(fresh);
+      HomeProductImagePrefetch.scheduleShelfPrefetch(
+        fresh,
+        limit: shelfLimit,
+      );
+      final cachedIds =
+          cached?.map((product) => product.id).join(',') ?? '';
+      final freshIds = fresh.map((product) => product.id).join(',');
+      if (cachedIds != freshIds) {
+        yield fresh;
+      }
+    }
   }
 
   static Future<List<PublicCatalogProduct>> loadBestSellingShelf({

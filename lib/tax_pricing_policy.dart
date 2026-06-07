@@ -94,6 +94,65 @@ class TaxPricingPolicy {
     return 0;
   }
 
+  static double parseDiscountPercent(Object? value) {
+    final parsed = parseNumber(value).toDouble();
+    if (parsed <= 0) {
+      return 0;
+    }
+    if (parsed > 100) {
+      return 100;
+    }
+    return parsed;
+  }
+
+  static const double merchantGpRate = 0.18;
+
+  static num applyMerchantDiscount(num basePrice, Object? discountPercent) {
+    final pct = parseDiscountPercent(discountPercent);
+    if (pct <= 0 || basePrice <= 0) {
+      return basePrice;
+    }
+    return basePrice * (1 - pct / 100);
+  }
+
+  static num resolveMerchantListedUnitPrice(Map<String, dynamic> data) {
+    return applyMerchantDiscount(
+      parseNumber(data['price']),
+      data['discountPercent'],
+    );
+  }
+
+  static num resolveMerchantUnitPayout(Map<String, dynamic> data) {
+    final listed = resolveMerchantListedUnitPrice(data);
+    if (listed <= 0) {
+      return 0;
+    }
+    return listed * (1 - merchantGpRate);
+  }
+
+  static num merchantToppingPayout(num rawToppingPrice) {
+    if (rawToppingPrice <= 0) {
+      return 0;
+    }
+    return rawToppingPrice * (1 - merchantGpRate);
+  }
+
+  static num resolveCustomerOriginalUnitPrice(Map<String, dynamic> data) {
+    final taxable = isTaxableProduct(data);
+    final basePrice = parseNumber(data['price']);
+    return applyProductMarkup(basePrice, taxable);
+  }
+
+  static num resolveCustomerUnitPrice(Map<String, dynamic> data) {
+    final taxable = isTaxableProduct(data);
+    final basePrice = parseNumber(data['price']);
+    final discountedBase = applyMerchantDiscount(
+      basePrice,
+      data['discountPercent'],
+    );
+    return applyProductMarkup(discountedBase, taxable);
+  }
+
   static num applyProductMarkup(num amount, bool taxable) {
     final rate = taxable ? taxableMarkupRate : nonTaxableMarkupRate;
     return applyMarkup(amount, rate);

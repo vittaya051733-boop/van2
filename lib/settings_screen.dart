@@ -1,14 +1,26 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+
+import 'admin_contact_screen.dart';
+import 'admin_support_inbox_screen.dart';
+import 'help_center_screen.dart';
+import 'localization/settings_copy.dart';
+import 'privacy_security_screen.dart';
+import 'services/admin_support_config.dart';
+import 'services/locale_service.dart';
+import 'widgets/cached_app_avatar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.onLoggedOut,
+    this.appVersionLabel,
   });
 
   final VoidCallback onLoggedOut;
+  final String? appVersionLabel;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -19,6 +31,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   static const Color _settingsAccentDark = Color(0xFFE55A00);
 
   bool _isSigningOut = false;
+  String? _appVersionLabel;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAppVersion();
+  }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _appVersionLabel = '${info.version}+${info.buildNumber}';
+      });
+    } catch (_) {}
+  }
 
   String _displayName(User? user) {
     final name = user?.displayName?.trim();
@@ -27,7 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (email != null && email.isNotEmpty) return email;
     final phoneNumber = user?.phoneNumber?.trim();
     if (phoneNumber != null && phoneNumber.isNotEmpty) return phoneNumber;
-    return 'ผู้ใช้';
+    return SettingsCopy.userFallback;
   }
 
   String? _secondaryText(User? user) {
@@ -41,10 +72,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildAvatar(User? user) {
     final photoUrl = user?.photoURL?.trim();
     if (photoUrl != null && photoUrl.isNotEmpty) {
-      return CircleAvatar(
+      return CachedAppAvatar(
+        imageUrl: photoUrl,
         radius: 22,
         backgroundColor: Colors.white,
-        backgroundImage: NetworkImage(photoUrl),
       );
     }
 
@@ -88,10 +119,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _snack(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text), behavior: SnackBarBehavior.floating),
+  Future<void> _pickLanguage() async {
+    final service = LocaleService.instance;
+    final selected = await showModalBottomSheet<Locale>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: Text(
+                  SettingsCopy.chooseLanguage,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              ListTile(
+                title: Text(SettingsCopy.thaiLabel),
+                trailing: service.locale == LocaleService.thai
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => Navigator.of(context).pop(LocaleService.thai),
+              ),
+              ListTile(
+                title: Text(SettingsCopy.englishLabel),
+                trailing: service.locale == LocaleService.english
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => Navigator.of(context).pop(LocaleService.english),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
+
+    if (selected != null) {
+      await service.setLocale(selected);
+    }
   }
 
   Future<void> _handleLogout() async {
@@ -103,16 +173,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('ออกจากระบบ'),
-          content: const Text('คุณต้องการออกจากระบบใช่หรือไม่'),
+          title: Text(SettingsCopy.logoutTitle),
+          content: Text(SettingsCopy.logoutConfirm),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('ยกเลิก'),
+              child: Text(SettingsCopy.cancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('ออกจากระบบ'),
+              child: Text(SettingsCopy.logout),
             ),
           ],
         );
@@ -128,9 +198,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await FirebaseAuth.instance.signOut();
       try {
         await GoogleSignIn().signOut();
-      } catch (_) {
-        // Ignore Google sign-out errors and continue logout flow.
-      }
+      } catch (_) {}
 
       if (!mounted) {
         return;
@@ -139,9 +207,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.onLoggedOut();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('ออกจากระบบไม่สำเร็จ: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${SettingsCopy.logout}: $error')),
+        );
       }
     } finally {
       if (mounted) {
@@ -152,120 +220,167 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    final name = _displayName(currentUser);
-    final secondary = _secondaryText(currentUser);
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
+        final currentUser = FirebaseAuth.instance.currentUser;
+        final name = _displayName(currentUser);
+        final secondary = _secondaryText(currentUser);
+        final localeLabel = LocaleService.instance.labelFor(
+          LocaleService.instance.locale,
+        );
 
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: _settingsAccent,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'ตั้งค่า',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(74),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
-            child: Row(
-              children: <Widget>[
-                _buildAvatar(currentUser),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      if (secondary != null) ...<Widget>[
-                        const SizedBox(height: 2),
-                        Text(
-                          secondary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.85),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      body: ListView(
-        children: <Widget>[
-          _sectionTitle('ช่วยเหลือ'),
-          ListTile(
-            leading: const Icon(Icons.help_outline_rounded),
-            title: const Text('ศูนย์ช่วยเหลือ'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _snack('ศูนย์ช่วยเหลือ (กำลังเตรียม)'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.support_agent_rounded),
-            title: const Text('ติดต่อแอดมิน'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _snack('ติดต่อแอดมิน (กำลังเตรียม)'),
-          ),
-          const Divider(height: 1),
-          _sectionTitle('ความปลอดภัย'),
-          ListTile(
-            leading: const Icon(Icons.shield_outlined),
-            title: const Text('ความเป็นส่วนตัวและความปลอดภัย'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _snack('ความปลอดภัย (กำลังเตรียม)'),
-          ),
-          const Divider(height: 1),
-          _sectionTitle('ตั้งค่าภาษา'),
-          ListTile(
-            leading: const Icon(Icons.language_rounded),
-            title: const Text('ภาษา'),
-            subtitle: const Text('ไทย'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _snack('ตั้งค่าภาษา (กำลังเตรียม)'),
-          ),
-          const Divider(height: 1),
-          _sectionTitle('บัญชี'),
-          ListTile(
-            enabled: !_isSigningOut,
-            leading: _isSigningOut
-                ? const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.logout_rounded, color: Color(0xFFDC2626)),
+        return Scaffold(
+          backgroundColor: Colors.white,
+          appBar: AppBar(
+            backgroundColor: _settingsAccent,
+            foregroundColor: Colors.white,
+            elevation: 0,
             title: Text(
-              _isSigningOut ? 'กำลังออกจากระบบ...' : 'ออกจากระบบ',
-              style: const TextStyle(
-                color: Color(0xFFDC2626),
-                fontWeight: FontWeight.w700,
+              SettingsCopy.settingsTitle,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(74),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+                child: Row(
+                  children: <Widget>[
+                    _buildAvatar(currentUser),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          if (secondary != null) ...<Widget>[
+                            const SizedBox(height: 2),
+                            Text(
+                              secondary,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.85),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: _isSigningOut ? null : _handleLogout,
           ),
-          const SizedBox(height: 20),
-        ],
-      ),
+          body: ListView(
+            children: <Widget>[
+              _sectionTitle(SettingsCopy.helpSection),
+              ListTile(
+                leading: const Icon(Icons.help_outline_rounded),
+                title: Text(SettingsCopy.helpCenter),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const HelpCenterScreen(),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.support_agent_rounded),
+                title: Text(SettingsCopy.contactAdmin),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AdminContactScreen(
+                        config: kVan2AdminSupportConfig,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.mark_chat_unread_outlined),
+                title: Text(SettingsCopy.adminMessages),
+                subtitle: Text(SettingsCopy.adminMessagesSubtitle),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AdminSupportInboxScreen(
+                        config: kVan2AdminSupportConfig,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1),
+              _sectionTitle(SettingsCopy.securitySection),
+              ListTile(
+                leading: const Icon(Icons.shield_outlined),
+                title: Text(SettingsCopy.privacySecurity),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => PrivacySecurityScreen(
+                        appVersionLabel:
+                            _appVersionLabel ?? widget.appVersionLabel,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1),
+              _sectionTitle(SettingsCopy.languageSection),
+              ListTile(
+                leading: const Icon(Icons.language_rounded),
+                title: Text(SettingsCopy.language),
+                subtitle: Text(localeLabel),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: _pickLanguage,
+              ),
+              const Divider(height: 1),
+              _sectionTitle(SettingsCopy.accountSection),
+              ListTile(
+                enabled: !_isSigningOut,
+                leading: _isSigningOut
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.logout_rounded, color: Color(0xFFDC2626)),
+                title: Text(
+                  _isSigningOut ? SettingsCopy.loggingOut : SettingsCopy.logout,
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: _isSigningOut ? null : _handleLogout,
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
     );
   }
 }

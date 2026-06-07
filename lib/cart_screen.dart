@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:geolocator/geolocator.dart';
@@ -16,7 +15,16 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/payment_collection_config.dart';
+import 'services/catalog_share.dart';
+import 'services/favorites_service.dart';
 import 'services/payment_qr_service.dart';
+import 'services/app_image_prefetch.dart';
+import 'market_pricing_policy.dart';
+import 'models/promotion_models.dart';
+import 'services/promotion_display_config_service.dart';
+import 'shipping_pricing_policy.dart';
+import 'widgets/cached_app_image.dart';
+import 'widgets/promotion_cart_panel.dart';
 
 class CartLineItem {
   const CartLineItem({
@@ -27,6 +35,9 @@ class CartLineItem {
     required this.shopLongitude,
     required this.productName,
     required this.unitPrice,
+    required this.merchantBasePrice,
+    required this.discountPercent,
+    required this.merchantUnitPayout,
     required this.imageUrl,
     required this.selectedToppings,
     required this.quantity,
@@ -45,6 +56,9 @@ class CartLineItem {
   final double? shopLongitude;
   final String productName;
   final num unitPrice;
+  final num merchantBasePrice;
+  final double discountPercent;
+  final num merchantUnitPayout;
   final String? imageUrl;
   final List<String> selectedToppings;
   final int quantity;
@@ -63,6 +77,7 @@ class PaymentSlipSubmissionRequest {
     required this.contentType,
     required this.sizeBytes,
     required this.grandTotal,
+    this.checkoutContext,
   });
 
   final Uint8List bytes;
@@ -70,6 +85,7 @@ class PaymentSlipSubmissionRequest {
   final String? contentType;
   final int sizeBytes;
   final double grandTotal;
+  final CartCheckoutContext? checkoutContext;
 }
 
 class PaymentSlipSubmissionResult {
@@ -85,14 +101,20 @@ class PaymentSlipSubmissionResult {
 }
 
 class _TrueMoneyDialogDraft {
-  const _TrueMoneyDialogDraft({required this.grandTotal, this.attachedSlip});
+  const _TrueMoneyDialogDraft({
+    required this.grandTotal,
+    this.attachedSlip,
+    this.checkoutContext,
+  });
 
   final double grandTotal;
   final PlatformFile? attachedSlip;
+  final CartCheckoutContext? checkoutContext;
 
   _TrueMoneyDialogDraft copyWith({
     double? grandTotal,
     PlatformFile? attachedSlip,
+    CartCheckoutContext? checkoutContext,
     bool clearAttachedSlip = false,
   }) {
     return _TrueMoneyDialogDraft(
@@ -100,6 +122,7 @@ class _TrueMoneyDialogDraft {
       attachedSlip: clearAttachedSlip
           ? null
           : (attachedSlip ?? this.attachedSlip),
+      checkoutContext: checkoutContext ?? this.checkoutContext,
     );
   }
 }
@@ -126,7 +149,8 @@ class CartScreen extends StatefulWidget {
   final void Function(int index) onRemoveItem;
   final VoidCallback onPickCustomerLocation;
   final VoidCallback onApplySharedLocation;
-  final Future<List<String>> Function()? onConfirmCashOnDelivery;
+  final Future<List<String>> Function(CartCheckoutContext context)?
+      onConfirmCashOnDelivery;
   final Future<PaymentSlipSubmissionResult> Function(
     PaymentSlipSubmissionRequest request,
   )?
@@ -151,6 +175,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
   late Future<_ServerCartTotals> _serverTotalsFuture;
   String _shippingKey = '';
   String _serverTotalsKey = '';
+  final TextEditingController _couponController = TextEditingController();
+  String? _appliedCouponCode;
+  String? _pendingCouponCode;
   bool _isSubmittingCashOnDelivery = false;
   _TrueMoneyDialogDraft? _trueMoneyDialogDraft;
   bool _isTrueMoneyDialogShowing = false;
@@ -159,19 +186,31 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _prefetchCartImages();
     _refreshShippingIfNeeded(force: true);
     _refreshServerTotalsIfNeeded(force: true);
+  }
+
+  void _prefetchCartImages() {
+    AppImagePrefetch.scheduleImageUrlsPrefetch(
+      widget.cartItems.map((item) => item.imageUrl),
+      dedupeKey: 'cart:${widget.cartItems.map((item) => item.productId).join(',')}',
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _couponController.dispose();
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant CartScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.cartItems != widget.cartItems) {
+      _prefetchCartImages();
+    }
     _refreshShippingIfNeeded();
     _refreshServerTotalsIfNeeded();
   }
@@ -192,7 +231,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       if (!mounted || draft == null || _isTrueMoneyDialogShowing) {
         return;
       }
-      _showTrueMoneyQrDialog(grandTotal: draft.grandTotal);
+      _showTrueMoneyQrDialog(
+        grandTotal: draft.grandTotal,
+        discounts: draft.checkoutContext?.discounts ?? CartDiscountSnapshot.empty,
+        appliedCouponCode: draft.checkoutContext?.couponCode,
+      );
     });
   }
 
@@ -227,6 +270,105 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       cartItems: widget.cartItems,
       customerLatitude: widget.customerLatitude,
       customerLongitude: widget.customerLongitude,
+      couponCode: _pendingCouponCode,
+    );
+  }
+
+  void _retryServerTotals() {
+    setState(() => _refreshServerTotalsIfNeeded(force: true));
+  }
+
+  CatalogFavorite _favoriteFromCartItem(CartLineItem item) {
+    return CatalogFavorite(
+      kind: CatalogFavorite.kindProduct,
+      id: item.productId,
+      shopId: item.shopId,
+      title: item.productName,
+      subtitle: item.shopName,
+      imageUrl: item.imageUrl,
+      productData: <String, dynamic>{
+        'name': item.productName,
+        'price': item.unitPrice,
+      },
+      shopName: item.shopName,
+      shopLatitude: item.shopLatitude,
+      shopLongitude: item.shopLongitude,
+      addedAt: DateTime.now(),
+    );
+  }
+
+  Future<void> _showCartItemDetails(CartLineItem item) async {
+    final favorite = _favoriteFromCartItem(item);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        final lineTotal = item.unitPrice * item.quantity;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        item.productName,
+                        style: Theme.of(sheetContext).textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    CatalogFavoriteToggleButton(favorite: favorite),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  item.shopName,
+                  style: Theme.of(sheetContext).textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF6B7280),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (item.selectedToppings.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Text(
+                    'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
+                    style: Theme.of(sheetContext).textTheme.bodyMedium,
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Text(
+                  'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)} = ฿${lineTotal.toStringAsFixed(0)}',
+                  style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFFE55A00),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () => shareCartLineItem(
+                    item,
+                    context: sheetContext,
+                  ),
+                  icon: const Icon(Icons.share_outlined),
+                  label: const Text('แชร์สินค้า'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFF57C00),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -250,6 +392,26 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         )
         .join('|');
     return '${customerLatitude.toStringAsFixed(4)},${customerLongitude.toStringAsFixed(4)}|$keyParts';
+  }
+
+  void _applyCouponCode() {
+    final code = _couponController.text.trim();
+    if (code.isEmpty) {
+      return;
+    }
+    setState(() {
+      _pendingCouponCode = code.toUpperCase();
+      _refreshServerTotalsIfNeeded(force: true);
+    });
+  }
+
+  void _clearCouponCode() {
+    setState(() {
+      _couponController.clear();
+      _appliedCouponCode = null;
+      _pendingCouponCode = null;
+      _refreshServerTotalsIfNeeded(force: true);
+    });
   }
 
   String _buildServerTotalsKey({
@@ -276,11 +438,13 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
               '${item.productId}:${item.shopId}:${item.quantity}:${item.selectedToppings.join(',')}:${item.shopLatitude ?? 'na'}:${item.shopLongitude ?? 'na'}',
         )
         .join('|');
-    return '${customerLatitude.toStringAsFixed(4)},${customerLongitude.toStringAsFixed(4)}|$keyParts';
+    final couponPart = _pendingCouponCode ?? '';
+    return '${customerLatitude.toStringAsFixed(4)},${customerLongitude.toStringAsFixed(4)}|$couponPart|$keyParts';
   }
 
   @override
   Widget build(BuildContext context) {
+    final displayConfig = PromotionDisplayConfigService.instance.current;
     final cartItems = widget.cartItems;
 
     if (cartItems.isEmpty) {
@@ -341,17 +505,32 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         final shippingSummary = snapshot.data ?? _ShippingSummary.zero;
         final isCalculatingShipping =
             snapshot.connectionState != ConnectionState.done;
-        final localGrandTotal = localSubtotal + shippingSummary.fee;
+        final localGrandTotal =
+            localSubtotal + shippingSummary.fee + shippingSummary.marketTotalFees;
 
         return FutureBuilder<_ServerCartTotals>(
           future: _serverTotalsFuture,
           builder: (context, serverSnapshot) {
             final serverTotals = serverSnapshot.data;
+            final isCalculatingServerTotals =
+                serverSnapshot.connectionState != ConnectionState.done;
+            final isServerTotalTrusted = serverTotals?.trusted == true;
             final subtotal = serverTotals?.subtotal ?? localSubtotal.toDouble();
             final shippingFee =
                 serverTotals?.shippingFee ?? shippingSummary.fee;
+            final marketCollectionFee =
+                serverTotals?.marketCollectionFee ??
+                shippingSummary.marketCollectionFee;
+            final marketServiceFee =
+                serverTotals?.marketServiceFee ?? shippingSummary.marketServiceFee;
+            final discounts =
+                serverTotals?.discounts ?? CartDiscountSnapshot.empty;
+            final appliedCouponCode =
+                discounts.appliedCouponCode ?? _appliedCouponCode;
             final grandTotal =
                 serverTotals?.grandTotal ?? localGrandTotal.toDouble();
+            final canCheckout =
+                isServerTotalTrusted && !isCalculatingServerTotals;
 
             return SafeArea(
               child: Column(
@@ -399,134 +578,147 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                       itemBuilder: (context, index) {
                         final item = cartItems[index];
                         final lineTotal = item.unitPrice * item.quantity;
-                        return Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
+                        return Material(
+                          color: Colors.transparent,
+                          child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            boxShadow: const <BoxShadow>[
-                              BoxShadow(
-                                color: Color(0x12000000),
-                                blurRadius: 10,
-                                offset: Offset(0, 4),
+                            onTap: () => _showCartItemDetails(item),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                boxShadow: const <BoxShadow>[
+                                  BoxShadow(
+                                    color: Color(0x12000000),
+                                    blurRadius: 10,
+                                    offset: Offset(0, 4),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          child: Row(
-                            children: <Widget>[
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: SizedBox(
-                                  width: 58,
-                                  height: 58,
-                                  child: item.imageUrl != null
-                                      ? CachedNetworkImage(
-                                          imageUrl: item.imageUrl!,
-                                          fit: BoxFit.cover,
-                                          errorWidget: (_, __, ___) =>
-                                              const ColoredBox(
+                              child: Row(
+                                children: <Widget>[
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: SizedBox(
+                                      width: 58,
+                                      height: 58,
+                                      child: item.imageUrl != null
+                                          ? CachedAppImage(
+                                              imageUrl: item.imageUrl!,
+                                              width: 58,
+                                              height: 58,
+                                              fit: BoxFit.cover,
+                                              lightweight: true,
+                                              errorWidget: const ColoredBox(
                                                 color: Color(0xFFFFEDD5),
                                                 child: Icon(
                                                   Icons.fastfood,
                                                   color: Color(0xFF9A3412),
                                                 ),
                                               ),
-                                        )
-                                      : const ColoredBox(
-                                          color: Color(0xFFFFEDD5),
-                                          child: Icon(
-                                            Icons.fastfood,
-                                            color: Color(0xFF9A3412),
-                                          ),
+                                            )
+                                          : const ColoredBox(
+                                              color: Color(0xFFFFEDD5),
+                                              child: Icon(
+                                                Icons.fastfood,
+                                                color: Color(0xFF9A3412),
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: <Widget>[
+                                        Text(
+                                          item.productName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w700,
+                                              ),
                                         ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      item.productName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w700,
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          item.shopName,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: const Color(0xFF6B7280),
+                                              ),
+                                        ),
+                                        if (item
+                                            .selectedToppings
+                                            .isNotEmpty) ...<Widget>[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  color: const Color(
+                                                    0xFF4B5563,
+                                                  ),
+                                                ),
                                           ),
+                                        ],
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: const Color(0xFF6B7280),
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      item.shopName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: const Color(0xFF6B7280),
-                                          ),
-                                    ),
-                                    if (item
-                                        .selectedToppings
-                                        .isNotEmpty) ...<Widget>[
-                                      const SizedBox(height: 4),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: <Widget>[
                                       Text(
-                                        'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
+                                        '฿${lineTotal.toStringAsFixed(0)}',
                                         style: Theme.of(context)
                                             .textTheme
-                                            .bodySmall
+                                            .titleSmall
                                             ?.copyWith(
-                                              color: const Color(0xFF4B5563),
+                                              fontWeight: FontWeight.w800,
+                                              color: const Color(0xFFE55A00),
                                             ),
                                       ),
-                                    ],
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: const Color(0xFF6B7280),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: <Widget>[
-                                  Text(
-                                    '฿${lineTotal.toStringAsFixed(0)}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleSmall
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                          color: const Color(0xFFE55A00),
+                                      IconButton(
+                                        onPressed: () =>
+                                            widget.onRemoveItem(index),
+                                        tooltip: 'ลบสินค้า',
+                                        icon: const Icon(
+                                          Icons.delete_outline_rounded,
+                                          color: Color(0xFFDC2626),
                                         ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () => widget.onRemoveItem(index),
-                                    tooltip: 'ลบสินค้า',
-                                    icon: const Icon(
-                                      Icons.delete_outline_rounded,
-                                      color: Color(0xFFDC2626),
-                                    ),
-                                    visualDensity: VisualDensity.compact,
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
+                            ),
                           ),
                         );
                       },
@@ -538,6 +730,15 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
+                        PromotionCartPanel(
+                          config: displayConfig,
+                          discounts: discounts,
+                          couponController: _couponController,
+                          appliedCouponCode: appliedCouponCode,
+                          isApplyingCoupon: isCalculatingServerTotals,
+                          onApplyCoupon: _applyCouponCode,
+                          onClearCoupon: _clearCouponCode,
+                        ),
                         Row(
                           children: <Widget>[
                             Text(
@@ -588,6 +789,55 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: const Color(0xFF6B7280)),
                         ),
+                        if (marketCollectionFee > 0) ...<Widget>[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: <Widget>[
+                              Text(
+                                'ค่ารวบรวมสินค้าหลายร้าน (ตลาด)',
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF1F2937),
+                                    ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                '฿${_formatMoney(marketCollectionFee)}',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: const Color(0xFF111827),
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (marketServiceFee > 0) ...<Widget>[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: <Widget>[
+                              Text(
+                                'ค่าบริการ (ตลาด)',
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF1F2937),
+                                    ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                '฿${_formatMoney(marketServiceFee)}',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: const Color(0xFF111827),
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        PromotionDiscountBreakdown(discounts: discounts),
                         const SizedBox(height: 8),
                         Row(
                           children: <Widget>[
@@ -612,6 +862,13 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             ),
                           ],
                         ),
+                        if (!isServerTotalTrusted) ...<Widget>[
+                          const SizedBox(height: 10),
+                          _UntrustedCartTotalWarning(
+                            isLoading: isCalculatingServerTotals,
+                            onRetry: _retryServerTotals,
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         Text(
                           'วิธีจ่าย',
@@ -629,20 +886,29 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             _PaymentMethodChip(
                               label: 'จ่ายปลายทาง',
                               icon: Icons.local_shipping_outlined,
-                              onTap: () {
-                                _confirmCashOnDelivery(
-                                  subtotal: subtotal,
-                                  shippingFee: shippingFee,
-                                  grandTotal: grandTotal,
-                                );
-                              },
+                              onTap: !canCheckout
+                                  ? null
+                                  : () {
+                                      _confirmCashOnDelivery(
+                                        subtotal: subtotal,
+                                        shippingFee: shippingFee,
+                                        grandTotal: grandTotal,
+                                        discounts: discounts,
+                                      );
+                                    },
                             ),
                             _PaymentMethodChip(
                               label: 'สแกนจ่าย',
                               icon: Icons.qr_code_2_rounded,
-                              onTap: () {
-                                _showTrueMoneyQrDialog(grandTotal: grandTotal);
-                              },
+                              onTap: !canCheckout
+                                  ? null
+                                  : () {
+                                      _showTrueMoneyQrDialog(
+                                        grandTotal: grandTotal,
+                                        discounts: discounts,
+                                        appliedCouponCode: appliedCouponCode,
+                                      );
+                                    },
                             ),
                           ],
                         ),
@@ -662,49 +928,81 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required List<CartLineItem> cartItems,
     required double customerLatitude,
     required double customerLongitude,
+    String? couponCode,
   }) async {
     if (cartItems.isEmpty) {
       return _ServerCartTotals.zero;
     }
 
-    try {
-      final callable = _functions.httpsCallable('calculateCartTotals');
-      final response = await callable
-          .call(<String, dynamic>{
-            'customerLatitude': customerLatitude,
-            'customerLongitude': customerLongitude,
-            'items': cartItems
-                .map(
-                  (item) => <String, dynamic>{
-                    'productId': item.productId,
-                    'shopId': item.shopId,
-                    'quantity': item.quantity,
-                    'selectedToppings': item.selectedToppings,
-                    'shopLatitude': item.shopLatitude,
-                    'shopLongitude': item.shopLongitude,
-                  },
-                )
-                .toList(growable: false),
-          })
-          .timeout(const Duration(seconds: 10));
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final callable = _functions.httpsCallable('calculateCartTotals');
+        final response = await callable
+            .call(<String, dynamic>{
+              'customerLatitude': customerLatitude,
+              'customerLongitude': customerLongitude,
+              if (couponCode != null && couponCode.isNotEmpty)
+                'couponCode': couponCode,
+              'items': cartItems
+                  .map(
+                    (item) => <String, dynamic>{
+                      'productId': item.productId,
+                      'shopId': item.shopId,
+                      'quantity': item.quantity,
+                      'selectedToppings': item.selectedToppings,
+                      'shopLatitude': item.shopLatitude,
+                      'shopLongitude': item.shopLongitude,
+                    },
+                  )
+                  .toList(growable: false),
+            })
+            .timeout(const Duration(seconds: 10));
 
-      final payload = response.data;
-      if (payload is! Map) {
-        return _ServerCartTotals.zero;
+        final payload = response.data;
+        if (payload is! Map) {
+          continue;
+        }
+
+        final subtotal = (payload['subtotal'] as num?)?.toDouble() ?? 0;
+        final shippingFee = (payload['shippingFee'] as num?)?.toDouble() ?? 0;
+        final marketCollectionFee =
+            (payload['marketCollectionFee'] as num?)?.toDouble() ?? 0;
+        final marketServiceFee =
+            (payload['marketServiceFee'] as num?)?.toDouble() ?? 0;
+        final grandTotal = (payload['grandTotal'] as num?)?.toDouble() ?? 0;
+        final discounts = CartDiscountSnapshot.fromServerPayload(
+          Map<String, dynamic>.from(payload),
+        );
+        if (mounted) {
+          final appliedCode = discounts.appliedCouponCode;
+          if (appliedCode != null && appliedCode.isNotEmpty) {
+            _appliedCouponCode = appliedCode;
+            _pendingCouponCode = appliedCode;
+          } else if (couponCode != null &&
+              couponCode.isNotEmpty &&
+              discounts.couponError != null) {
+            _appliedCouponCode = null;
+          }
+        }
+        return _ServerCartTotals(
+          subtotal: subtotal,
+          shippingFee: shippingFee,
+          marketCollectionFee: marketCollectionFee,
+          marketServiceFee: marketServiceFee,
+          grandTotal: grandTotal,
+          discounts: discounts,
+          trusted: true,
+        );
+      } catch (_) {
+        if (attempt < 2) {
+          await Future<void>.delayed(
+            Duration(milliseconds: 600 * (attempt + 1)),
+          );
+        }
       }
-
-      final subtotal = (payload['subtotal'] as num?)?.toDouble() ?? 0;
-      final shippingFee = (payload['shippingFee'] as num?)?.toDouble() ?? 0;
-      final grandTotal = (payload['grandTotal'] as num?)?.toDouble() ?? 0;
-      return _ServerCartTotals(
-        subtotal: subtotal,
-        shippingFee: shippingFee,
-        grandTotal: grandTotal,
-        trusted: true,
-      );
-    } catch (_) {
-      return _ServerCartTotals.zero;
     }
+
+    return _ServerCartTotals.zero;
   }
 
   Future<_ShippingSummary> _calculateShipping({
@@ -743,13 +1041,14 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       if (shopLat == null || shopLng == null) {
         missing += 1;
         shopCount += 1;
-        shippingFee += 25;
+        final missingFee = ShippingPricingPolicy.shippingMissingCoordsFee;
+        shippingFee += missingFee;
         byShop.add(
           _ShopShippingFee(
             shopName: item.shopName,
             distanceKm: 0,
             durationMinutes: 0,
-            fee: 25,
+            fee: missingFee,
           ),
         );
         continue;
@@ -769,9 +1068,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       totalDistanceKm += km;
       totalDurationMinutes += metrics.durationMinutes;
       shopCount += 1;
-      // 0-1 km must always cost 25 THB; after 1 km, add 12.5 THB per extra km.
-      final billableKm = km < 1 ? 1.0 : km;
-      final fee = 25 + ((billableKm - 1) * 12.5);
+      final fee = ShippingPricingPolicy.computeLocalShippingFee(km);
       shippingFee += fee;
       byShop.add(
         _ShopShippingFee(
@@ -783,6 +1080,16 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       );
     }
 
+    final marketFees = MarketPricingPolicy.computeCheckoutFees(
+      uniqueByShop.values.map(
+        (item) => MarketShopLocation(
+          shopId: item.shopId,
+          latitude: item.shopLatitude,
+          longitude: item.shopLongitude,
+        ),
+      ),
+    );
+
     return _ShippingSummary(
       fee: shippingFee,
       missingShopCoordinates: missing,
@@ -791,6 +1098,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       totalDurationMinutes: totalDurationMinutes,
       shopCount: shopCount,
       byShop: byShop,
+      marketCollectionFee: marketFees.collectionFee,
+      marketServiceFee: marketFees.serviceFeeTotal,
+      marketQualifyingShopCount: marketFees.qualifyingShopCount,
     );
   }
 
@@ -1001,6 +1311,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required double subtotal,
     required double shippingFee,
     required double grandTotal,
+    required CartDiscountSnapshot discounts,
   }) async {
     if (_isSubmittingCashOnDelivery) {
       return;
@@ -1076,6 +1387,23 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 8),
                   Text('ค่าสินค้า: ฿${_formatMoney(subtotal)}'),
                   Text('ค่าส่ง: ฿${_formatMoney(shippingFee)}'),
+                  if (discounts.discountTotal > 0) ...<Widget>[
+                    const SizedBox(height: 4),
+                    Text(
+                      'ส่วนลดรวม: -฿${_formatMoney(discounts.discountTotal)}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFFE55A00),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (discounts.stackNote != null)
+                      Text(
+                        discounts.stackNote!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFFB45309),
+                        ),
+                      ),
+                  ],
                   const SizedBox(height: 8),
                   Text('จัดส่งที่: ${widget.customerLocationLabel}'),
                   Text(
@@ -1121,7 +1449,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     String? createError;
     try {
       if (widget.onConfirmCashOnDelivery != null) {
-        createdOrderIds = await widget.onConfirmCashOnDelivery!.call();
+        createdOrderIds = await widget.onConfirmCashOnDelivery!.call(
+          CartCheckoutContext(
+            couponCode: discounts.appliedCouponCode ?? _appliedCouponCode,
+            discounts: discounts,
+          ),
+        );
       }
     } catch (e) {
       createError = e.toString();
@@ -1155,10 +1488,25 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _showTrueMoneyQrDialog({required double grandTotal}) async {
+  Future<void> _showTrueMoneyQrDialog({
+    required double grandTotal,
+    required CartDiscountSnapshot discounts,
+    String? appliedCouponCode,
+  }) async {
+    final checkoutContext = CartCheckoutContext(
+      couponCode: appliedCouponCode,
+      discounts: discounts,
+    );
     _trueMoneyDialogDraft =
-        (_trueMoneyDialogDraft ?? _TrueMoneyDialogDraft(grandTotal: grandTotal))
-            .copyWith(grandTotal: grandTotal);
+        (_trueMoneyDialogDraft ??
+                _TrueMoneyDialogDraft(
+                  grandTotal: grandTotal,
+                  checkoutContext: checkoutContext,
+                ))
+            .copyWith(
+              grandTotal: grandTotal,
+              checkoutContext: checkoutContext,
+            );
     if (_isTrueMoneyDialogShowing) {
       return;
     }
@@ -1199,8 +1547,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 12),
                     SizedBox(
                       height: viewport.height * 0.58,
-                      child: _TrueMoneyQrDialogContent(
+                      child: TrueMoneyQrDialogContent(
                         grandTotal: draft.grandTotal,
+                        checkoutContext: draft.checkoutContext,
                         initialAttachedSlip: draft.attachedSlip,
                         onAttachedSlipChanged: (slip) {
                           _trueMoneyDialogDraft =
@@ -1243,9 +1592,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
   }
 }
 
-class _TrueMoneyQrDialogContent extends StatefulWidget {
-  const _TrueMoneyQrDialogContent({
+class TrueMoneyQrDialogContent extends StatefulWidget {
+  const TrueMoneyQrDialogContent({
+    super.key,
     required this.grandTotal,
+    this.checkoutContext,
     required this.initialAttachedSlip,
     required this.onAttachedSlipChanged,
     required this.onCloseRequested,
@@ -1255,6 +1606,7 @@ class _TrueMoneyQrDialogContent extends StatefulWidget {
   });
 
   final double grandTotal;
+  final CartCheckoutContext? checkoutContext;
   final PlatformFile? initialAttachedSlip;
   final ValueChanged<PlatformFile?> onAttachedSlipChanged;
   final VoidCallback onCloseRequested;
@@ -1266,11 +1618,11 @@ class _TrueMoneyQrDialogContent extends StatefulWidget {
   final VoidCallback onSubmissionSucceeded;
 
   @override
-  State<_TrueMoneyQrDialogContent> createState() =>
+  State<TrueMoneyQrDialogContent> createState() =>
       _TrueMoneyQrDialogContentState();
 }
 
-class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
+class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
   final GlobalKey _qrBoundaryKey = GlobalKey();
 
   bool _isSavingQr = false;
@@ -1494,6 +1846,7 @@ class _TrueMoneyQrDialogContentState extends State<_TrueMoneyQrDialogContent> {
           contentType: _inferSlipContentType(attachedSlip),
           sizeBytes: attachedSlip.size,
           grandTotal: widget.grandTotal,
+          checkoutContext: widget.checkoutContext,
         ),
       );
 
@@ -1650,6 +2003,9 @@ class _ShippingSummary {
     required this.totalDurationMinutes,
     required this.shopCount,
     required this.byShop,
+    required this.marketCollectionFee,
+    required this.marketServiceFee,
+    required this.marketQualifyingShopCount,
   });
 
   final double fee;
@@ -1659,6 +2015,11 @@ class _ShippingSummary {
   final double totalDurationMinutes;
   final int shopCount;
   final List<_ShopShippingFee> byShop;
+  final double marketCollectionFee;
+  final double marketServiceFee;
+  final int marketQualifyingShopCount;
+
+  double get marketTotalFees => marketCollectionFee + marketServiceFee;
 
   static const zero = _ShippingSummary(
     fee: 0,
@@ -1668,6 +2029,9 @@ class _ShippingSummary {
     totalDurationMinutes: 0,
     shopCount: 0,
     byShop: <_ShopShippingFee>[],
+    marketCollectionFee: 0,
+    marketServiceFee: 0,
+    marketQualifyingShopCount: 0,
   );
 }
 
@@ -1675,19 +2039,28 @@ class _ServerCartTotals {
   const _ServerCartTotals({
     required this.subtotal,
     required this.shippingFee,
+    required this.marketCollectionFee,
+    required this.marketServiceFee,
     required this.grandTotal,
+    required this.discounts,
     required this.trusted,
   });
 
   final double subtotal;
   final double shippingFee;
+  final double marketCollectionFee;
+  final double marketServiceFee;
   final double grandTotal;
+  final CartDiscountSnapshot discounts;
   final bool trusted;
 
   static const zero = _ServerCartTotals(
     subtotal: 0,
     shippingFee: 0,
+    marketCollectionFee: 0,
+    marketServiceFee: 0,
     grandTotal: 0,
+    discounts: CartDiscountSnapshot.empty,
     trusted: false,
   );
 }
@@ -1739,6 +2112,55 @@ class _ResolvedRouteMetrics {
   final bool usedFallback;
 }
 
+class _UntrustedCartTotalWarning extends StatelessWidget {
+  const _UntrustedCartTotalWarning({
+    required this.isLoading,
+    required this.onRetry,
+  });
+
+  final bool isLoading;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Icon(
+            Icons.wifi_tethering_error_rounded,
+            color: Color(0xFFB45309),
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              isLoading
+                  ? 'กำลังยืนยันยอดจาก server กรุณารอสักครู่'
+                  : 'ยอดนี้เป็นประมาณการจากเครื่อง ยังชำระไม่ได้ กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วคำนวณใหม่',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF92400E),
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: isLoading ? null : onRetry,
+            child: const Text('ลองใหม่'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PaymentMethodChip extends StatelessWidget {
   const _PaymentMethodChip({
     required this.label,
@@ -1748,10 +2170,11 @@ class _PaymentMethodChip extends StatelessWidget {
 
   final String label;
   final IconData icon;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onTap != null;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1760,19 +2183,31 @@ class _PaymentMethodChip extends StatelessWidget {
         child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFEDD5),
+            color: enabled ? const Color(0xFFFFEDD5) : const Color(0xFFF3F4F6),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: const Color(0xFFE55A00)),
+            border: Border.all(
+              color: enabled
+                  ? const Color(0xFFE55A00)
+                  : const Color(0xFFD1D5DB),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(icon, size: 16, color: const Color(0xFF9A3412)),
+              Icon(
+                icon,
+                size: 16,
+                color: enabled
+                    ? const Color(0xFF9A3412)
+                    : const Color(0xFF9CA3AF),
+              ),
               const SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(
-                  color: Color(0xFF9A3412),
+                style: TextStyle(
+                  color: enabled
+                      ? const Color(0xFF9A3412)
+                      : const Color(0xFF9CA3AF),
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),

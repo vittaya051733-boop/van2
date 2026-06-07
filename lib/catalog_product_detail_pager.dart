@@ -19,26 +19,6 @@ void showCatalogProductDetailPager({
   );
 }
 
-String? _catalogProductPrimaryImageUrl(Map<String, dynamic> data) {
-  final thumbnails = ((data['thumbnailUrls'] as List?) ?? const <dynamic>[])
-      .whereType<String>()
-      .where((url) => url.trim().isNotEmpty)
-      .toList();
-  if (thumbnails.isNotEmpty) {
-    return thumbnails.first;
-  }
-
-  final images = ((data['imageUrls'] as List?) ?? const <dynamic>[])
-      .whereType<String>()
-      .where((url) => url.trim().isNotEmpty)
-      .toList();
-  if (images.isNotEmpty) {
-    return images.first;
-  }
-
-  return null;
-}
-
 class _CatalogProductDetailPager extends StatefulWidget {
   const _CatalogProductDetailPager({
     required this.products,
@@ -69,6 +49,14 @@ class _CatalogProductDetailPagerState
     super.initState();
     _currentIndex = widget.initialIndex.clamp(0, widget.products.length - 1);
     _pageController = PageController(initialPage: _currentIndex);
+    AppImagePrefetch.scheduleProductsPrefetch(
+      widget.products,
+      dedupeKey: 'pager:${widget.products.map((p) => p.id).join(',')}',
+    );
+    prefetchCatalogProductMedia(
+      products: widget.products,
+      selectedIndex: _currentIndex,
+    );
   }
 
   @override
@@ -128,14 +116,38 @@ class _CatalogProductDetailPagerState
         ),
         backgroundColor: const Color(0xFFF57C00),
         foregroundColor: Colors.white,
+        actions: <Widget>[
+          CatalogFavoriteToggleButton(
+            favorite: CatalogFavorite.fromProduct(
+              widget.products[_currentIndex],
+            ),
+            iconColor: Colors.white,
+            inactiveColor: Colors.white,
+          ),
+          IconButton(
+            tooltip: 'แชร์',
+            icon: const Icon(Icons.share_outlined),
+            onPressed: () => shareCatalogProduct(
+              widget.products[_currentIndex],
+              context: context,
+            ),
+          ),
+        ],
       ),
       body: PageView.builder(
         controller: _pageController,
         itemCount: total,
-        onPageChanged: (index) => setState(() => _currentIndex = index),
+        onPageChanged: (index) {
+          setState(() => _currentIndex = index);
+          prefetchCatalogProductMedia(
+            products: widget.products,
+            selectedIndex: index,
+          );
+        },
         itemBuilder: (context, index) {
           return _CatalogProductDetailPage(
             product: widget.products[index],
+            isCurrentProduct: index == _currentIndex,
             onAddToCart: _handleAddToCart,
             bottomInset: showCartBar ? 112 : 24,
           );
@@ -251,11 +263,13 @@ class _CatalogAddedToCartBar extends StatelessWidget {
 class _CatalogProductDetailPage extends StatefulWidget {
   const _CatalogProductDetailPage({
     required this.product,
+    required this.isCurrentProduct,
     required this.onAddToCart,
     this.bottomInset = 24,
   });
 
   final PublicCatalogProduct product;
+  final bool isCurrentProduct;
   final ValueChanged<CartProductSelection> onAddToCart;
   final double bottomInset;
 
@@ -277,13 +291,8 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
     final String description = _cleanDescriptionWithoutToppings(
       (data['description'] ?? '').toString(),
     );
-    final bool taxable = TaxPricingPolicy.isTaxableProduct(data);
-    final num basePrice = TaxPricingPolicy.parseNumber(data['price']);
-    final num adjustedBasePrice = TaxPricingPolicy.applyProductMarkup(
-      basePrice,
-      taxable,
-    );
-    final String? imageUrl = _catalogProductPrimaryImageUrl(data);
+    final num adjustedBasePrice = TaxPricingPolicy.resolveCustomerUnitPrice(data);
+    final String? imageUrl = readCatalogProductImageUrl(data);
     final List<_ToppingGroup> toppingGroups = _extractToppings(data);
     final int? availableStock = _extractAvailableStock(data);
     final int preparationTimeMinutes = _extractPreparationTimeMinutes(data);
@@ -321,6 +330,16 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
       0,
       (sum, option) => sum + option.adjustedPrice,
     );
+    final merchantBasePrice = TaxPricingPolicy.parseNumber(data['price']);
+    final discountPercent = TaxPricingPolicy.parseDiscountPercent(
+      data['discountPercent'],
+    );
+    final toppingMerchantPayout = selectedOptions.fold<num>(
+      0,
+      (sum, option) => sum + TaxPricingPolicy.merchantToppingPayout(option.rawPrice),
+    );
+    final merchantUnitPayout =
+        TaxPricingPolicy.resolveMerchantUnitPayout(data) + toppingMerchantPayout;
     final unitPrice = adjustedBasePrice + toppingTotal;
     final lineTotal = unitPrice * _quantity;
 
@@ -347,22 +366,22 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
             ],
           ),
           const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              height: 240,
-              width: double.infinity,
-              color: const Color(0xFFF8FAFC),
-              child: imageUrl != null
-                  ? CachedNetworkImage(
-                      imageUrl: imageUrl,
-                      cacheManager: _localFirstImageCacheManager,
-                      useOldImageOnUrlChange: true,
-                      fit: BoxFit.contain,
-                      errorWidget: (_, __, ___) =>
-                          _ProductPlaceholder(name: name),
-                    )
-                  : _ProductPlaceholder(name: name),
+          SizedBox(
+            height: 280,
+            width: double.infinity,
+            child: wrapCatalogImageWithDiscountBadge(
+              productData: data,
+              productId: product.id,
+              shopId: product.shopId,
+              child: CatalogProductMediaCarousel(
+                productData: data,
+                name: name,
+                enableVideo: true,
+                playbackActive: widget.isCurrentProduct,
+                fixedHeight: 280,
+                fit: BoxFit.contain,
+                borderRadius: 16,
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -373,6 +392,13 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               color: const Color(0xFF111827),
             ),
           ),
+          const SizedBox(height: 6),
+          ProductDiscountPrice(
+            productData: data,
+            productId: product.id,
+            shopId: product.shopId,
+          ),
+          _ProductRatingSummary(productId: product.id),
           if (description.isNotEmpty) ...<Widget>[
             const SizedBox(height: 6),
             Text(
@@ -382,6 +408,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF4B5563)),
             ),
           ],
+          _ProductRecentReviews(productId: product.id),
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -588,6 +615,9 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                           shopLongitude: product.shopLongitude,
                           productName: name.isEmpty ? 'สินค้า' : name,
                           unitPrice: unitPrice,
+                          merchantBasePrice: merchantBasePrice,
+                          discountPercent: discountPercent,
+                          merchantUnitPayout: merchantUnitPayout,
                           imageUrl: imageUrl,
                           selectedToppings: selectedNames,
                           quantity: _quantity,

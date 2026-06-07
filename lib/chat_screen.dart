@@ -5,6 +5,7 @@ import 'chat_room_screen.dart';
 import 'models/user_profile.dart';
 import 'services/friend_service.dart';
 import 'utils/app_colors.dart';
+import 'widgets/cached_app_avatar.dart';
 
 /// Conversation list with friend management similar to LINE.
 class ChatScreen extends StatefulWidget {
@@ -285,17 +286,18 @@ class _Avatar extends StatelessWidget {
         ? name.characters.first.toUpperCase()
         : '?';
 
-    return CircleAvatar(
+    return CachedAppAvatar(
+      imageUrl: profile.photoUrl,
       radius: 30,
-      backgroundImage:
-          profile.photoUrl != null ? NetworkImage(profile.photoUrl!) : null,
       backgroundColor: const Color(0xFFE0E0E0),
-      child: profile.photoUrl == null
-          ? Text(
-              initial,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24),
-            )
-          : null,
+      fallback: Text(
+        initial,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 24,
+        ),
+      ),
     );
   }
 }

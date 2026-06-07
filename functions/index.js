@@ -7,7 +7,12 @@ const logger = require('firebase-functions/logger');
 const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const {
+  onDocumentCreated,
+  onDocumentUpdated,
+  onDocumentWritten,
+} = require('firebase-functions/v2/firestore');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -25,6 +30,16 @@ const RESET_PASSWORD_SESSION_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_NON_TAXABLE_MARKUP_RATE = 0.07;
 const DEFAULT_TOPPING_MARKUP_RATE = 0.07;
+const DEFAULT_SHIPPING_BASE_FEE = 25;
+const DEFAULT_SHIPPING_PER_KM_FEE = 12.5;
+const DEFAULT_SHIPPING_MIN_BILLABLE_KM = 1;
+const DEFAULT_SHIPPING_MISSING_COORDS_FEE = 25;
+const DEFAULT_MARKET_HUB_LATITUDE = 17.279915312140325;
+const DEFAULT_MARKET_HUB_LONGITUDE = 102.87070264132565;
+const DEFAULT_MARKET_HUB_RADIUS_METERS = 150;
+const DEFAULT_MARKET_MULTI_SHOP_MIN_SHOPS = 2;
+const DEFAULT_MARKET_COLLECTION_FEE = 5;
+const DEFAULT_MARKET_SERVICE_FEE_PER_ORDER = 5;
 const PRICING_CONFIG_COLLECTION = 'pricing_config';
 const PRICING_CONFIG_DOC_ID = 'global';
 const PRICING_CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -522,11 +537,75 @@ function sanitizeRate(value, fallback) {
   return parsed;
 }
 
+function sanitizeMoney(value, fallback) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function sanitizeKm(value, fallback) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function sanitizeRadiusMeters(value, fallback) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 10000) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function sanitizeInt(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function sanitizeLatitude(value, fallback) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed < -90 || parsed > 90) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function sanitizeLongitude(value, fallback) {
+  const parsed = parseNumber(value);
+  if (!Number.isFinite(parsed) || parsed < -180 || parsed > 180) {
+    return fallback;
+  }
+  return parsed;
+}
+
 function defaultPricingRates() {
   return {
     taxableMarkupRate: DEFAULT_TAXABLE_MARKUP_RATE,
     nonTaxableMarkupRate: DEFAULT_NON_TAXABLE_MARKUP_RATE,
     toppingMarkupRate: DEFAULT_TOPPING_MARKUP_RATE,
+    shippingBaseFee: DEFAULT_SHIPPING_BASE_FEE,
+    shippingPerKmFee: DEFAULT_SHIPPING_PER_KM_FEE,
+    shippingMinBillableKm: DEFAULT_SHIPPING_MIN_BILLABLE_KM,
+    shippingMissingCoordsFee: DEFAULT_SHIPPING_MISSING_COORDS_FEE,
+    travelBaseFee: DEFAULT_SHIPPING_BASE_FEE,
+    travelPerKmFee: DEFAULT_SHIPPING_PER_KM_FEE,
+    travelMinBillableKm: DEFAULT_SHIPPING_MIN_BILLABLE_KM,
+    nationwideBaseFee: 45,
+    nationwidePerKgFee: 18,
+    nationwideRemoteSurcharge: 30,
+    marketHubLatitude: DEFAULT_MARKET_HUB_LATITUDE,
+    marketHubLongitude: DEFAULT_MARKET_HUB_LONGITUDE,
+    marketHubRadiusMeters: DEFAULT_MARKET_HUB_RADIUS_METERS,
+    marketMultiShopMinShops: DEFAULT_MARKET_MULTI_SHOP_MIN_SHOPS,
+    marketMultiShopCollectionFee: DEFAULT_MARKET_COLLECTION_FEE,
+    marketServiceFeePerOrder: DEFAULT_MARKET_SERVICE_FEE_PER_ORDER,
   };
 }
 
@@ -544,7 +623,7 @@ async function getPricingRates() {
       await docRef.set(
         {
           ...defaults,
-          note: 'Global markup rates for cart pricing. Example 7% = 0.07',
+          note: 'Admin-managed global pricing: markup, local shipping, travel, nationwide',
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true },
@@ -562,6 +641,42 @@ async function getPricingRates() {
       taxableMarkupRate: sanitizeRate(data.taxableMarkupRate, defaults.taxableMarkupRate),
       nonTaxableMarkupRate: sanitizeRate(data.nonTaxableMarkupRate, defaults.nonTaxableMarkupRate),
       toppingMarkupRate: sanitizeRate(data.toppingMarkupRate, defaults.toppingMarkupRate),
+      shippingBaseFee: sanitizeMoney(data.shippingBaseFee, defaults.shippingBaseFee),
+      shippingPerKmFee: sanitizeMoney(data.shippingPerKmFee, defaults.shippingPerKmFee),
+      shippingMinBillableKm: sanitizeKm(data.shippingMinBillableKm, defaults.shippingMinBillableKm),
+      shippingMissingCoordsFee: sanitizeMoney(
+        data.shippingMissingCoordsFee,
+        defaults.shippingMissingCoordsFee,
+      ),
+      travelBaseFee: sanitizeMoney(data.travelBaseFee, defaults.travelBaseFee),
+      travelPerKmFee: sanitizeMoney(data.travelPerKmFee, defaults.travelPerKmFee),
+      travelMinBillableKm: sanitizeKm(data.travelMinBillableKm, defaults.travelMinBillableKm),
+      nationwideBaseFee: sanitizeMoney(data.nationwideBaseFee, defaults.nationwideBaseFee),
+      nationwidePerKgFee: sanitizeMoney(data.nationwidePerKgFee, defaults.nationwidePerKgFee),
+      nationwideRemoteSurcharge: sanitizeMoney(
+        data.nationwideRemoteSurcharge,
+        defaults.nationwideRemoteSurcharge,
+      ),
+      marketHubLatitude: sanitizeLatitude(data.marketHubLatitude, defaults.marketHubLatitude),
+      marketHubLongitude: sanitizeLongitude(data.marketHubLongitude, defaults.marketHubLongitude),
+      marketHubRadiusMeters: sanitizeRadiusMeters(
+        data.marketHubRadiusMeters,
+        defaults.marketHubRadiusMeters,
+      ),
+      marketMultiShopMinShops: sanitizeInt(
+        data.marketMultiShopMinShops,
+        defaults.marketMultiShopMinShops,
+        2,
+        20,
+      ),
+      marketMultiShopCollectionFee: sanitizeMoney(
+        data.marketMultiShopCollectionFee,
+        defaults.marketMultiShopCollectionFee,
+      ),
+      marketServiceFeePerOrder: sanitizeMoney(
+        data.marketServiceFeePerOrder,
+        defaults.marketServiceFeePerOrder,
+      ),
     };
 
     pricingConfigCache = {
@@ -744,9 +859,70 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
   return earthRadiusKm * c;
 }
 
-function computeShippingFeeByDistance(distanceKm) {
-  const normalized = !Number.isFinite(distanceKm) || distanceKm < 1 ? 1 : distanceKm;
-  return 25 + (normalized - 1) * 12.5;
+function computeShippingFeeByDistance(distanceKm, rates = defaultPricingRates()) {
+  const normalized =
+    !Number.isFinite(distanceKm) || distanceKm < 0 ? 0 : distanceKm;
+  const minKm = rates.shippingMinBillableKm ?? DEFAULT_SHIPPING_MIN_BILLABLE_KM;
+  const billableKm = normalized < minKm ? minKm : normalized;
+  const baseFee = rates.shippingBaseFee ?? DEFAULT_SHIPPING_BASE_FEE;
+  const perKmFee = rates.shippingPerKmFee ?? DEFAULT_SHIPPING_PER_KM_FEE;
+  return baseFee + (billableKm - minKm) * perKmFee;
+}
+
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusMeters = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusMeters * c;
+}
+
+function isShopNearMarketHub(latitude, longitude, rates = defaultPricingRates()) {
+  if (latitude == null || longitude == null) {
+    return false;
+  }
+  const hubLat = rates.marketHubLatitude ?? DEFAULT_MARKET_HUB_LATITUDE;
+  const hubLng = rates.marketHubLongitude ?? DEFAULT_MARKET_HUB_LONGITUDE;
+  const radius = rates.marketHubRadiusMeters ?? DEFAULT_MARKET_HUB_RADIUS_METERS;
+  return distanceMeters(latitude, longitude, hubLat, hubLng) <= radius;
+}
+
+function computeMarketCheckoutFees(shops, rates = defaultPricingRates()) {
+  const minShops = rates.marketMultiShopMinShops ?? DEFAULT_MARKET_MULTI_SHOP_MIN_SHOPS;
+  const collectionFee =
+    rates.marketMultiShopCollectionFee ?? DEFAULT_MARKET_COLLECTION_FEE;
+  const serviceFeePerOrder =
+    rates.marketServiceFeePerOrder ?? DEFAULT_MARKET_SERVICE_FEE_PER_ORDER;
+
+  let qualifyingCount = 0;
+  for (const shop of shops.values()) {
+    if (isShopNearMarketHub(shop.latitude, shop.longitude, rates)) {
+      qualifyingCount += 1;
+    }
+  }
+
+  if (qualifyingCount < minShops) {
+    return {
+      applies: false,
+      qualifyingShopCount: qualifyingCount,
+      marketCollectionFee: 0,
+      marketServiceFee: 0,
+      marketTotalFees: 0,
+    };
+  }
+
+  const marketServiceFee = serviceFeePerOrder * qualifyingCount;
+  return {
+    applies: true,
+    qualifyingShopCount: qualifyingCount,
+    marketCollectionFee: collectionFee,
+    marketServiceFee,
+    marketTotalFees: collectionFee + marketServiceFee,
+  };
 }
 
 async function loadProductsByIds(productIds) {
@@ -1227,6 +1403,403 @@ exports.signInWithPhonePassword = onCall(
   },
 );
 
+const PROMOTIONS_COLLECTION = 'promotions';
+const COUPONS_COLLECTION = 'coupons';
+const COUPON_REDEMPTIONS_COLLECTION = 'coupon_redemptions';
+
+function normalizeCouponCode(code) {
+  return String(code || '').trim().toUpperCase();
+}
+
+function parseTimestampMs(value) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value.toMillis === 'function') {
+    return value.toMillis();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function isWithinSchedule(conditions = {}, nowMs = Date.now()) {
+  const startMs = parseTimestampMs(conditions.startAt);
+  const endMs = parseTimestampMs(conditions.endAt);
+  if (startMs != null && nowMs < startMs) {
+    return false;
+  }
+  if (endMs != null && nowMs > endMs) {
+    return false;
+  }
+  return true;
+}
+
+function evaluateGeoCondition(conditions = {}, customerLat, customerLng, rates) {
+  const geo = conditions.geo || {};
+  const type = String(geo.type || 'none').toLowerCase();
+  if (!type || type === 'none') {
+    return true;
+  }
+  if (!Number.isFinite(customerLat) || !Number.isFinite(customerLng)) {
+    return false;
+  }
+  if (type === 'market_hub') {
+    return isShopNearMarketHub(customerLat, customerLng, rates);
+  }
+  if (type === 'radius') {
+    const lat = parseNumber(geo.latitude);
+    const lng = parseNumber(geo.longitude);
+    const radiusMeters = parseNumber(geo.radiusMeters) || 5000;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return false;
+    }
+    return distanceMeters(lat, lng, customerLat, customerLng) <= radiusMeters;
+  }
+  return true;
+}
+
+async function countUserOfferRedemptions(offerId, userId, fieldName) {
+  if (!userId || !offerId) {
+    return 0;
+  }
+  const snapshot = await db
+    .collection(COUPON_REDEMPTIONS_COLLECTION)
+    .where('userId', '==', userId)
+    .where(fieldName, '==', offerId)
+    .limit(100)
+    .get();
+  return snapshot.size;
+}
+
+async function evaluateOfferConditions(offer, context, userId, rates, offerKind) {
+  const conditions = offer.conditions || {};
+
+  if (offer.active === false) {
+    return { eligible: false, reason: 'ไม่เปิดใช้งาน' };
+  }
+  if (!isWithinSchedule(conditions)) {
+    return { eligible: false, reason: 'หมดเวลาโปรโมชั่น' };
+  }
+
+  const minSubtotal = parseNumber(conditions.minSubtotal);
+  if (minSubtotal > 0 && context.subtotal < minSubtotal) {
+    return {
+      eligible: false,
+      reason: `ขั้นต่ำ ฿${minSubtotal}`,
+      shortfall: minSubtotal - context.subtotal,
+    };
+  }
+
+  const minItemCount = Math.floor(parseNumber(conditions.minItemCount) || 0);
+  if (minItemCount > 0 && context.itemCount < minItemCount) {
+    return { eligible: false, reason: `ต้องมีอย่างน้อย ${minItemCount} ชิ้น` };
+  }
+
+  const requiredProductIds = Array.isArray(conditions.productIds)
+    ? conditions.productIds.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+  if (requiredProductIds.length > 0) {
+    const hasMatch = requiredProductIds.some((id) => context.productIds.includes(id));
+    if (!hasMatch) {
+      return { eligible: false, reason: 'ไม่ตรงสินค้าในโปร' };
+    }
+  }
+
+  const requiredShopIds = Array.isArray(conditions.shopIds)
+    ? conditions.shopIds.map((id) => String(id).trim()).filter(Boolean)
+    : [];
+  if (requiredShopIds.length > 0) {
+    const hasMatch = requiredShopIds.some((id) => context.shopIds.includes(id));
+    if (!hasMatch) {
+      return { eligible: false, reason: 'ไม่ตรงร้านในโปร' };
+    }
+  }
+
+  if (!evaluateGeoCondition(conditions, context.customerLatitude, context.customerLongitude, rates)) {
+    return { eligible: false, reason: 'นอกพื้นที่โปรโมชั่น' };
+  }
+
+  const maxTotal = Math.floor(parseNumber(conditions.maxRedemptionsTotal) || 0);
+  const redemptionCount = Math.floor(parseNumber(offer.redemptionCount) || 0);
+  if (maxTotal > 0 && redemptionCount >= maxTotal) {
+    return { eligible: false, reason: 'โควต้าหมดแล้ว' };
+  }
+
+  const maxPerUser = Math.floor(parseNumber(conditions.maxRedemptionsPerUser) || 0);
+  if (maxPerUser > 0 && userId) {
+    const fieldName = offerKind === 'coupon' ? 'couponId' : 'promotionId';
+    const userCount = await countUserOfferRedemptions(offer.id, userId, fieldName);
+    if (userCount >= maxPerUser) {
+      return { eligible: false, reason: 'คุณใช้สิทธิ์ครบแล้ว' };
+    }
+  }
+
+  return { eligible: true };
+}
+
+function computeDiscountAmount(discount, baseAmounts) {
+  const type = String(discount?.type || 'fixed').toLowerCase();
+  const value = Math.max(0, parseNumber(discount?.value));
+  const maxDiscount = parseNumber(discount?.maxDiscount);
+  const applyTo = String(discount?.applyTo || 'subtotal').toLowerCase();
+
+  let base = baseAmounts.subtotal;
+  if (applyTo === 'shipping') {
+    base = baseAmounts.shippingFee;
+  } else if (applyTo === 'grand_total') {
+    base = baseAmounts.grandTotalBeforeDiscount;
+  } else if (applyTo === 'market_fees') {
+    base = baseAmounts.marketTotalFees;
+  }
+
+  if (base <= 0) {
+    return 0;
+  }
+
+  let amount = 0;
+  if (type === 'percent') {
+    amount = base * (value / 100);
+    if (Number.isFinite(maxDiscount) && maxDiscount > 0) {
+      amount = Math.min(amount, maxDiscount);
+    }
+  } else if (type === 'fixed') {
+    amount = Math.min(value, base);
+  } else if (type === 'free_shipping') {
+    amount = Math.min(baseAmounts.shippingFee, base);
+  }
+
+  return Math.max(0, Math.round(amount * 100) / 100);
+}
+
+async function loadActivePromotions() {
+  const snapshot = await db
+    .collection(PROMOTIONS_COLLECTION)
+    .where('active', '==', true)
+    .limit(50)
+    .get();
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
+async function loadCouponByCode(code) {
+  const normalized = normalizeCouponCode(code);
+  if (!normalized) {
+    return null;
+  }
+  const snapshot = await db
+    .collection(COUPONS_COLLECTION)
+    .where('code', '==', normalized)
+    .limit(1)
+    .get();
+  if (snapshot.empty) {
+    return null;
+  }
+  const doc = snapshot.docs[0];
+  return { id: doc.id, ...doc.data() };
+}
+
+async function applyCartDiscounts({
+  userId,
+  subtotal,
+  shippingFee,
+  marketTotalFees,
+  couponCode,
+  context,
+  rates,
+}) {
+  const grandTotalBeforeDiscount = subtotal + shippingFee + marketTotalFees;
+  const baseAmounts = {
+    subtotal,
+    shippingFee,
+    marketTotalFees,
+    grandTotalBeforeDiscount,
+  };
+
+  const promotions = await loadActivePromotions();
+  const appliedLines = [];
+  const nearMissPromotions = [];
+  let promotionDiscount = 0;
+  let couponDiscount = 0;
+  let stackNote = null;
+
+  const sortedPromotions = promotions
+    .slice()
+    .sort((a, b) => (parseNumber(b.priority) || 0) - (parseNumber(a.priority) || 0));
+
+  for (const promo of sortedPromotions) {
+    const evaluation = await evaluateOfferConditions(promo, context, userId, rates, 'promotion');
+    if (evaluation.eligible) {
+      const promoAmount = computeDiscountAmount(promo.discount, baseAmounts);
+      if (promoAmount > 0) {
+        promotionDiscount = promoAmount;
+        appliedLines.push({
+          kind: 'promotion',
+          id: promo.id,
+          label: String(promo.display?.shortLabel || promo.name || 'โปรโมชั่น'),
+          amount: promoAmount,
+          stackableWithCoupon: promo.stackableWithCoupon !== false,
+        });
+        break;
+      }
+    } else if (evaluation.shortfall > 0) {
+      nearMissPromotions.push({
+        id: promo.id,
+        label: String(promo.display?.shortLabel || promo.name || 'โปรโมชั่น'),
+        reason: evaluation.reason,
+        shortfall: evaluation.shortfall,
+      });
+    }
+  }
+
+  let couponOffer = null;
+  let couponError = null;
+  let appliedCouponCode = null;
+
+  if (couponCode) {
+    couponOffer = await loadCouponByCode(couponCode);
+    if (!couponOffer) {
+      couponError = 'ไม่พบคูปองนี้';
+    } else {
+      const couponEval = await evaluateOfferConditions(couponOffer, context, userId, rates, 'coupon');
+      if (!couponEval.eligible) {
+        couponError = couponEval.reason || 'ใช้คูปองไม่ได้';
+      } else {
+        const couponStackable = couponOffer.stackableWithPromotion !== false;
+        const promoStackable =
+          appliedLines.length === 0 || appliedLines.every((line) => line.stackableWithCoupon !== false);
+
+        const couponOnlyAmount = computeDiscountAmount(couponOffer.discount, baseAmounts);
+
+        if (appliedLines.length > 0 && (!couponStackable || !promoStackable)) {
+          if (couponOnlyAmount >= promotionDiscount) {
+            promotionDiscount = 0;
+            appliedLines.length = 0;
+            couponDiscount = couponOnlyAmount;
+            appliedLines.push({
+              kind: 'coupon',
+              id: couponOffer.id,
+              code: normalizeCouponCode(couponOffer.code),
+              label: String(
+                couponOffer.display?.shortLabel || couponOffer.name || couponOffer.code,
+              ),
+              amount: couponOnlyAmount,
+            });
+            stackNote = 'ใช้คูปองแทนโปร (ไม่สามารถใช้พร้อมกัน)';
+          } else {
+            stackNote = 'ใช้โปรแทนคูปอง (ไม่สามารถใช้พร้อมกัน)';
+          }
+        } else {
+          couponDiscount = computeDiscountAmount(couponOffer.discount, {
+            ...baseAmounts,
+            subtotal: Math.max(0, baseAmounts.subtotal - promotionDiscount),
+          });
+          if (couponDiscount > 0) {
+            appliedLines.push({
+              kind: 'coupon',
+              id: couponOffer.id,
+              code: normalizeCouponCode(couponOffer.code),
+              label: String(
+                couponOffer.display?.shortLabel || couponOffer.name || couponOffer.code,
+              ),
+              amount: couponDiscount,
+            });
+          }
+        }
+
+        if (couponDiscount > 0) {
+          appliedCouponCode = normalizeCouponCode(couponOffer.code);
+        }
+      }
+    }
+  }
+
+  let discountTotal = promotionDiscount + couponDiscount;
+  discountTotal = Math.min(discountTotal, grandTotalBeforeDiscount);
+  const grandTotal = Math.max(0, grandTotalBeforeDiscount - discountTotal);
+
+  return {
+    promotionDiscount,
+    couponDiscount,
+    discountTotal,
+    discountLines: appliedLines,
+    nearMissPromotions: nearMissPromotions.slice(0, 3),
+    couponError,
+    appliedCouponCode,
+    grandTotal,
+    stackNote,
+  };
+}
+
+exports.recordCheckoutDiscounts = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
+    }
+
+    const orderIds = Array.isArray(request.data?.orderIds)
+      ? request.data.orderIds.map((id) => String(id).trim()).filter(Boolean)
+      : [];
+    const discountLines = Array.isArray(request.data?.discountLines)
+      ? request.data.discountLines
+      : [];
+    const discountTotal = Math.max(0, parseNumber(request.data?.discountTotal));
+
+    if (orderIds.length === 0 || discountTotal <= 0 || discountLines.length === 0) {
+      return { recorded: false, reason: 'no_discount' };
+    }
+
+    const userId = request.auth.uid;
+    const batch = db.batch();
+    const now = FieldValue.serverTimestamp();
+
+    for (const line of discountLines) {
+      const amount = Math.max(0, parseNumber(line?.amount));
+      if (amount <= 0) {
+        continue;
+      }
+
+      const kind = String(line?.kind || '').toLowerCase();
+      const offerId = String(line?.id || '').trim();
+      if (!offerId) {
+        continue;
+      }
+
+      const redemptionRef = db.collection(COUPON_REDEMPTIONS_COLLECTION).doc();
+      batch.set(redemptionRef, {
+        userId,
+        orderIds,
+        discountAmount: amount,
+        redeemedAt: now,
+        ...(kind === 'coupon'
+          ? {
+              couponId: offerId,
+              couponCode: normalizeCouponCode(line?.code),
+            }
+          : {
+              promotionId: offerId,
+            }),
+      });
+
+      const collectionName = kind === 'coupon' ? COUPONS_COLLECTION : PROMOTIONS_COLLECTION;
+      batch.set(
+        db.collection(collectionName).doc(offerId),
+        {
+          redemptionCount: FieldValue.increment(1),
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+    }
+
+    await batch.commit();
+    return { recorded: true, orderIds };
+  },
+);
+
 exports.calculateCartTotals = onCall(
   {
     region: DEFAULT_REGION,
@@ -1242,6 +1815,10 @@ exports.calculateCartTotals = onCall(
         subtotal: 0,
         shippingFee: 0,
         grandTotal: 0,
+        promotionDiscount: 0,
+        couponDiscount: 0,
+        discountTotal: 0,
+        discountLines: [],
         itemCount: 0,
         shopCount: 0,
       };
@@ -1329,7 +1906,7 @@ exports.calculateCartTotals = onCall(
     let shippingFee = 0;
     for (const shop of shops.values()) {
       if (shop.latitude == null || shop.longitude == null) {
-        shippingFee += 25;
+        shippingFee += pricingRates.shippingMissingCoordsFee ?? DEFAULT_SHIPPING_MISSING_COORDS_FEE;
         continue;
       }
 
@@ -1339,14 +1916,46 @@ exports.calculateCartTotals = onCall(
         customerLatitude,
         customerLongitude,
       );
-      shippingFee += computeShippingFeeByDistance(distanceKm);
+      shippingFee += computeShippingFeeByDistance(distanceKm, pricingRates);
     }
 
-    const grandTotal = subtotal + shippingFee;
+    const marketFees = computeMarketCheckoutFees(shops, pricingRates);
+    const couponCode = normalizeCouponCode(request.data?.couponCode);
+    const cartContext = {
+      subtotal,
+      itemCount,
+      shopIds: [...shops.keys()],
+      productIds,
+      customerLatitude,
+      customerLongitude,
+    };
+
+    const discounts = await applyCartDiscounts({
+      userId: request.auth.uid,
+      subtotal,
+      shippingFee,
+      marketTotalFees: marketFees.marketTotalFees,
+      couponCode: couponCode || null,
+      context: cartContext,
+      rates: pricingRates,
+    });
+
     return {
       subtotal,
       shippingFee,
-      grandTotal,
+      marketCollectionFee: marketFees.marketCollectionFee,
+      marketServiceFee: marketFees.marketServiceFee,
+      marketFeesApplied: marketFees.applies,
+      marketQualifyingShopCount: marketFees.qualifyingShopCount,
+      promotionDiscount: discounts.promotionDiscount,
+      couponDiscount: discounts.couponDiscount,
+      discountTotal: discounts.discountTotal,
+      discountLines: discounts.discountLines,
+      nearMissPromotions: discounts.nearMissPromotions,
+      appliedCouponCode: discounts.appliedCouponCode,
+      couponError: discounts.couponError,
+      stackNote: discounts.stackNote,
+      grandTotal: discounts.grandTotal,
       itemCount,
       shopCount: shops.size,
       pricingRates,
@@ -1779,6 +2388,187 @@ exports.verifyOrderPaymentSlip = onCall(
       message: verificationMessage,
       expectedCombinedAmount,
       orderIds,
+    };
+  },
+);
+
+exports.verifyStandalonePaymentSlip = onCall(
+  {
+    region: DEFAULT_REGION,
+    secrets: [SLIPOK_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนส่งสลิป');
+    }
+
+    const storagePath = String(request.data?.storagePath || '').trim();
+    const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
+    const fileName = String(request.data?.fileName || 'slip.jpg').trim() || 'slip.jpg';
+    const contentType = String(request.data?.contentType || 'image/jpeg').trim() || 'image/jpeg';
+    const expectedCombinedAmount = parseNumber(request.data?.expectedAmount);
+
+    if (!storagePath) {
+      throw new HttpsError('invalid-argument', 'กรุณาระบุ storagePath');
+    }
+    if (!Number.isFinite(expectedCombinedAmount) || expectedCombinedAmount <= 0) {
+      throw new HttpsError('invalid-argument', 'กรุณาระบุยอดที่ต้องตรวจสลิป');
+    }
+
+    const paymentCollectionSettings = await getPaymentCollectionSettings();
+    const bucket = admin.storage().bucket();
+    const file = bucket.file(storagePath);
+    const [exists] = await file.exists();
+    if (!exists) {
+      throw new HttpsError('not-found', 'ไม่พบไฟล์สลิปใน Firebase Storage');
+    }
+
+    let verificationStatus = 'error';
+    let verificationMessage = 'ส่งสลิปไปตรวจไม่สำเร็จ';
+    let responseCode = 0;
+    let providerPayload = null;
+    let verifiedSlipAmount = null;
+    let providerRawText = '';
+
+    try {
+      const [buffer] = await file.download();
+      const apiKey = readRequiredConfiguredSecret(
+        SLIPOK_API_KEY_SECRET,
+        'SLIPOK_API_KEY',
+        'ระบบตรวจสลิป Slip OK',
+      );
+
+      const formData = new FormData();
+      formData.append('files', new Blob([buffer], { type: contentType }), fileName);
+      formData.append('log', 'true');
+      formData.append('amount', expectedCombinedAmount.toString());
+
+      const slipResponse = await fetch(SLIPOK_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'x-authorization': apiKey,
+        },
+        body: formData,
+      });
+
+      responseCode = slipResponse.status;
+      providerRawText = await slipResponse.text();
+      try {
+        providerPayload = providerRawText ? JSON.parse(providerRawText) : null;
+      } catch (_) {
+        providerPayload = { raw: providerRawText };
+      }
+
+      const requestSucceeded = providerPayload?.success === true;
+      const dataSucceeded = providerPayload?.data?.success === true;
+      verifiedSlipAmount = parseNumber(providerPayload?.data?.amount);
+      const hasMatchingAmount = amountsMatch(verifiedSlipAmount, expectedCombinedAmount);
+      const receiverValidation = validateSlipReceiver(providerPayload, paymentCollectionSettings);
+      const hasMatchingReceiver = receiverValidation.matched;
+
+      if (
+        slipResponse.ok &&
+        requestSucceeded &&
+        dataSucceeded &&
+        hasMatchingAmount &&
+        hasMatchingReceiver
+      ) {
+        verificationStatus = 'verified';
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          'ตรวจสอบสลิปสำเร็จ',
+        );
+      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingAmount) {
+        verificationStatus = 'failed';
+        providerPayload = {
+          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
+          code: Number(providerPayload?.code) || 1013,
+          data: {
+            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
+            amount: Number.isFinite(verifiedSlipAmount) ? verifiedSlipAmount : providerPayload?.data?.amount,
+            expectedAmount: expectedCombinedAmount,
+            message:
+              providerPayload?.data?.message || 'ยอดที่ส่งมาไม่ตรงกับยอดสลิป',
+          },
+          message: providerPayload?.message || 'ยอดที่ส่งมาไม่ตรงกับยอดสลิป',
+        };
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          'ยอดเงินในสลิปไม่ตรงกับยอดที่ต้องชำระ',
+        );
+      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingReceiver) {
+        verificationStatus = 'failed';
+        providerPayload = {
+          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
+          code: Number(providerPayload?.code) || 1014,
+          data: {
+            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
+            receiverValidation,
+            expectedRecipientDisplayName: paymentCollectionSettings.recipientDisplayName,
+            expectedReceiverTargets: buildExpectedReceiverTargets(paymentCollectionSettings),
+            message:
+              providerPayload?.data?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+          },
+          message: providerPayload?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+        };
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
+        );
+      } else {
+        verificationStatus = 'failed';
+        verificationMessage = buildSlipVerificationMessage(
+          verificationStatus,
+          providerPayload,
+          `Slip OK responded with status ${slipResponse.status}`,
+        );
+      }
+    } catch (error) {
+      verificationStatus = 'error';
+      providerPayload = {
+        message: error instanceof Error ? error.message : String(error),
+      };
+      verificationMessage = buildSlipVerificationMessage(
+        verificationStatus,
+        providerPayload,
+        'ส่งสลิปไปตรวจสอบไม่สำเร็จ',
+      );
+      logger.error('verifyStandalonePaymentSlip failed', {
+        paymentGroupId,
+        storagePath,
+        message: verificationMessage,
+      });
+    }
+
+    const slipOkFeedbackId = await writeSlipOkFeedbackLog({
+      feedbackId: paymentGroupId,
+      customerUid: request.auth.uid,
+      orderIds: [],
+      paymentGroupId,
+      storagePath,
+      fileName,
+      contentType,
+      expectedCombinedAmount,
+      verifiedSlipAmount,
+      verificationStatus,
+      verificationMessage,
+      responseCode,
+      providerPayload,
+      providerRawText,
+    });
+
+    return {
+      success: verificationStatus === 'verified',
+      status: verificationStatus,
+      message: verificationMessage,
+      expectedCombinedAmount,
+      verifiedSlipAmount,
+      feedbackId: slipOkFeedbackId,
+      paymentGroupId,
+      storagePath,
     };
   },
 );
@@ -2301,6 +3091,103 @@ exports.applyProductStatsOnDelivered = onDocumentUpdated(
   },
 );
 
+async function refreshReviewStats({
+  collection,
+  statsCollection,
+  targetField,
+  targetId,
+}) {
+  const id = String(targetId || '').trim();
+  if (!id) {
+    return;
+  }
+
+  const snapshot = await db
+    .collection(collection)
+    .where(targetField, '==', id)
+    .where('status', '==', 'visible')
+    .get();
+
+  let ratingCount = 0;
+  let ratingSum = 0;
+  let lastReviewAt = null;
+  snapshot.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const rating = Number(data.rating);
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+      return;
+    }
+    ratingCount += 1;
+    ratingSum += rating;
+    const createdAt = data.updatedAt || data.createdAt;
+    if (createdAt && typeof createdAt.toMillis === 'function') {
+      if (!lastReviewAt || createdAt.toMillis() > lastReviewAt.toMillis()) {
+        lastReviewAt = createdAt;
+      }
+    }
+  });
+
+  const ratingAverage = ratingCount > 0
+    ? Math.round((ratingSum / ratingCount) * 10) / 10
+    : 0;
+
+  await db.collection(statsCollection).doc(id).set(
+    {
+      [targetField]: id,
+      ratingCount,
+      ratingSum,
+      ratingAverage,
+      lastReviewAt,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+exports.onProductReviewWrite = onDocumentWritten(
+  {
+    region: DEFAULT_REGION,
+    document: 'product_reviews/{reviewId}',
+  },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    const productIds = new Set();
+    if (before?.productId) productIds.add(String(before.productId).trim());
+    if (after?.productId) productIds.add(String(after.productId).trim());
+
+    await Promise.all([...productIds].filter(Boolean).map((productId) =>
+      refreshReviewStats({
+        collection: 'product_reviews',
+        statsCollection: 'product_review_stats',
+        targetField: 'productId',
+        targetId: productId,
+      })));
+  },
+);
+
+exports.onShopReviewWrite = onDocumentWritten(
+  {
+    region: DEFAULT_REGION,
+    document: 'shop_reviews/{reviewId}',
+  },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    const shopIds = new Set();
+    if (before?.shopId) shopIds.add(String(before.shopId).trim());
+    if (after?.shopId) shopIds.add(String(after.shopId).trim());
+
+    await Promise.all([...shopIds].filter(Boolean).map((shopId) =>
+      refreshReviewStats({
+        collection: 'shop_reviews',
+        statsCollection: 'shop_review_stats',
+        targetField: 'shopId',
+        targetId: shopId,
+      })));
+  },
+);
+
 exports.pushAppNotification = onDocumentCreated(
   {
     region: DEFAULT_REGION,
@@ -2620,3 +3507,246 @@ exports.cancelCallInvite = functions
     await clearActiveCallInvite(callerId, calleeId);
     return { success: true };
   });
+
+const VAN2_CART_SESSION_COLLECTION = 'van2_cart_sessions';
+const VAN2_CART_HOLD_MS = 60 * 60 * 1000;
+
+function readFiniteProductStock(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+function normalizeVan2CartHoldItems(rawItems) {
+  if (!Array.isArray(rawItems)) {
+    return [];
+  }
+
+  const merged = new Map();
+  for (const rawItem of rawItems) {
+    const productId = String(rawItem?.productId || '').trim();
+    if (!productId) {
+      continue;
+    }
+    const quantityRaw = Number(rawItem?.quantity);
+    const quantity = Number.isFinite(quantityRaw)
+      ? Math.max(1, Math.min(999, Math.floor(quantityRaw)))
+      : 1;
+    merged.set(productId, (merged.get(productId) || 0) + quantity);
+  }
+
+  return [...merged.entries()].map(([productId, quantity]) => ({
+    productId,
+    quantity,
+  }));
+}
+
+function readVan2CartSessionHolds(sessionData) {
+  const holds = sessionData?.holds;
+  if (!holds || typeof holds !== 'object') {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [productId, rawQty] of Object.entries(holds)) {
+    const quantity = Math.max(0, Math.floor(Number(rawQty) || 0));
+    if (!productId || quantity <= 0) {
+      continue;
+    }
+    normalized[productId] = quantity;
+  }
+  return normalized;
+}
+
+function buildVan2CartHoldMap(items) {
+  const holds = {};
+  for (const item of items) {
+    const productId = String(item?.productId || '').trim();
+    const quantity = Math.max(0, Math.floor(Number(item?.quantity) || 0));
+    if (!productId || quantity <= 0) {
+      continue;
+    }
+    holds[productId] = (holds[productId] || 0) + quantity;
+  }
+  return holds;
+}
+
+async function syncVan2CartStockHoldTransaction(transaction, sessionRef, items) {
+  const sessionSnap = await transaction.get(sessionRef);
+  const previousHolds = readVan2CartSessionHolds(sessionSnap.data());
+  const nextHolds = buildVan2CartHoldMap(items);
+  const productIds = new Set([
+    ...Object.keys(previousHolds),
+    ...Object.keys(nextHolds),
+  ]);
+
+  const productSnaps = new Map();
+  for (const productId of productIds) {
+    productSnaps.set(
+      productId,
+      await transaction.get(db.collection('products').doc(productId)),
+    );
+  }
+
+  for (const productId of productIds) {
+    const previousQty = previousHolds[productId] || 0;
+    const nextQty = nextHolds[productId] || 0;
+    if (previousQty === nextQty) {
+      continue;
+    }
+
+    const productSnap = productSnaps.get(productId);
+    if (nextQty > 0 && (!productSnap || !productSnap.exists)) {
+      throw new HttpsError('not-found', `ไม่พบสินค้า ${productId}`);
+    }
+    if (!productSnap || !productSnap.exists) {
+      continue;
+    }
+
+    const trackedStock = readFiniteProductStock(productSnap.data()?.stock);
+    if (trackedStock === null) {
+      continue;
+    }
+
+    const availableAfterRelease = trackedStock + previousQty;
+    if (nextQty > availableAfterRelease) {
+      throw new HttpsError(
+        'failed-precondition',
+        `สต๊อกไม่พอสำหรับสินค้า ${productId}`,
+      );
+    }
+
+    const delta = previousQty - nextQty;
+    transaction.update(db.collection('products').doc(productId), {
+      stock: FieldValue.increment(delta),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  if (Object.keys(nextHolds).length === 0) {
+    if (sessionSnap.exists) {
+      transaction.delete(sessionRef);
+    }
+    return nextHolds;
+  }
+
+  transaction.set(
+    sessionRef,
+    {
+      customerUid: sessionRef.id,
+      holds: nextHolds,
+      items,
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + VAN2_CART_HOLD_MS),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: false },
+  );
+
+  return nextHolds;
+}
+
+exports.syncVan2CartStockHold = onCall(
+  { region: DEFAULT_REGION },
+  async (request) => {
+    const uid = String(request.auth?.uid || '').trim();
+    if (!uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนใช้ตะกร้า');
+    }
+
+    const releaseMode = String(request.data?.releaseMode || 'sync')
+      .trim()
+      .toLowerCase();
+    const sessionRef = db.collection(VAN2_CART_SESSION_COLLECTION).doc(uid);
+
+    if (releaseMode === 'consume') {
+      await db.runTransaction(async (transaction) => {
+        const sessionSnap = await transaction.get(sessionRef);
+        if (sessionSnap.exists) {
+          transaction.delete(sessionRef);
+        }
+      });
+      return { ok: true, mode: 'consume' };
+    }
+
+    if (releaseMode === 'restore') {
+      await db.runTransaction(async (transaction) => {
+        const sessionSnap = await transaction.get(sessionRef);
+        if (!sessionSnap.exists) {
+          return;
+        }
+        await syncVan2CartStockHoldTransaction(transaction, sessionRef, []);
+      });
+      return { ok: true, mode: 'restore' };
+    }
+
+    const items = normalizeVan2CartHoldItems(request.data?.items);
+    try {
+      await db.runTransaction(async (transaction) => {
+        await syncVan2CartStockHoldTransaction(transaction, sessionRef, items);
+      });
+    } catch (error) {
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      logger.error('syncVan2CartStockHold failed', {
+        uid,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError('internal', 'ไม่สามารถจองสต๊อกสินค้าได้ กรุณาลองใหม่');
+    }
+
+    return {
+      ok: true,
+      mode: 'sync',
+      itemCount: items.length,
+      expiresAtMs: Date.now() + VAN2_CART_HOLD_MS,
+    };
+  },
+);
+
+exports.releaseExpiredVan2CartSessions = onSchedule(
+  {
+    schedule: 'every 15 minutes',
+    region: DEFAULT_REGION,
+    timeZone: 'Asia/Bangkok',
+  },
+  async () => {
+    const now = admin.firestore.Timestamp.now();
+    const snapshot = await db
+      .collection(VAN2_CART_SESSION_COLLECTION)
+      .where('expiresAt', '<=', now)
+      .limit(200)
+      .get();
+
+    if (snapshot.empty) {
+      return;
+    }
+
+    for (const doc of snapshot.docs) {
+      try {
+        await db.runTransaction(async (transaction) => {
+          const fresh = await transaction.get(doc.ref);
+          if (!fresh.exists) {
+            return;
+          }
+          const expiresAt = fresh.data()?.expiresAt;
+          if (!expiresAt || expiresAt.toMillis() > Date.now()) {
+            return;
+          }
+          await syncVan2CartStockHoldTransaction(transaction, doc.ref, []);
+        });
+      } catch (error) {
+        logger.warn('releaseExpiredVan2CartSessions failed', {
+          sessionId: doc.id,
+          error: String(error),
+        });
+      }
+    }
+
+    logger.info('releaseExpiredVan2CartSessions processed', {
+      count: snapshot.size,
+    });
+  },
+);

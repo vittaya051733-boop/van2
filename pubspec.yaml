@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.1+4
 
 environment:
   sdk: ^3.9.2
@@ -67,6 +67,13 @@ dependencies:
   promptpay_qrcode_generate: ^1.0.2
   image_gallery_saver_plus: ^4.0.1
   google_maps_flutter: ^2.14.2
+  share_plus: ^12.0.2
+  better_player:
+    path: ../van1/my-flutter/local_packages/better_player
+  video_thumbnail: ^0.5.3
+  path_provider: ^2.1.4
+  visibility_detector: ^0.4.0
+  package_info_plus: ^9.0.0
 
 dev_dependencies:
   flutter_test:
@@ -94,8 +101,8 @@ flutter:
 
   assets:
     - assets/
-    - assets/k-pop-ringtone-no-copyright-357142.mp3
-    - assets/topping-pop-sound-245150.mp3
+    - assets/ringback-incoming.m4a
+    - assets/ringback-outgoing.m4a
     - shorebird.yaml
   #   - images/a_dot_ham.jpeg
 

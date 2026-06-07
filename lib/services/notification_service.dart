@@ -14,20 +14,27 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/user_profile.dart';
 import '../call_screen.dart';
 import '../main.dart';
+import '../notification_screen.dart';
+import '../order_roadmap_screen.dart';
 import '../widgets/chat_message_popup.dart';
 import '../chat_room_screen.dart';
-
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
   NotificationService._internal();
 
-  static const MethodChannel _callIntentChannel = MethodChannel('van.merchant/call_intents');
-  static const MethodChannel _appStateChannel = MethodChannel('van.merchant/app_state');
+  static const MethodChannel _callIntentChannel = MethodChannel(
+    'van.merchant/call_intents',
+  );
+  static const MethodChannel _appStateChannel = MethodChannel(
+    'van.merchant/app_state',
+  );
   static const String _methodDrainPending = 'drain_pending_intents';
-  static const String _methodCanUseFullScreenIntent = 'can_use_full_screen_intent';
-  static const String _methodOpenFullScreenIntentSettings = 'open_full_screen_intent_settings';
+  static const String _methodCanUseFullScreenIntent =
+      'can_use_full_screen_intent';
+  static const String _methodOpenFullScreenIntentSettings =
+      'open_full_screen_intent_settings';
   static const String _methodCanDrawOverlays = 'can_draw_overlays';
   static const String _methodOpenOverlaySettings = 'open_overlay_settings';
 
@@ -41,7 +48,8 @@ class NotificationService {
   static const String _customerUsersCollection = 'customer_users';
 
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
-  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _localNotifications =
+      FlutterLocalNotificationsPlugin();
 
   bool _initialized = false;
   String? _currentFcmToken;
@@ -75,7 +83,9 @@ class NotificationService {
     }
 
     // Initialize local notifications
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -105,7 +115,9 @@ class NotificationService {
     // Listen to token refresh
     _firebaseMessaging.onTokenRefresh.listen(_saveFCMToken);
 
-    _authSubscription ??= FirebaseAuth.instance.authStateChanges().listen((user) async {
+    _authSubscription ??= FirebaseAuth.instance.authStateChanges().listen((
+      user,
+    ) async {
       if (user == null || user.isAnonymous) {
         return;
       }
@@ -153,8 +165,10 @@ class NotificationService {
     if (!Platform.isAndroid) {
       return;
     }
-    final androidPlugin =
-        _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (androidPlugin == null) {
       return;
     }
@@ -174,12 +188,19 @@ class NotificationService {
     }
     try {
       final bool canUseFullScreenIntent =
-          await _appStateChannel.invokeMethod<bool>(_methodCanUseFullScreenIntent) ?? true;
+          await _appStateChannel.invokeMethod<bool>(
+            _methodCanUseFullScreenIntent,
+          ) ??
+          true;
       if (canUseFullScreenIntent) {
         return;
       }
-      debugPrint('Full-screen intent permission not granted. Opening app settings.');
-      await _appStateChannel.invokeMethod<void>(_methodOpenFullScreenIntentSettings);
+      debugPrint(
+        'Full-screen intent permission not granted. Opening app settings.',
+      );
+      await _appStateChannel.invokeMethod<void>(
+        _methodOpenFullScreenIntentSettings,
+      );
     } catch (error) {
       if (kDebugMode) {
         debugPrint('Unable to verify full-screen intent permission: $error');
@@ -193,7 +214,8 @@ class NotificationService {
     }
     try {
       final bool canDrawOverlays =
-          await _appStateChannel.invokeMethod<bool>(_methodCanDrawOverlays) ?? true;
+          await _appStateChannel.invokeMethod<bool>(_methodCanDrawOverlays) ??
+          true;
       if (canDrawOverlays) {
         return;
       }
@@ -222,14 +244,18 @@ class NotificationService {
       }
 
       final batch = FirebaseFirestore.instance.batch();
-      final String? registrationCollection = await _resolveRegistrationCollection(user.uid);
+      final String? registrationCollection =
+          await _resolveRegistrationCollection(user.uid);
 
       if (registrationCollection != null) {
-        final docRef =
-            FirebaseFirestore.instance.collection(registrationCollection).doc(user.uid);
+        final docRef = FirebaseFirestore.instance
+            .collection(registrationCollection)
+            .doc(user.uid);
         batch.set(docRef, {'shopFCMToken': token}, SetOptions(merge: true));
       } else {
-        debugPrint('⚠️ ไม่พบคอลเลกชันร้านค้าของ ${user.uid} ข้ามการอัปเดต shopFCMToken');
+        debugPrint(
+          '⚠️ ไม่พบคอลเลกชันร้านค้าของ ${user.uid} ข้ามการอัปเดต shopFCMToken',
+        );
       }
 
       // อัพเดทในคอลเลกชัน customer_users (สร้างหรืออัปเดตได้เสมอ)
@@ -260,8 +286,10 @@ class NotificationService {
     } catch (_) {}
 
     try {
-      final contractDoc =
-          await FirebaseFirestore.instance.collection('contracts').doc(userId).get();
+      final contractDoc = await FirebaseFirestore.instance
+          .collection('contracts')
+          .doc(userId)
+          .get();
       collection = _collectionFromServiceType(
         (contractDoc.data()?['serviceType'] as String?)?.trim(),
       );
@@ -269,8 +297,10 @@ class NotificationService {
     } catch (_) {}
 
     for (final candidate in _registrationCollections) {
-      final snapshot =
-          await FirebaseFirestore.instance.collection(candidate).doc(userId).get();
+      final snapshot = await FirebaseFirestore.instance
+          .collection(candidate)
+          .doc(userId)
+          .get();
       if (snapshot.exists) {
         return candidate;
       }
@@ -318,10 +348,10 @@ class NotificationService {
         return;
       }
 
-      await FirebaseFirestore.instance.collection(_customerUsersCollection).doc(userId).set(
-        {'fcmToken': token},
-        SetOptions(merge: true),
-      );
+      await FirebaseFirestore.instance
+          .collection(_customerUsersCollection)
+          .doc(userId)
+          .set({'fcmToken': token}, SetOptions(merge: true));
     } catch (e) {
       debugPrint('Error saving user FCM token directly: $e');
     }
@@ -351,6 +381,7 @@ class NotificationService {
       void handleTap() {
         _openChatFromNotificationData(data);
       }
+
       if (context != null) {
         ChatMessagePopup.show(
           context,
@@ -374,6 +405,24 @@ class NotificationService {
       return;
     }
 
+    if (data['type'] == 'app_notification') {
+      final title = (data['title'] ?? 'แจ้งเตือนใหม่').toString();
+      final body = (data['body'] ?? '').toString();
+      await _showLocalNotification(
+        title: title,
+        body: body,
+        payload: jsonEncode({
+          'type': 'app_notification',
+          'notificationId': data['notificationId'],
+          'orderId': data['orderId'],
+          'action': data['action'],
+          'title': title,
+          'body': body,
+        }),
+      );
+      return;
+    }
+
     // แจ้งเตือนสายเข้า/วิดีโอคอลจริง
     if (data['type'] == 'call') {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
@@ -383,7 +432,9 @@ class NotificationService {
         return;
       }
       if (Platform.isAndroid) {
-        debugPrint('Android native fullscreen incoming-call UI will present this call');
+        debugPrint(
+          'Android native fullscreen incoming-call UI will present this call',
+        );
         return;
       }
       _navigateToIncomingCall(
@@ -475,6 +526,10 @@ class NotificationService {
           _openChatFromNotificationData(decoded);
           return;
         }
+        if (decoded['type'] == 'app_notification') {
+          _openAppNotificationFromData(decoded);
+          return;
+        }
       }
       debugPrint('Notification tapped with payload: $payload');
     } catch (error) {
@@ -495,11 +550,15 @@ class NotificationService {
       final currentUid = FirebaseAuth.instance.currentUser?.uid;
       final callerId = message.data['callerId'] ?? message.data['caller_id'];
       if (currentUid != null && callerId != null && currentUid == callerId) {
-        debugPrint('Skip navigating to CallScreen for self-originated notification');
+        debugPrint(
+          'Skip navigating to CallScreen for self-originated notification',
+        );
         return;
       }
       if (Platform.isAndroid) {
-        debugPrint('Android native fullscreen incoming-call UI handles notification taps');
+        debugPrint(
+          'Android native fullscreen incoming-call UI handles notification taps',
+        );
         return;
       }
       _navigateToIncomingCall(
@@ -520,7 +579,51 @@ class NotificationService {
 
     if (message.data['type'] == 'chat') {
       _openChatFromNotificationData(message.data);
+      return;
     }
+
+    if (message.data['type'] == 'app_notification') {
+      _openAppNotificationFromData(message.data);
+    }
+  }
+
+  void _openAppNotificationFromData(
+    Map<dynamic, dynamic> data, {
+    int retryCount = 30,
+  }) {
+    final navigatorState = MyApp.navigatorKey.currentState;
+    if (navigatorState == null) {
+      if (retryCount <= 0) {
+        return;
+      }
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _openAppNotificationFromData(data, retryCount: retryCount - 1);
+      });
+      return;
+    }
+
+    final notificationId = (data['notificationId'] ?? '').toString().trim();
+    if (notificationId.isNotEmpty) {
+      unawaited(
+        FirebaseFirestore.instance
+            .collection('app_notifications')
+            .doc(notificationId)
+            .set(<String, dynamic>{
+              'isRead': true,
+              'read': true,
+              'readAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true)),
+      );
+    }
+
+    final orderId = (data['orderId'] ?? '').toString().trim();
+    navigatorState.push(
+      MaterialPageRoute<void>(
+        builder: (_) => orderId.isEmpty
+            ? NotificationScreen()
+            : OrderRoadmapScreen(orderIds: <String>[orderId]),
+      ),
+    );
   }
 
   void _setupCallIntentBridge() {
@@ -550,8 +653,8 @@ class NotificationService {
 
   Future<void> _drainPendingPlatformIntents() async {
     try {
-      final List<dynamic>? pending =
-          await _callIntentChannel.invokeListMethod<dynamic>(_methodDrainPending);
+      final List<dynamic>? pending = await _callIntentChannel
+          .invokeListMethod<dynamic>(_methodDrainPending);
       if (pending == null) return;
       for (final dynamic rawPayload in pending) {
         _handleIncomingCallPayload(rawPayload);
@@ -598,7 +701,9 @@ class NotificationService {
     if (!_incomingCallVisible) {
       return;
     }
-    if (_activeIncomingChannelId != null && channelId != null && _activeIncomingChannelId != channelId) {
+    if (_activeIncomingChannelId != null &&
+        channelId != null &&
+        _activeIncomingChannelId != channelId) {
       return;
     }
     final navigatorState = MyApp.navigatorKey.currentState;
@@ -622,7 +727,9 @@ class NotificationService {
     bool minimizeOnEnd = false,
   }) {
     if (channelId.isEmpty || token == null || token.isEmpty) {
-      debugPrint('Incoming call payload missing channel/token, skip UI presentation');
+      debugPrint(
+        'Incoming call payload missing channel/token, skip UI presentation',
+      );
       return;
     }
     if (_cancelledChannelIds.contains(channelId)) {
@@ -661,32 +768,31 @@ class NotificationService {
       _backgroundReturnChannelId = channelId;
       _shouldReturnAppToBackground = true;
     }
-    navigatorState.push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => CallScreen(
-          channelName: channelId,
-          targetProfile: UserProfile.fromMap(
-            callerId,
-            {
-              'displayName': callerName,
-              'photoUrl': callerPhotoUrl,
-            },
+    navigatorState
+        .push(
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => CallScreen(
+              channelName: channelId,
+              targetProfile: UserProfile.fromMap(callerId, {
+                'displayName': callerName,
+                'photoUrl': callerPhotoUrl,
+              }),
+              isVideo: isVideo,
+              isIncoming: true,
+              appIdOverride: appId,
+              tokenOverride: token,
+            ),
           ),
-          isVideo: isVideo,
-          isIncoming: true,
-          appIdOverride: appId,
-          tokenOverride: token,
-        ),
-      ),
-    ).whenComplete(() {
-      _incomingCallVisible = false;
-      if (_activeIncomingChannelId == channelId) {
-        _activeIncomingChannelId = null;
-      }
-      _cancelledChannelIds.remove(channelId);
-      _maybeReturnAppToBackground(channelId: channelId);
-    });
+        )
+        .whenComplete(() {
+          _incomingCallVisible = false;
+          if (_activeIncomingChannelId == channelId) {
+            _activeIncomingChannelId = null;
+          }
+          _cancelledChannelIds.remove(channelId);
+          _maybeReturnAppToBackground(channelId: channelId);
+        });
   }
 
   bool _resolveIsVideoFlag(Map<String, dynamic> data) {
@@ -711,7 +817,9 @@ class NotificationService {
     if (!_shouldReturnAppToBackground) {
       return;
     }
-    if (_backgroundReturnChannelId != null && channelId != null && _backgroundReturnChannelId != channelId) {
+    if (_backgroundReturnChannelId != null &&
+        channelId != null &&
+        _backgroundReturnChannelId != channelId) {
       return;
     }
     _shouldReturnAppToBackground = false;
@@ -749,7 +857,8 @@ class NotificationService {
 
     final senderIdRaw = data['senderId'] ?? data['sender_id'];
     final String? senderId = senderIdRaw?.toString();
-    final senderName = (data['senderName'] ?? data['title'] ?? 'คู่สนทนา').toString();
+    final senderName = (data['senderName'] ?? data['title'] ?? 'คู่สนทนา')
+        .toString();
     final orderId = data['orderId']?.toString().trim();
 
     UserProfile? profile;
@@ -792,8 +901,9 @@ class NotificationService {
     required String calleeFCMToken,
     required String callType, // 'voice' หรือ 'video'
   }) async {
-    final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-        .httpsCallable('callUser');
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('callUser');
     final result = await callable.call({
       'callerId': callerId,
       'callerName': callerName,
@@ -810,8 +920,9 @@ class NotificationService {
     required String calleeId,
   }) async {
     try {
-      final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
-          .httpsCallable('cancelCallInvite');
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('cancelCallInvite');
       await callable.call({
         'channelId': channelId,
         'calleeId': calleeId,
@@ -828,12 +939,17 @@ class NotificationService {
     required UserProfile callee,
     required bool isVideo,
   }) async {
-    const List<String> preferredRegions = <String>['asia-southeast1', 'us-central1'];
+    const List<String> preferredRegions = <String>[
+      'asia-southeast1',
+      'us-central1',
+    ];
     FirebaseFunctionsException? lastError;
 
     for (final region in preferredRegions) {
       try {
-        final callable = FirebaseFunctions.instanceFor(region: region).httpsCallable('initiateCall');
+        final callable = FirebaseFunctions.instanceFor(
+          region: region,
+        ).httpsCallable('initiateCall');
         final result = await callable.call(<String, dynamic>{
           'calleeId': callee.uid,
           'callerId': caller.uid,
@@ -846,7 +962,9 @@ class NotificationService {
         return Map<String, dynamic>.from(result.data);
       } on FirebaseFunctionsException catch (e) {
         lastError = e;
-        debugPrint('Error initiating call via $region: ${e.code} - ${e.message}');
+        debugPrint(
+          'Error initiating call via $region: ${e.code} - ${e.message}',
+        );
         if (e.code != 'not-found') {
           rethrow;
         }
@@ -856,7 +974,10 @@ class NotificationService {
     if (lastError != null) {
       throw lastError;
     }
-    throw FirebaseFunctionsException(code: 'unknown', message: 'Unknown error initiating call');
+    throw FirebaseFunctionsException(
+      code: 'unknown',
+      message: 'Unknown error initiating call',
+    );
   }
 }
 

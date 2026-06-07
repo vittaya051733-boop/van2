@@ -54,7 +54,7 @@ class PublicCatalogService {
   static Map<String, Map<String, dynamic>>? _cachedPublicShops;
   static DateTime? _publicShopsCachedAt;
   static StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-      _publicShopsSubscription;
+  _publicShopsSubscription;
 
   static Stream<List<PublicCatalogSection>> streamAllSections() {
     return _streamActiveProducts('', '');
@@ -67,10 +67,29 @@ class PublicCatalogService {
     return _streamActiveProducts(normalized, '');
   }
 
+  /// Builds catalog sections from on-device cache (for instant paint + prefetch).
+  static Future<List<PublicCatalogSection>> sectionsFromLocalCache({
+    String serviceType = '',
+    String shopId = '',
+    bool nationwideShippingOnly = false,
+  }) async {
+    await PublicCatalogLocalCache.ensureProductsHydrated();
+    await PublicCatalogLocalCache.ensurePublicShopsHydrated();
+    final normalizedServiceType = serviceType.trim().isEmpty
+        ? ''
+        : _normalizeServiceType(serviceType);
+    return _buildSectionsFromCachedProducts(
+      normalizedServiceType,
+      shopId.trim(),
+      PublicCatalogLocalCache.publicShopsById,
+      nationwideShippingOnly: nationwideShippingOnly,
+    );
+  }
+
   static Stream<List<PublicCatalogSection>> streamNationwideShippingSections() {
     final query = FirebaseFirestore.instance
         .collection('products')
-        .where('isActive', isEqualTo: true);
+        .where('canShipNationwide', isEqualTo: true);
 
     return _streamFromProductQuery(
       query,
@@ -144,23 +163,20 @@ class PublicCatalogService {
         );
       }
 
-      final subscription = query.snapshots().listen(
-        (snapshot) async {
-          PublicCatalogLocalCache.applyProductSnapshot(snapshot);
-          final publicShops = await _getPublicShops();
-          if (!controller.isClosed) {
-            controller.add(
-              _buildSectionsFromCachedProducts(
-                requiredServiceType,
-                requiredShopId,
-                publicShops,
-                nationwideShippingOnly: nationwideShippingOnly,
-              ),
-            );
-          }
-        },
-        onError: controller.addError,
-      );
+      final subscription = query.snapshots().listen((snapshot) async {
+        PublicCatalogLocalCache.applyProductSnapshot(snapshot);
+        final publicShops = await _getPublicShops();
+        if (!controller.isClosed) {
+          controller.add(
+            _buildSectionsFromCachedProducts(
+              requiredServiceType,
+              requiredShopId,
+              publicShops,
+              nationwideShippingOnly: nationwideShippingOnly,
+            ),
+          );
+        }
+      }, onError: controller.addError);
 
       controller.onCancel = () => subscription.cancel();
     });
@@ -192,7 +208,7 @@ class PublicCatalogService {
       var user = FirebaseAuth.instance.currentUser;
       user ??= (await FirebaseAuth.instance.signInAnonymously()).user;
       if (user != null) {
-        await user.getIdToken(true);
+        await user.getIdToken();
       }
     } catch (_) {
       // UI surfaces Firestore errors if auth is unavailable.
@@ -248,17 +264,12 @@ class PublicCatalogService {
     _publicShopsSubscription = FirebaseFirestore.instance
         .collection('public_shops')
         .snapshots()
-        .listen(
-          (snapshot) {
-            final shops = {
-              for (final doc in snapshot.docs) doc.id: doc.data(),
-            };
-            _cachedPublicShops = shops;
-            _publicShopsCachedAt = DateTime.now();
-            PublicCatalogLocalCache.replacePublicShops(shops);
-          },
-          onError: (_) {},
-        );
+        .listen((snapshot) {
+          final shops = {for (final doc in snapshot.docs) doc.id: doc.data()};
+          _cachedPublicShops = shops;
+          _publicShopsCachedAt = DateTime.now();
+          PublicCatalogLocalCache.replacePublicShops(shops);
+        }, onError: (_) {});
   }
 
   static List<PublicCatalogSection> _buildSectionsFromDocs(
@@ -276,7 +287,7 @@ class PublicCatalogService {
 
     for (final doc in docs) {
       final rawData = doc.data;
-      if (!_isProductActive(rawData)) {
+      if (!nationwideShippingOnly && !_isProductActive(rawData)) {
         continue;
       }
 
@@ -285,11 +296,13 @@ class PublicCatalogService {
         continue;
       }
 
-      if (normalizedTargetShopId.isNotEmpty && shopId != normalizedTargetShopId) {
+      if (normalizedTargetShopId.isNotEmpty &&
+          shopId != normalizedTargetShopId) {
         continue;
       }
 
-      if (nationwideShippingOnly && !_isEligibleForNationwideShipping(rawData)) {
+      if (nationwideShippingOnly &&
+          !_isEligibleForNationwideShipping(rawData)) {
         continue;
       }
 
@@ -301,7 +314,9 @@ class PublicCatalogService {
         continue;
       }
 
-      grouped.putIfAbsent(shopId, () => <PublicCatalogProduct>[]).add(
+      grouped
+          .putIfAbsent(shopId, () => <PublicCatalogProduct>[])
+          .add(
             PublicCatalogProduct(
               id: doc.id,
               shopId: shopId,
@@ -387,6 +402,15 @@ class PublicCatalogService {
         .doc('home_shelves')
         .snapshots()
         .map((snapshot) => _readFeaturedProductIds(snapshot.data()));
+  }
+
+  static Future<List<String>> fetchFeaturedProductIds() async {
+    await _ensureCatalogAuth();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('platform_catalog')
+        .doc('home_shelves')
+        .get();
+    return _readFeaturedProductIds(snapshot.data());
   }
 
   static List<String> _readFeaturedProductIds(Map<String, dynamic>? data) {
@@ -481,31 +505,32 @@ class PublicCatalogService {
     await PublicCatalogLocalCache.ensurePublicShopsHydrated();
     final publicShops = await _getPublicShops();
 
-    final candidates = PublicCatalogLocalCache.productsById.entries
-        .where(
-          (entry) =>
-              !excludeIds.contains(entry.key) &&
-              _isProductActive(entry.value) &&
-              _productHasDisplayImage(entry.value),
-        )
-        .map(
-          (entry) => _CatalogProductEntry(id: entry.key, data: entry.value),
-        )
-        .toList(growable: true)
-      ..sort((left, right) {
-        final leftAt = _readProductUpdatedAt(left.data);
-        final rightAt = _readProductUpdatedAt(right.data);
-        if (leftAt != null && rightAt != null) {
-          return rightAt.compareTo(leftAt);
-        }
-        if (leftAt != null) {
-          return -1;
-        }
-        if (rightAt != null) {
-          return 1;
-        }
-        return left.id.compareTo(right.id);
-      });
+    final candidates =
+        PublicCatalogLocalCache.productsById.entries
+            .where(
+              (entry) =>
+                  !excludeIds.contains(entry.key) &&
+                  _isProductActive(entry.value) &&
+                  _productHasDisplayImage(entry.value),
+            )
+            .map(
+              (entry) => _CatalogProductEntry(id: entry.key, data: entry.value),
+            )
+            .toList(growable: true)
+          ..sort((left, right) {
+            final leftAt = _readProductUpdatedAt(left.data);
+            final rightAt = _readProductUpdatedAt(right.data);
+            if (leftAt != null && rightAt != null) {
+              return rightAt.compareTo(leftAt);
+            }
+            if (leftAt != null) {
+              return -1;
+            }
+            if (rightAt != null) {
+              return 1;
+            }
+            return left.id.compareTo(right.id);
+          });
 
     final results = <PublicCatalogProduct>[];
     for (final candidate in candidates) {
@@ -543,7 +568,10 @@ class PublicCatalogService {
             .map((doc) => doc.id)
             .where((id) => !excludeIds.contains(id))
             .toList(growable: false);
-        final resolved = await resolveProductsByIds(ids, excludeIds: excludeIds);
+        final resolved = await resolveProductsByIds(
+          ids,
+          excludeIds: excludeIds,
+        );
         if (resolved.isNotEmpty) {
           return resolved.take(limit).toList(growable: false);
         }
@@ -682,9 +710,7 @@ class PublicCatalogService {
   static List<PublicCatalogProduct> filterHomeRetailProducts(
     List<PublicCatalogProduct> products,
   ) {
-    return products
-        .where(isHomeRetailCatalogProduct)
-        .toList(growable: false);
+    return products.where(isHomeRetailCatalogProduct).toList(growable: false);
   }
 
   static bool _productHasDisplayImage(Map<String, dynamic> data) {
@@ -890,12 +916,42 @@ bool _isProductActive(Map<String, dynamic> data) {
 }
 
 bool _isEligibleForNationwideShipping(Map<String, dynamic> data) {
-  if (!_readBoolField(data['canShipNationwide'])) {
+  final reason = (data['nationwideShippingReason'] ?? '').toString().trim();
+  if (_readBoolField(data['canShipNationwide'])) {
+    return true;
+  }
+
+  if (reason.isEmpty || _isNegativeNationwideShippingReason(reason)) {
     return false;
   }
 
-  final reason = (data['nationwideShippingReason'] ?? '').toString().trim();
-  return reason.isNotEmpty;
+  return _isPositiveNationwideShippingReason(reason);
+}
+
+bool nationwideShippingEligibleForRegressionTest(Map<String, dynamic> data) {
+  return _isEligibleForNationwideShipping(data);
+}
+
+bool _isPositiveNationwideShippingReason(String reason) {
+  final normalized = reason.trim().toLowerCase();
+  return normalized.contains('สามารถ') ||
+      normalized.contains('ส่งได้') ||
+      normalized.contains('จัดส่งได้') ||
+      normalized.contains('เหมาะ') ||
+      normalized.contains('can ship') ||
+      normalized.contains('shippable') ||
+      normalized.contains('suitable');
+}
+
+bool _isNegativeNationwideShippingReason(String reason) {
+  final normalized = reason.trim().toLowerCase();
+  return normalized.contains('ไม่สามารถ') ||
+      normalized.contains('ส่งไม่ได้') ||
+      normalized.contains('จัดส่งไม่ได้') ||
+      normalized.contains('ไม่เหมาะ') ||
+      normalized.contains('cannot ship') ||
+      normalized.contains('not shippable') ||
+      normalized.contains('not suitable');
 }
 
 bool _readBoolField(Object? value) {
@@ -987,9 +1043,6 @@ String _readServiceType(Map<String, dynamic> data) {
     data['business_category'],
     data['registrationType'],
     data['registration_type'],
-    data['category'],
-    data['productCategory'],
-    data['type'],
   ];
 
   for (final candidate in candidates) {
@@ -999,7 +1052,48 @@ String _readServiceType(Map<String, dynamic> data) {
     }
   }
 
+  for (final candidate in <Object?>[data['category'], data['type']]) {
+    final value = candidate?.toString().trim();
+    if (value != null && _isExplicitServiceTypeAlias(value)) {
+      return value;
+    }
+  }
+
   return '';
+}
+
+bool _isExplicitServiceTypeAlias(String rawServiceType) {
+  switch (rawServiceType.trim().toLowerCase()) {
+    case 'restaurant':
+    case 'food':
+    case 'ร้านอาหาร':
+    case 'market':
+    case 'fresh_market':
+    case 'fresh market':
+    case 'ตลาดสด':
+    case 'ตลาด':
+    case 'shop':
+    case 'store':
+    case 'stores':
+    case 'general store':
+    case 'general_store':
+    case 'mini mart':
+    case 'mini_mart':
+    case 'retail':
+    case 'retailer':
+    case 'ร้านชำ':
+    case 'ของชำ':
+    case 'ร้านค้า':
+    case 'shop_registrations':
+    case 'pharmacy':
+    case 'drugstore':
+    case 'drug_store':
+    case 'ร้านขายยา':
+    case 'ยาและเวชภัณฑ์':
+      return true;
+    default:
+      return false;
+  }
 }
 
 String _normalizeServiceType(String rawServiceType) {

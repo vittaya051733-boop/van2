@@ -1,0 +1,28 @@
+---
+description: Guard catalog taxonomy and home shelves from unintended regressions
+globs: "lib/main.dart,lib/home_product_shelf.dart,lib/catalog_shop_browser.dart,lib/category_catalog_screen.dart,lib/catalog_product_detail_pager.dart,lib/public_catalog_service.dart"
+alwaysApply: false
+---
+
+# Taxonomy And Home Shelf Guard
+
+Before editing catalog taxonomy, product cards, or home shelves:
+
+- Declare the intended scope and list files expected to change.
+- Do not change shared product cards without checking all callers, especially `HomeProductShelfSection`.
+- Keep these taxonomy invariants unless the user explicitly changes them:
+  - `แก้วมังกร` -> `ผลไม้`
+  - `เนื้อไก่สด`, `ไก่สด`, `เนื้อสด`, `หมูสด` -> `ของสด`
+  - `ปลาหมึกแห้ง` -> `อาหารทะเลแปรรูป`
+  - Market/pharmacy taxonomy must not override restaurant/general shop products.
+- Keep nationwide shipping eligibility stable:
+  - A positive `nationwideShippingReason` such as `สามารถแพ็คและจัดส่งได้ทั่วประเทศ` must show in the nationwide shipping catalog even if stale boolean data exists.
+- If touching any matching file, run:
+
+```powershell
+flutter test test/catalog_taxonomy_regression_test.dart
+flutter test test/nationwide_shipping_regression_test.dart
+flutter analyze lib/main.dart lib/home_product_shelf.dart lib/catalog_shop_browser.dart lib/category_catalog_screen.dart lib/public_catalog_service.dart
+```
+
+If these fail, fix before deploy or further UI changes.

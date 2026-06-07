@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -9,6 +8,7 @@ import 'package:latlong2/latlong.dart' as latlng;
 
 import 'category_catalog_screen.dart';
 import 'public_catalog_service.dart';
+import 'widgets/cached_app_image.dart';
 
 class ShopMapScreen extends StatefulWidget {
   const ShopMapScreen({
@@ -666,13 +666,16 @@ class _BottomShopListTile extends StatelessWidget {
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: shop.shopImageUrl?.trim().isNotEmpty == true
-                    ? CachedNetworkImage(
+                    ? CachedAppImage(
                         imageUrl: shop.shopImageUrl!.trim(),
+                        width: imageSize,
+                        height: imageSize,
                         fit: BoxFit.cover,
-                        errorWidget: (_, __, ___) => _BottomShopImageFallback(
+                        lightweight: true,
+                        errorWidget: _BottomShopImageFallback(
                           isSelected: isSelected,
                         ),
-                        placeholder: (_, __) => _BottomShopImageFallback(
+                        placeholder: _BottomShopImageFallback(
                           isSelected: isSelected,
                         ),
                       )
@@ -768,6 +771,7 @@ class _ShopImageMarker extends StatelessWidget {
     final shopName = shop.shopName?.trim().isNotEmpty == true
         ? shop.shopName!.trim()
         : 'ร้านค้า';
+    final markerSize = isSelected ? 56.0 : 50.0;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -796,8 +800,8 @@ class _ShopImageMarker extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Container(
-          width: isSelected ? 56 : 50,
-          height: isSelected ? 56 : 50,
+          width: markerSize,
+          height: markerSize,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
@@ -813,11 +817,14 @@ class _ShopImageMarker extends StatelessWidget {
           ),
           child: ClipOval(
             child: shop.shopImageUrl?.trim().isNotEmpty == true
-                ? CachedNetworkImage(
+                ? CachedAppImage(
                     imageUrl: shop.shopImageUrl!.trim(),
+                    width: markerSize,
+                    height: markerSize,
                     fit: BoxFit.cover,
-                    errorWidget: (_, __, ___) => _ShopImageFallback(isSelected: isSelected),
-                    placeholder: (_, __) => _ShopImageFallback(isSelected: isSelected),
+                    lightweight: true,
+                    errorWidget: _ShopImageFallback(isSelected: isSelected),
+                    placeholder: _ShopImageFallback(isSelected: isSelected),
                   )
                 : _ShopImageFallback(isSelected: isSelected),
           ),

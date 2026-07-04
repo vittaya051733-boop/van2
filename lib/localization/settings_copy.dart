@@ -1,5 +1,3 @@
-import 'package:flutter/material.dart';
-
 import '../services/locale_service.dart';
 
 class SettingsCopy {

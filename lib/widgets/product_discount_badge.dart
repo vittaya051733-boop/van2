@@ -129,8 +129,8 @@ Widget wrapCatalogImageWithDiscountBadge({
     builder: (context, snapshot) {
       final promotion = PromotionCatalogService.instance.promotionForProduct(
         snapshot.data ?? const <PromotionOffer>[],
-        productId: productId!,
-        shopId: shopId!,
+        productId: productId,
+        shopId: shopId,
       );
       return overlay(
         ProductDiscountDisplay.resolve(

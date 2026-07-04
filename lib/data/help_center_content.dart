@@ -1,3 +1,7 @@
+import 'help_pricing_summary.dart';
+
+import '../pricing_config_service.dart';
+
 class HelpArticle {
   const HelpArticle({
     required this.id,
@@ -215,7 +219,23 @@ class HelpCenterContent {
         .toList(growable: false);
   }
 
-  static List<HelpArticle> search(String query, bool english) {
+  static String resolveBody(
+    HelpArticle article,
+    bool english, {
+    GlobalPricingConfig? pricing,
+  }) {
+    final config = pricing ?? PricingConfigService.instance.current;
+    if (HelpPricingSummary.isDynamicArticle(article.id)) {
+      return HelpPricingSummary.bodyForArticle(article, config, english);
+    }
+    return article.body(english);
+  }
+
+  static List<HelpArticle> search(
+    String query,
+    bool english, {
+    GlobalPricingConfig? pricing,
+  }) {
     final normalized = query.trim().toLowerCase();
     if (normalized.isEmpty) {
       return articles;
@@ -223,7 +243,7 @@ class HelpCenterContent {
     return articles
         .where((article) {
           final title = article.title(english).toLowerCase();
-          final body = article.body(english).toLowerCase();
+          final body = resolveBody(article, english, pricing: pricing).toLowerCase();
           return title.contains(normalized) || body.contains(normalized);
         })
         .toList(growable: false);

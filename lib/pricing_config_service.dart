@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import 'market_pricing_policy.dart';
 import 'shipping_pricing_policy.dart';
@@ -294,7 +295,7 @@ class GlobalPricingConfig {
 /// Backward-compatible alias for markup-only callers.
 typedef PricingRates = GlobalPricingConfig;
 
-class PricingConfigService {
+class PricingConfigService extends ChangeNotifier {
   PricingConfigService._();
 
   static final PricingConfigService instance = PricingConfigService._();
@@ -336,9 +337,11 @@ class PricingConfigService {
         );
   }
 
+  @override
   Future<void> dispose() async {
     await _subscription?.cancel();
     _subscription = null;
+    super.dispose();
   }
 
   void _apply(GlobalPricingConfig config) {
@@ -361,5 +364,6 @@ class PricingConfigService {
       nationwideRemoteSurcharge: config.nationwideRemoteSurcharge,
     );
     MarketPricingPolicy.configureFrom(config);
+    notifyListeners();
   }
 }

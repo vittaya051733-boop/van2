@@ -6,6 +6,7 @@ import 'media_cache_service.dart';
 class VideoSourceHelper {
   const VideoSourceHelper._();
 
+  /// Initial buffer for progressive MP4 streaming (~10% of a typical 720p clip).
   static const BetterPlayerCacheConfiguration cacheConfiguration =
       BetterPlayerCacheConfiguration(
     useCache: true,

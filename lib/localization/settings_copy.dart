@@ -64,4 +64,34 @@ class SettingsCopy {
   static String get openAppSettings =>
       _en ? 'Open system app settings' : 'เปิดตั้งค่าแอปของระบบ';
   static String get lastUpdated => _en ? 'Last updated' : 'อัปเดตล่าสุด';
+
+  static String get consentPreferences =>
+      _en ? 'Consent preferences' : 'การตั้งค่าความยินยอม';
+  static String get pushNotifications =>
+      _en ? 'Order notifications' : 'แจ้งเตือนสถานะออเดอร์';
+  static String get pushNotificationsSubtitle => _en
+      ? 'Optional push alerts for orders and messages'
+      : 'การแจ้งเตือนออเดอร์และข้อความ (ไม่บังคับ)';
+  static String get marketingMessages =>
+      _en ? 'Promotions' : 'ข่าวโปรโมชัน';
+  static String get marketingMessagesSubtitle => _en
+      ? 'Optional marketing messages'
+      : 'ข้อความการตลาด (ไม่บังคับ)';
+  static String get privacyRights =>
+      _en ? 'Your privacy rights' : 'สิทธิข้อมูลส่วนบุคคล';
+  static String get requestDataExport =>
+      _en ? 'Request data export' : 'ขอส่งออกข้อมูล';
+  static String get requestDataExportSubtitle => _en
+      ? 'Receive a copy of your personal data'
+      : 'ขอรับสำเนาข้อมูลส่วนบุคคลของคุณ';
+  static String get requestDataCorrection =>
+      _en ? 'Request data correction' : 'ขอแก้ไขข้อมูล';
+  static String get requestDataCorrectionSubtitle => _en
+      ? 'Ask us to correct inaccurate data'
+      : 'ขอให้แก้ไขข้อมูลที่ไม่ถูกต้อง';
+  static String get requestAccountDeletion =>
+      _en ? 'Request account deletion' : 'ขอลบบัญชี';
+  static String get requestAccountDeletionSubtitle => _en
+      ? 'Submit a deletion request to admin'
+      : 'ส่งคำขอลบบัญชีและข้อมูลไปยังแอดมิน';
 }

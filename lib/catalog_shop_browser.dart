@@ -407,7 +407,7 @@ class _ShopHeaderBanner extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
-          clipBehavior: Clip.antiAlias,
+          clipBehavior: kIsWeb ? Clip.none : Clip.antiAlias,
           child: AspectRatio(
             aspectRatio: 1.35,
             child: LayoutBuilder(
@@ -430,7 +430,8 @@ class _ShopHeaderBanner extends StatelessWidget {
                   imageUrl: shopImageUrl!,
                   width: bannerWidth,
                   height: bannerHeight,
-                  fit: BoxFit.contain,
+                  fit: BoxFit.cover,
+                  borderRadius: BorderRadius.circular(18),
                   lightweight: true,
                   errorWidget: const ColoredBox(
                     color: Color(0xFFFFEDD5),

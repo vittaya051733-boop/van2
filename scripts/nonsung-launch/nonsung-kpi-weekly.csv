@@ -1,0 +1,12 @@
+week,phase,date_start,shops_active,orders_per_day_avg,riders_peak_online,orders_total_week,gmv_baht,repeat_customers_pct,notes
+3,soft-launch,,15,3-5,2,,,,
+4,soft-launch,,20,5-8,2,,,,
+5,soft-launch,,25,8-12,3,,,,
+6,soft-launch,,28,10-15,3,,,,
+7,expand,,30,12-18,3,,,,
+8,expand,,30,15-20,4,,,,
+9,expand,,32,15-20,4,,,,
+10,expand,,32,15-22,5,,,,
+11,review,,30,18-25,5,,,,
+12,review,,30,18-25,5,,,,
+13,review,,30,20-25,5,,,,

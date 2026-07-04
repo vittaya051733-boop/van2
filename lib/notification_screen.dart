@@ -91,6 +91,23 @@ class NotificationScreen extends StatelessWidget {
       }
     }
 
+    if (item.isAdminAnnouncement) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(item.title),
+          content: SingleChildScrollView(child: Text(item.body)),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('ปิด'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     if (item.isChat) {
       final senderId = item.senderId;
       if (senderId != null && senderId.isNotEmpty) {
@@ -466,11 +483,15 @@ class _AppNotification {
   bool get isChat => action == 'chat_message';
   bool get isAdminSupportReply =>
       action == AdminSupportService.notificationAction;
+  bool get isAdminAnnouncement => action == 'admin_announcement';
 
   DateTime get sortTime =>
       createdAt ?? deliveredAt ?? DateTime.fromMillisecondsSinceEpoch(0);
 
   IconData get icon {
+    if (isAdminAnnouncement) {
+      return Icons.campaign_rounded;
+    }
     if (isAdminSupportReply) {
       return Icons.support_agent_rounded;
     }
@@ -484,6 +505,9 @@ class _AppNotification {
   }
 
   String get actionLabel {
+    if (isAdminAnnouncement) {
+      return 'ประกาศจากแอดมิน';
+    }
     if (isAdminSupportReply) {
       return 'ข้อความแอดมิน';
     }

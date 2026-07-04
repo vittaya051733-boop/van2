@@ -227,6 +227,7 @@ class AdminSupportService {
       'topicLabel': topicLabel.trim(),
       'message': trimmedMessage,
       'imageUrls': imageUrls,
+      'lastMessageImageUrls': imageUrls,
       'status': 'open',
       'unreadForRequester': false,
       'unreadForAdmin': true,
@@ -291,6 +292,7 @@ class AdminSupportService {
     batch.update(ticketRef, <String, dynamic>{
       'lastMessagePreview': preview,
       'lastMessageRole': 'requester',
+      'lastMessageImageUrls': imageUrls,
       'unreadForAdmin': true,
       'updatedAt': FieldValue.serverTimestamp(),
       'lastMessageAt': FieldValue.serverTimestamp(),

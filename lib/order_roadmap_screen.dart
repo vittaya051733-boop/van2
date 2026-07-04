@@ -3,54 +3,175 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'call_screen.dart';
 import 'chat_room_screen.dart';
 import 'models/user_profile.dart';
+import 'services/app_image_prefetch.dart';
+import 'services/chat_warmup.dart';
 import 'services/notification_service.dart';
 import 'services/review_service.dart';
+import 'utils/catalog_product_image_url.dart';
 import 'widgets/cached_app_image.dart';
 
 const double _kRoadmapProductCarouselHeight = 128;
 
-const Set<String> _kArchivedRoadmapOrderStatuses = <String>{
+const ShapeBorder _kRoadmapCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.all(Radius.circular(14)),
+  side: BorderSide(color: Color(0xFFE5E7EB)),
+);
+
+/// In-memory cache so roadmap cards skip repeat Firestore shop-image lookups.
+final Map<String, String?> _roadmapShopImageByOrderId = <String, String?>{};
+final Set<String> _roadmapPrefetchBatchKeys = <String>{};
+
+Widget _roadmapOrderCard({required Widget child}) {
+  return Card(
+    color: Colors.white,
+    surfaceTintColor: Colors.transparent,
+    elevation: 0,
+    margin: EdgeInsets.zero,
+    shape: _kRoadmapCardShape,
+    clipBehavior: Clip.antiAlias,
+    child: child,
+  );
+}
+
+List<String> _roadmapPrefetchUrlsFromOrder(Map<String, dynamic> data) {
+  final urls = <String>[];
+  void add(dynamic value) {
+    final trimmed = value?.toString().trim();
+    if (trimmed == null || trimmed.isEmpty || urls.contains(trimmed)) {
+      return;
+    }
+    urls.add(trimmed);
+  }
+
+  for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+    add(data[field]);
+  }
+
+  final shopSnapshot = data['shopSnapshot'];
+  if (shopSnapshot is Map) {
+    for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+      add(shopSnapshot[field]);
+    }
+  }
+
+  final rawProducts = data['products'];
+  if (rawProducts is List) {
+    for (final rawProduct in rawProducts) {
+      if (rawProduct is! Map) {
+        continue;
+      }
+      for (final field in <String>[
+        'imageUrl',
+        'productImage',
+        'photoUrl',
+        'shopImageUrl',
+        'shop_image_url',
+        'storeImageUrl',
+      ]) {
+        add(rawProduct[field]);
+      }
+      final productShopSnapshot = rawProduct['shopSnapshot'];
+      if (productShopSnapshot is Map) {
+        for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+          add(productShopSnapshot[field]);
+        }
+      }
+    }
+  }
+
+  add(data['deliveryProofImageUrl']);
+  return urls;
+}
+
+void _scheduleRoadmapOrdersPrefetch({
+  required List<String> orderIds,
+  required Iterable<Map<String, dynamic>> orders,
+}) {
+  if (orderIds.isEmpty) {
+    return;
+  }
+  final key = orderIds.join(',');
+  if (!_roadmapPrefetchBatchKeys.add(key)) {
+    return;
+  }
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final urls = <String>[];
+    for (final data in orders) {
+      urls.addAll(_roadmapPrefetchUrlsFromOrder(data));
+    }
+    if (urls.isEmpty) {
+      return;
+    }
+    AppImagePrefetch.scheduleImageUrlsPrefetch(
+      urls,
+      dedupeKey: 'roadmap:$key',
+      delayMs: 0,
+      limit: urls.length.clamp(1, 96),
+    );
+  });
+}
+
+const Set<String> _kCancelledRoadmapOrderStatuses = <String>{
   'cancelled',
   'canceled',
   'refund',
   'refunded',
 };
 
-bool _isArchivedRoadmapOrder(Map<String, dynamic> data) {
+bool _isDeliveredRoadmapOrder(Map<String, dynamic> data) {
   final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
-  return _kArchivedRoadmapOrderStatuses.contains(status);
+  return status == 'delivered';
+}
+
+bool _isCancelledRoadmapOrder(Map<String, dynamic> data) {
+  final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
+  return _kCancelledRoadmapOrderStatuses.contains(status);
+}
+
+bool _isHistoryRoadmapOrder(Map<String, dynamic> data) {
+  return _isDeliveredRoadmapOrder(data) || _isCancelledRoadmapOrder(data);
 }
 
 bool _isActiveRoadmapOrder(Map<String, dynamic> data) {
-  return !_isArchivedRoadmapOrder(data);
+  return !_isHistoryRoadmapOrder(data);
 }
 
-String _readOrderStatusLabel(Map<String, dynamic> data) {
-  final label = (data['statusLabel'] as String?)?.trim();
-  if (label != null && label.isNotEmpty) {
-    return label;
+String? _currentCustomerUid() {
+  try {
+    if (Firebase.apps.isEmpty) {
+      return null;
+    }
+    return FirebaseAuth.instance.currentUser?.uid;
+  } catch (_) {
+    return null;
   }
-  final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
-  switch (status) {
-    case 'cancelled':
-    case 'canceled':
-      return 'ยกเลิกออเดอร์';
-    case 'refund':
-    case 'refunded':
-      return 'ขอคืนเงิน';
-    case 'delivered':
-      return 'ส่งสำเร็จ';
-    default:
-      return status.isEmpty ? 'ออเดอร์' : status;
+}
+
+int _historyOrderSortMs(Map<String, dynamic> data) {
+  for (final field in <String>[
+    'deliveredAt',
+    'cancelledAt',
+    'updatedAt',
+    'createdAt',
+  ]) {
+    final value = data[field];
+    if (value is Timestamp) {
+      return value.millisecondsSinceEpoch;
+    }
+    if (value is DateTime) {
+      return value.millisecondsSinceEpoch;
+    }
   }
+  return 0;
 }
 
 const List<String> _kOrderShopLookupFields = <String>[
@@ -71,14 +192,44 @@ class OrderRoadmapScreen extends StatelessWidget {
   OrderRoadmapScreen({
     super.key,
     this.orderIds = const <String>[],
+    this.showHistory = false,
     FirebaseFirestore? firestore,
   }) : firestore = firestore ?? FirebaseFirestore.instance;
 
   final List<String> orderIds;
+  final bool showHistory;
   final FirebaseFirestore firestore;
+
+  void _openHistory(BuildContext context) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => OrderRoadmapScreen(
+          showHistory: true,
+          firestore: firestore,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final uid = _currentCustomerUid();
+
+    if (showHistory) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          title: const Text('ประวัติออเดอร์'),
+        ),
+        body: _CustomerHistoryRoadmapList(
+          uid: uid,
+          firestore: firestore,
+        ),
+      );
+    }
+
     final uniqueOrderIds = orderIds.toSet().toList(growable: false);
 
     return Scaffold(
@@ -89,10 +240,7 @@ class OrderRoadmapScreen extends StatelessWidget {
         title: const Text('Roadmap การจัดส่ง'),
         actions: [
           TextButton.icon(
-            onPressed: () => _showOrderProductHistorySheet(
-              context: context,
-              firestore: firestore,
-            ),
+            onPressed: () => _openHistory(context),
             icon: const Icon(Icons.history, size: 20),
             label: const Text('ประวัติ'),
           ),
@@ -100,12 +248,9 @@ class OrderRoadmapScreen extends StatelessWidget {
       ),
       body: _CustomerActiveRoadmapList(
         preferredOrderIds: uniqueOrderIds,
-        uid: FirebaseAuth.instance.currentUser?.uid,
+        uid: uid,
         firestore: firestore,
-        onOpenHistory: () => _showOrderProductHistorySheet(
-          context: context,
-          firestore: firestore,
-        ),
+        onOpenHistory: () => _openHistory(context),
       ),
     );
   }
@@ -131,6 +276,27 @@ class _RoadmapList extends StatelessWidget {
   }
 }
 
+Stream<QuerySnapshot<Map<String, dynamic>>> _activeRoadmapOrdersStream({
+  required FirebaseFirestore firestore,
+  required List<String> preferredOrderIds,
+  required String? uid,
+}) {
+  if (preferredOrderIds.isNotEmpty) {
+    final ids = preferredOrderIds.take(30).toList(growable: false);
+    return firestore
+        .collection('orders')
+        .where(FieldPath.documentId, whereIn: ids)
+        .snapshots();
+  }
+  if (uid == null || uid.isEmpty) {
+    return firestore.collection('orders').limit(0).snapshots();
+  }
+  return firestore
+      .collection('orders')
+      .where('customerId', isEqualTo: uid)
+      .snapshots();
+}
+
 class _CustomerActiveRoadmapList extends StatelessWidget {
   const _CustomerActiveRoadmapList({
     required this.preferredOrderIds,
@@ -146,7 +312,7 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (uid == null || uid!.isEmpty) {
+    if ((uid == null || uid!.isEmpty) && preferredOrderIds.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -155,11 +321,14 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
       );
     }
 
+    final stream = _activeRoadmapOrdersStream(
+      firestore: firestore,
+      preferredOrderIds: preferredOrderIds,
+      uid: uid,
+    );
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: firestore
-          .collection('orders')
-          .where('customerId', isEqualTo: uid)
-          .snapshots(),
+      stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
@@ -179,9 +348,6 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
             (snapshot.data?.docs ??
                     <QueryDocumentSnapshot<Map<String, dynamic>>>[])
                 .toList(growable: false);
-        final dataById = <String, Map<String, dynamic>>{
-          for (final doc in docs) doc.id: doc.data(),
-        };
 
         final activeDocs = docs
             .where((doc) => _isActiveRoadmapOrder(doc.data()))
@@ -195,17 +361,12 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
           return bMs.compareTo(aMs);
         });
 
-        final List<String> orderIds;
-        if (preferredOrderIds.isNotEmpty) {
-          orderIds = preferredOrderIds
-              .where((id) {
-                final data = dataById[id];
-                return data == null || _isActiveRoadmapOrder(data);
-              })
-              .toList(growable: false);
-        } else {
-          orderIds = activeDocs.map((doc) => doc.id).toList(growable: false);
-        }
+        final orderIds = activeDocs.map((doc) => doc.id).toList(growable: false);
+
+        _scheduleRoadmapOrdersPrefetch(
+          orderIds: orderIds,
+          orders: docs.map((doc) => doc.data()),
+        );
 
         if (orderIds.isEmpty) {
           return Center(
@@ -221,7 +382,7 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'ออเดอร์ที่ยกเลิกหรือขอคืนเงินแล้วจะอยู่ในปุ่มประวัติ',
+                    'ออเดอร์ที่ส่งสำเร็จ ยกเลิก หรือขอคืนเงินแล้วจะอยู่ในปุ่มประวัติ',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Color(0xFF6B7280)),
                   ),
@@ -233,6 +394,81 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          );
+        }
+
+        return _RoadmapList(orderIds: orderIds, firestore: firestore);
+      },
+    );
+  }
+}
+
+class _CustomerHistoryRoadmapList extends StatelessWidget {
+  const _CustomerHistoryRoadmapList({
+    required this.uid,
+    required this.firestore,
+  });
+
+  final String? uid;
+  final FirebaseFirestore firestore;
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null || uid!.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('กรุณาเข้าสู่ระบบเพื่อดูประวัติออเดอร์'),
+        ),
+      );
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: firestore
+          .collection('orders')
+          .where('customerId', isEqualTo: uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text('โหลดประวัติไม่สำเร็จ: ${snapshot.error}'),
+            ),
+          );
+        }
+
+        final docs =
+            (snapshot.data?.docs ??
+                    <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+                .toList(growable: false);
+        final historyDocs = docs
+            .where((doc) => _isHistoryRoadmapOrder(doc.data()))
+            .toList(growable: false)
+          ..sort(
+            (a, b) => _historyOrderSortMs(
+              b.data(),
+            ).compareTo(_historyOrderSortMs(a.data())),
+          );
+
+        final orderIds = historyDocs.map((doc) => doc.id).toList(growable: false);
+
+        _scheduleRoadmapOrdersPrefetch(
+          orderIds: orderIds,
+          orders: docs.map((doc) => doc.data()),
+        );
+
+        if (orderIds.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('ยังไม่มีประวัติออเดอร์ที่ส่งสำเร็จ'),
             ),
           );
         }
@@ -256,8 +492,8 @@ class _OrderRoadmapCard extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
-          return const Card(
-            child: Padding(
+          return _roadmapOrderCard(
+            child: const Padding(
               padding: EdgeInsets.all(20),
               child: Center(child: CircularProgressIndicator()),
             ),
@@ -265,7 +501,7 @@ class _OrderRoadmapCard extends StatelessWidget {
         }
 
         if (snapshot.hasError) {
-          return Card(
+          return _roadmapOrderCard(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text('โหลดออเดอร์ $orderId ไม่สำเร็จ: ${snapshot.error}'),
@@ -275,13 +511,18 @@ class _OrderRoadmapCard extends StatelessWidget {
 
         final data = snapshot.data?.data();
         if (data == null) {
-          return Card(
+          return _roadmapOrderCard(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text('ไม่พบข้อมูลออเดอร์ $orderId'),
             ),
           );
         }
+
+        _scheduleRoadmapOrdersPrefetch(
+          orderIds: <String>[orderId],
+          orders: <Map<String, dynamic>>[data],
+        );
 
         final roadmap = _buildRoadmapState(data);
         final isTravelOrder = _isTravelPassengerOrder(data);
@@ -306,16 +547,14 @@ class _OrderRoadmapCard extends StatelessWidget {
             ? _readTravelScheduleLabel(data)
             : null;
 
-        return Card(
+        return _roadmapOrderCard(
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 FutureBuilder<String?>(
-                  future: shopImageUrl != null
-                      ? Future<String?>.value(shopImageUrl)
-                      : _loadShopImageUrl(data),
+                  future: _resolveShopImageUrl(data),
                   builder: (context, shopImageSnapshot) {
                     final resolvedShopImageUrl =
                         shopImageSnapshot.data ?? shopImageUrl;
@@ -447,10 +686,16 @@ class _OrderRoadmapCard extends StatelessWidget {
                             onPressed: !hasRider || !canChat
                                 ? null
                                 : () async {
+                                    final riderProfile = contact?.profile;
+                                    if (riderProfile == null) return;
+                                    ChatWarmup.prefetchRoom(
+                                      myUid: FirebaseAuth.instance.currentUser!.uid,
+                                      peer: riderProfile,
+                                    );
                                     await Navigator.of(context).push(
                                       MaterialPageRoute<void>(
                                         builder: (_) => ChatRoomScreen(
-                                          friendProfile: contact!.profile!,
+                                          friendProfile: riderProfile,
                                           orderId: orderId,
                                         ),
                                       ),
@@ -589,6 +834,43 @@ class _OrderRoadmapCard extends StatelessWidget {
     }
 
     return null;
+  }
+
+  Future<String?> _resolveShopImageUrl(Map<String, dynamic> data) async {
+    if (_roadmapShopImageByOrderId.containsKey(orderId)) {
+      return _roadmapShopImageByOrderId[orderId];
+    }
+
+    final direct = _readShopImageUrl(data);
+    if (direct != null) {
+      _rememberRoadmapShopImageUrl(direct);
+      return direct;
+    }
+
+    final embedded = _readShopImageUrlFromEmbeddedProducts(data);
+    if (embedded != null) {
+      _rememberRoadmapShopImageUrl(embedded);
+      return embedded;
+    }
+
+    final loaded = await _loadShopImageUrl(data);
+    _rememberRoadmapShopImageUrl(loaded);
+    return loaded;
+  }
+
+  void _rememberRoadmapShopImageUrl(String? url) {
+    _roadmapShopImageByOrderId[orderId] = url;
+    final trimmed = url?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return;
+    }
+    unawaited(
+      AppImagePrefetch.prefetchUrls(
+        <String>[trimmed],
+        awaitPriority: false,
+        parallel: 1,
+      ),
+    );
   }
 
   Future<String?> _loadShopImageUrl(Map<String, dynamic> data) async {
@@ -817,10 +1099,11 @@ class _OrderRoadmapCard extends StatelessWidget {
       }
 
       final imageUrl = _readTrimmedString(
-        rawProduct['imageUrl'],
-        rawProduct['productImage'],
-        rawProduct['photoUrl'],
-      );
+            rawProduct['imageUrl'],
+            rawProduct['productImage'],
+            rawProduct['photoUrl'],
+          ) ??
+          readCatalogProductImageUrl(Map<String, dynamic>.from(rawProduct));
       final productId = _readFirstNonEmptyValue(
         Map<String, dynamic>.from(rawProduct),
         const <String>['productId', 'product_id', 'id', 'docId', 'documentId'],
@@ -1324,7 +1607,7 @@ class _OrderReviewPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final customerId = FirebaseAuth.instance.currentUser?.uid;
+    final customerId = _currentCustomerUid();
     final orderCustomerId = (data['customerId'] as String?)?.trim();
     final reviewableProducts = products
         .where((product) => product.productId?.trim().isNotEmpty == true)
@@ -2731,13 +3014,7 @@ class _AwaitingShopDecisionBannerState
     return DateTime.now().difference(acceptedAt) >= _shopDecisionThreshold;
   }
 
-  String? _currentUserUidOrNull() {
-    try {
-      return FirebaseAuth.instance.currentUser?.uid;
-    } catch (_) {
-      return null;
-    }
-  }
+  String? _currentUserUidOrNull() => _currentCustomerUid();
 
   Future<void> _wait15Min() async {
     if (_busy) return;
@@ -2909,44 +3186,6 @@ class _AwaitingShopDecisionBannerState
   }
 }
 
-class _ProductHistoryLine {
-  const _ProductHistoryLine({
-    required this.name,
-    required this.quantity,
-    this.unitPrice,
-    this.lineTotal,
-    this.imageUrl,
-    this.toppingsLabel,
-  });
-
-  final String name;
-  final int quantity;
-  final num? unitPrice;
-  final num? lineTotal;
-  final String? imageUrl;
-  final String? toppingsLabel;
-}
-
-class _ProductHistoryOrderGroup {
-  const _ProductHistoryOrderGroup({
-    required this.orderId,
-    required this.orderCode,
-    required this.shopName,
-    required this.orderedAt,
-    required this.products,
-    required this.statusLabel,
-    required this.isArchived,
-  });
-
-  final String orderId;
-  final String? orderCode;
-  final String shopName;
-  final DateTime? orderedAt;
-  final List<_ProductHistoryLine> products;
-  final String statusLabel;
-  final bool isArchived;
-}
-
 String _readOrderShopId(Map<String, dynamic> data) {
   final direct = _roadmapReadFirstNonEmptyValue(data, _kOrderShopLookupFields);
   if (direct != null) {
@@ -3012,486 +3251,3 @@ String? _roadmapReadTrimmedString(
   return null;
 }
 
-int _roadmapReadQuantity(dynamic value) {
-  if (value is int) {
-    return value;
-  }
-  if (value is num) {
-    return value.toInt();
-  }
-  if (value is String) {
-    return int.tryParse(value.trim()) ?? 0;
-  }
-  return 0;
-}
-
-String? _roadmapReadToppingsLabel(dynamic rawToppings) {
-  if (rawToppings is! List) {
-    return null;
-  }
-
-  final labels = rawToppings
-      .map((item) {
-        if (item is Map) {
-          return _roadmapReadTrimmedString(
-            item['name'],
-            item['label'],
-            item['title'],
-          );
-        }
-        return item?.toString().trim();
-      })
-      .whereType<String>()
-      .where((label) => label.isNotEmpty)
-      .toList(growable: false);
-
-  if (labels.isEmpty) {
-    return null;
-  }
-  return labels.join(', ');
-}
-
-List<_ProductHistoryLine> _readProductHistoryLines(Map<String, dynamic> data) {
-  final rawProducts = data['products'];
-  if (rawProducts is! List) {
-    return const <_ProductHistoryLine>[];
-  }
-
-  final results = <_ProductHistoryLine>[];
-  for (final rawProduct in rawProducts) {
-    if (rawProduct is! Map) {
-      continue;
-    }
-
-    final productMap = Map<String, dynamic>.from(rawProduct);
-    final name = _roadmapReadTrimmedString(
-      productMap['name'],
-      productMap['productName'],
-      productMap['title'],
-    );
-    if (name == null) {
-      continue;
-    }
-
-    results.add(
-      _ProductHistoryLine(
-        name: name,
-        quantity: _roadmapReadQuantity(productMap['quantity']),
-        unitPrice: productMap['unitPrice'] as num?,
-        lineTotal: productMap['lineTotal'] as num?,
-        imageUrl: _roadmapReadTrimmedString(
-          productMap['imageUrl'],
-          productMap['productImage'],
-          productMap['photoUrl'],
-        ),
-        toppingsLabel: _roadmapReadToppingsLabel(
-          productMap['selectedToppings'],
-        ),
-      ),
-    );
-  }
-
-  return results;
-}
-
-DateTime? _readOrderCreatedAt(Map<String, dynamic> data) {
-  final createdAt = data['createdAt'];
-  if (createdAt is Timestamp) {
-    return createdAt.toDate();
-  }
-  if (createdAt is DateTime) {
-    return createdAt;
-  }
-  return null;
-}
-
-Future<List<_ProductHistoryOrderGroup>> _loadCustomerProductHistory({
-  required FirebaseFirestore firestore,
-  required String customerId,
-}) async {
-  final snapshot = await firestore
-      .collection('orders')
-      .where('customerId', isEqualTo: customerId)
-      .get();
-
-  final groups = <_ProductHistoryOrderGroup>[];
-  for (final doc in snapshot.docs) {
-    final data = doc.data();
-    if (_isTravelPassengerOrder(data)) {
-      continue;
-    }
-
-    final products = _readProductHistoryLines(data);
-    if (products.isEmpty) {
-      continue;
-    }
-
-    final shopName = (data['shopName'] as String?)?.trim();
-    groups.add(
-      _ProductHistoryOrderGroup(
-        orderId: doc.id,
-        orderCode: (data['orderCode'] as String?)?.trim(),
-        shopName: shopName?.isNotEmpty == true ? shopName! : 'ร้านค้า',
-        orderedAt: _readOrderCreatedAt(data),
-        products: products,
-        statusLabel: _readOrderStatusLabel(data),
-        isArchived: _isArchivedRoadmapOrder(data),
-      ),
-    );
-  }
-
-  groups.sort((a, b) {
-    final aMs = a.orderedAt?.millisecondsSinceEpoch ?? 0;
-    final bMs = b.orderedAt?.millisecondsSinceEpoch ?? 0;
-    return bMs.compareTo(aMs);
-  });
-
-  return groups;
-}
-
-void _showOrderProductHistorySheet({
-  required BuildContext context,
-  required FirebaseFirestore firestore,
-}) {
-  final customerId = FirebaseAuth.instance.currentUser?.uid;
-  if (customerId == null || customerId.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('กรุณาเข้าสู่ระบบเพื่อดูประวัติสินค้า')),
-    );
-    return;
-  }
-
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    builder: (sheetContext) {
-      return DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.72,
-        minChildSize: 0.45,
-        maxChildSize: 0.95,
-        builder: (context, scrollController) {
-          return _OrderProductHistorySheet(
-            firestore: firestore,
-            customerId: customerId,
-            scrollController: scrollController,
-          );
-        },
-      );
-    },
-  );
-}
-
-class _OrderProductHistorySheet extends StatefulWidget {
-  const _OrderProductHistorySheet({
-    required this.firestore,
-    required this.customerId,
-    required this.scrollController,
-  });
-
-  final FirebaseFirestore firestore;
-  final String customerId;
-  final ScrollController scrollController;
-
-  @override
-  State<_OrderProductHistorySheet> createState() =>
-      _OrderProductHistorySheetState();
-}
-
-class _OrderProductHistorySheetState extends State<_OrderProductHistorySheet> {
-  late final Future<List<_ProductHistoryOrderGroup>> _historyFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _historyFuture = _loadCustomerProductHistory(
-      firestore: widget.firestore,
-      customerId: widget.customerId,
-    );
-  }
-
-  String _formatOrderedAt(DateTime? value) {
-    if (value == null) {
-      return '-';
-    }
-    return DateFormat('d MMM y, HH:mm').format(value);
-  }
-
-  String _formatPrice(num? value) {
-    if (value == null) {
-      return '-';
-    }
-    return 'THB ${value.toStringAsFixed(value % 1 == 0 ? 0 : 1)}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFFD1D5DB),
-              borderRadius: BorderRadius.circular(999),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'ประวัติออเดอร์',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'รวมออเดอร์ที่ยกเลิกและสินค้าที่เคยสั่ง',
-                        style: TextStyle(
-                          color: Color(0xFF6B7280),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: FutureBuilder<List<_ProductHistoryOrderGroup>>(
-              future: _historyFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        'โหลดประวัติสินค้าไม่สำเร็จ: ${snapshot.error}',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  );
-                }
-
-                final groups =
-                    snapshot.data ?? const <_ProductHistoryOrderGroup>[];
-                if (groups.isEmpty) {
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('ยังไม่มีประวัติสินค้า'),
-                    ),
-                  );
-                }
-
-                return ListView.separated(
-                  controller: widget.scrollController,
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                  itemCount: groups.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final group = groups[index];
-                    final orderLabel = group.orderCode?.isNotEmpty == true
-                        ? group.orderCode!
-                        : group.orderId;
-
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF9FAFB),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFE5E7EB)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Order $orderLabel',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: group.isArchived
-                                      ? const Color(0xFFFEE2E2)
-                                      : const Color(0xFFDCFCE7),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(
-                                  group.statusLabel,
-                                  style: TextStyle(
-                                    color: group.isArchived
-                                        ? const Color(0xFFB91C1C)
-                                        : const Color(0xFF166534),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            group.shopName,
-                            style: const TextStyle(
-                              color: Color(0xFF374151),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _formatOrderedAt(group.orderedAt),
-                            style: const TextStyle(
-                              color: Color(0xFF6B7280),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          for (
-                            var productIndex = 0;
-                            productIndex < group.products.length;
-                            productIndex++
-                          ) ...[
-                            if (productIndex > 0)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 8),
-                                child: Divider(height: 1),
-                              ),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _ProductHistoryThumb(
-                                  imageUrl:
-                                      group.products[productIndex].imageUrl,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        group.products[productIndex].name,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        group.products[productIndex].quantity >
-                                                0
-                                            ? '${group.products[productIndex].quantity} ชิ้น'
-                                            : '-',
-                                        style: const TextStyle(
-                                          color: Color(0xFF6B7280),
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                      if (group
-                                              .products[productIndex]
-                                              .toppingsLabel !=
-                                          null) ...[
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          group
-                                              .products[productIndex]
-                                              .toppingsLabel!,
-                                          style: const TextStyle(
-                                            color: Color(0xFF9CA3AF),
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                                Text(
-                                  _formatPrice(
-                                    group.products[productIndex].lineTotal ??
-                                        group.products[productIndex].unitPrice,
-                                  ),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProductHistoryThumb extends StatelessWidget {
-  const _ProductHistoryThumb({required this.imageUrl});
-
-  final String? imageUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: CachedAppImage(
-        imageUrl: imageUrl,
-        width: 44,
-        height: 44,
-        fit: BoxFit.cover,
-        lightweight: true,
-        borderRadius: BorderRadius.circular(10),
-        errorWidget: Container(
-          width: 44,
-          height: 44,
-          color: const Color(0xFFF3F4F6),
-          child: const Icon(
-            Icons.fastfood_outlined,
-            size: 20,
-            color: Color(0xFF9CA3AF),
-          ),
-        ),
-      ),
-    );
-  }
-}

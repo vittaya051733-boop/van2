@@ -7,7 +7,7 @@
 #>
 param(
   [string]$DeviceId = 'emulator-5554',
-  [string]$ReleaseVersion = '1.0.1+2',
+  [string]$ReleaseVersion = '1.0.1+4',
   [string]$AppId = 'e85bf3aa-16ea-476d-b651-30f7fa386e5e'
 )
 

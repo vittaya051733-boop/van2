@@ -12,6 +12,8 @@ import 'models/chat_message.dart';
 import 'models/user_profile.dart';
 import 'services/chat_service.dart';
 import 'services/friend_service.dart';
+import 'services/chat_warmup.dart';
+import 'services/chat_warmup_cache.dart';
 import 'widgets/cached_app_avatar.dart';
 import 'widgets/cached_app_image.dart';
 
@@ -42,7 +44,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   String? _error;
 
   String get _chatId => _chatService.chatIdFor(
-        _currentProfile?.uid ?? '',
+        _currentProfile?.uid ?? FirebaseAuth.instance.currentUser?.uid ?? '',
         widget.friendProfile.uid,
       );
 
@@ -67,7 +69,17 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    ChatWarmupCache.instance.cacheProfile(widget.friendProfile);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      ChatWarmup.prefetchRoom(
+        myUid: user.uid,
+        peer: widget.friendProfile,
+        chatService: _chatService,
+        friendService: _friendService,
+      );
+    }
+    _loadProfileFast();
   }
 
   @override
@@ -76,37 +88,58 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     super.dispose();
   }
 
-  Future<void> _loadProfile() async {
+  UserProfile _profileFromAuth(User user) {
+    final displayName = user.displayName?.trim();
+    return UserProfile(
+      uid: user.uid,
+      displayName: displayName != null && displayName.isNotEmpty
+          ? displayName
+          : 'ลูกค้า',
+      phoneNumber: user.phoneNumber,
+      photoUrl: user.photoURL,
+    );
+  }
+
+  Future<void> _loadProfileFast() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       setState(() => _error = 'โปรดเข้าสู่ระบบอีกครั้ง');
       return;
     }
-    final profile = await _friendService.getProfile(user.uid) ??
-        await _friendService.ensureCurrentUserProfile(user);
-    if (profile == null) {
-      if (!mounted) return;
-      setState(() => _error = 'ไม่พบข้อมูลผู้ใช้ปัจจุบัน');
-      return;
-    }
 
+    setState(() => _currentProfile = _profileFromAuth(user));
+    unawaited(_warmChatInBackground(user));
+  }
+
+  Future<void> _warmChatInBackground(User user) async {
     try {
-      final chatId = _chatIdForProfile(profile);
-      await _chatService.ensureChatAvailable(
-        sender: profile,
-        target: widget.friendProfile,
-      );
-      await _bindOrderContext(profile);
-      await _chatService.purgeExpiredMessages(chatId);
-      await _chatService.markChatAsRead(owner: profile, friend: widget.friendProfile);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = 'ไม่สามารถเริ่มห้องแชทได้: $e');
-      return;
-    }
+      final profile = await _friendService.getProfile(user.uid) ??
+          await _friendService.ensureCurrentUserProfile(user);
+      if (profile == null) {
+        if (!mounted) return;
+        setState(() => _error = 'ไม่พบข้อมูลผู้ใช้ปัจจุบัน');
+        return;
+      }
 
-    if (!mounted) return;
-    setState(() => _currentProfile = profile);
+      final chatId = _chatIdForProfile(profile);
+      unawaited(
+        _chatService.ensureChatAvailable(
+          sender: profile,
+          target: widget.friendProfile,
+        ),
+      );
+      unawaited(_bindOrderContext(profile));
+      unawaited(_chatService.purgeExpiredMessages(chatId));
+      unawaited(
+        _chatService.markChatAsRead(owner: profile, friend: widget.friendProfile),
+      );
+
+      if (!mounted) return;
+      setState(() => _currentProfile = profile);
+    } catch (e) {
+      if (!mounted || _currentProfile != null) return;
+      setState(() => _error = 'ไม่สามารถเริ่มห้องแชทได้: $e');
+    }
   }
 
   @override
@@ -165,10 +198,11 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     return StreamBuilder<List<ChatMessage>>(
       stream: _chatService.watchMessages(_chatId),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        final messages = snapshot.data ?? const [];
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            messages.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
-        final messages = snapshot.data ?? const [];
         _scheduleMarkAsRead(profile);
         if (messages.isEmpty) {
           return const Center(child: Text('เริ่มต้นสนทนาก่อนเลย'));

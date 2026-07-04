@@ -9,6 +9,8 @@ alwaysApply: true
 1. `scripts\DEPLOY_GOVERNANCE.md`
 2. `scripts\DEPLOY_RISK_MATRIX.md`
 
+**ก่อนลบโค้ดที่กระทบ production** → `DEPLOY_GOVERNANCE.md` § Checkpoint ก่อนลบโค้ด + `.cursor/rules/van-code-removal-deploy-checkpoint.mdc`
+
 ## van2 — เจ้าของ Firestore shared
 
 | Target | Impact |

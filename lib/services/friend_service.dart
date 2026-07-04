@@ -439,6 +439,23 @@ class FriendService {
   }
 
   Future<Map<String, dynamic>?> _loadShopData(String uid) async {
+    final publicSnapshot = await _firestore.collection('public_shops').doc(uid).get();
+    if (publicSnapshot.exists) {
+      final data = publicSnapshot.data();
+      if (data != null && data.isNotEmpty) {
+        return <String, dynamic>{
+          ...data,
+          'collection': 'public_shops',
+          'registrationDocId': publicSnapshot.id,
+        };
+      }
+    }
+
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null || currentUid != uid) {
+      return null;
+    }
+
     for (final collection in _shopCollections) {
       final directSnapshot = await _firestore.collection(collection).doc(uid).get();
       if (directSnapshot.exists) {

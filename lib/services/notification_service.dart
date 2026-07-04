@@ -16,6 +16,7 @@ import '../call_screen.dart';
 import '../main.dart';
 import '../notification_screen.dart';
 import '../order_roadmap_screen.dart';
+import '../services/observability_service.dart';
 import '../widgets/chat_message_popup.dart';
 import '../chat_room_screen.dart';
 
@@ -61,35 +62,18 @@ class NotificationService {
   bool _shouldReturnAppToBackground = false;
   StreamSubscription<User?>? _authSubscription;
 
-  /// เริ่มต้นระบบ Notification
+  /// เริ่มต้นระบบ Notification (ไม่ขอ permission ตอนเปิดแอป — ใช้ [enablePushNotifications])
   Future<void> initialize() async {
     if (_initialized) return;
 
-    final systemPermissionGranted = await _ensureSystemNotificationPermission();
-    if (!systemPermissionGranted) {
-      debugPrint('Notification permission denied at system level');
-    }
-
-    // Request permission
-    NotificationSettings settings = await _firebaseMessaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-
-    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-      debugPrint('User granted notification permission');
-    }
-
-    // Initialize local notifications
+    // Initialize local notifications without requesting OS push permission.
     const androidSettings = AndroidInitializationSettings(
       '@mipmap/ic_launcher',
     );
     const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
     const initializationSettings = InitializationSettings(
@@ -106,10 +90,12 @@ class NotificationService {
     await _ensureAndroidIncomingCallPresentationPermission();
     await _ensureAndroidOverlayPermission();
 
-    // Get FCM token
-    final token = await _firebaseMessaging.getToken();
-    if (token != null) {
-      await _saveFCMToken(token);
+    // Token is fetched only after explicit opt-in via [enablePushNotifications].
+    if (await _hasPushPermission()) {
+      final token = await _firebaseMessaging.getToken();
+      if (token != null) {
+        await _saveFCMToken(token);
+      }
     }
 
     // Listen to token refresh
@@ -144,6 +130,52 @@ class NotificationService {
 
     _setupCallIntentBridge();
     _initialized = true;
+  }
+
+  /// Called after the user opts in to push notifications (PDPA consent).
+  Future<bool> enablePushNotifications() async {
+    if (!_initialized) {
+      await initialize();
+    }
+
+    final systemPermissionGranted = await _ensureSystemNotificationPermission();
+    if (!systemPermissionGranted) {
+      debugPrint('Notification permission denied at system level');
+      return false;
+    }
+
+    final settings = await _firebaseMessaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+
+    final authorized =
+        settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+    if (!authorized) {
+      return false;
+    }
+
+    final token = await _firebaseMessaging.getToken();
+    if (token != null) {
+      await _saveFCMToken(token);
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && !user.isAnonymous && token != null && token.isNotEmpty) {
+      await saveUserFcmToken(user.uid);
+    }
+    return true;
+  }
+
+  Future<bool> _hasPushPermission() async {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return true;
+    }
+    final status = await Permission.notification.status;
+    return status.isGranted || status.isLimited;
   }
 
   Future<bool> _ensureSystemNotificationPermission() async {
@@ -530,9 +562,22 @@ class NotificationService {
           _openAppNotificationFromData(decoded);
           return;
         }
+        final orderId = (decoded['orderId'] ?? '').toString().trim();
+        if (orderId.isNotEmpty) {
+          _openOrderFromNotification(orderId: orderId);
+          return;
+        }
+      } else if (decoded is String) {
+        _openOrderFromNotification(orderId: decoded);
+        return;
       }
       debugPrint('Notification tapped with payload: $payload');
     } catch (error) {
+      final trimmed = payload.trim();
+      if (trimmed.isNotEmpty && !trimmed.startsWith('{')) {
+        _openOrderFromNotification(orderId: trimmed);
+        return;
+      }
       debugPrint('Failed to parse notification payload: $error');
     }
   }
@@ -540,9 +585,16 @@ class NotificationService {
   /// จัดการเมื่อกด notification จาก background
   void _handleNotificationTap(RemoteMessage message) {
     debugPrint('Notification tapped from background: ${message.messageId}');
-    final orderId = message.data['orderId'];
-    if (orderId != null) {
-      // TODO: Navigate to order details
+    final type = message.data['type']?.toString();
+    if (type != 'call' &&
+        type != 'call_cancel' &&
+        type != 'chat' &&
+        type != 'app_notification') {
+      final orderId = message.data['orderId']?.toString().trim();
+      if (orderId != null && orderId.isNotEmpty) {
+        _openOrderFromNotification(orderId: orderId);
+        return;
+      }
     }
 
     // เปิดหน้ารับสายอัตโนมัติเมื่อแตะ notification ประเภท call
@@ -622,6 +674,43 @@ class NotificationService {
         builder: (_) => orderId.isEmpty
             ? NotificationScreen()
             : OrderRoadmapScreen(orderIds: <String>[orderId]),
+      ),
+    );
+  }
+
+  void _openOrderFromNotification({
+    required String orderId,
+    int retryCount = 30,
+  }) {
+    final trimmed = orderId.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    final navigatorState = MyApp.navigatorKey.currentState;
+    if (navigatorState == null) {
+      if (retryCount <= 0) {
+        return;
+      }
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _openOrderFromNotification(
+          orderId: trimmed,
+          retryCount: retryCount - 1,
+        );
+      });
+      return;
+    }
+
+    unawaited(
+      ObservabilityService.instance.logEvent(
+        'notification_order_open',
+        parameters: <String, Object?>{'order_id': trimmed},
+      ),
+    );
+
+    navigatorState.push(
+      MaterialPageRoute<void>(
+        builder: (_) => OrderRoadmapScreen(orderIds: <String>[trimmed]),
       ),
     );
   }

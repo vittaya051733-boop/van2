@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -722,57 +721,17 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     required double? verifiedSlipAmount,
     required String verificationMessage,
   }) async {
-    final groupedByShop = <String, List<CartLineItem>>{};
-    for (final item in widget.cartItems) {
-      groupedByShop.putIfAbsent(item.shopId, () => <CartLineItem>[]).add(item);
-    }
-
-    final orderIds = <String>[];
-    final ordersRef = FirebaseFirestore.instance.collection('orders');
-
-    for (final entry in groupedByShop.entries) {
-      final items = entry.value;
-      if (items.isEmpty) {
-        continue;
-      }
-      final firstItem = items.first;
-      final orderRef = ordersRef.doc();
-      final now = DateTime.now();
-      final orderCode =
-          'NWP-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${orderRef.id.substring(0, 6).toUpperCase()}';
-      final subtotal = items.fold<double>(
-        0,
-        (runningTotal, item) => runningTotal + (item.unitPrice * item.quantity),
-      );
-      final merchantSubtotal = items.fold<double>(
-        0,
-        (runningTotal, item) =>
-            runningTotal + (item.merchantUnitPayout * item.quantity),
-      );
-      final totalQuantity = items.fold<int>(
-        0,
-        (runningTotal, item) => runningTotal + item.quantity,
-      );
-      final quote = _shippingService.estimateManualQuote(
-        items: items,
-        address: address,
-      );
-      final products = items
-          .map((item) {
-            final imageUrl = item.imageUrl?.trim();
-            final merchantLinePayout = item.merchantUnitPayout * item.quantity;
-            return <String, dynamic>{
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('createNationwideParcelOrders');
+    final response = await callable.call(<String, dynamic>{
+      'items': widget.cartItems
+          .map(
+            (item) => <String, dynamic>{
               'productId': item.productId,
-              'name': item.productName,
+              'shopId': item.shopId,
               'quantity': item.quantity,
-              'unitPrice': item.unitPrice,
-              'merchantBasePrice': item.merchantBasePrice,
-              'discountPercent': item.discountPercent,
-              'merchantUnitPayout': item.merchantUnitPayout,
-              'merchantLinePayout': merchantLinePayout,
-              'lineTotal': item.unitPrice * item.quantity,
               'selectedToppings': item.selectedToppings,
-              'preparationTimeMinutes': item.preparationTimeMinutes,
               'parcelWeightGrams': item.parcelWeightGrams,
               if (item.parcelLengthCm != null)
                 'parcelLengthCm': item.parcelLengthCm,
@@ -780,123 +739,33 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                 'parcelWidthCm': item.parcelWidthCm,
               if (item.parcelHeightCm != null)
                 'parcelHeightCm': item.parcelHeightCm,
-              if (imageUrl != null && imageUrl.isNotEmpty) 'imageUrl': imageUrl,
-            };
-          })
-          .toList(growable: false);
-      final productIds = items
-          .map((item) => item.productId.trim())
-          .where((productId) => productId.isNotEmpty)
-          .toSet()
-          .toList(growable: false);
+            },
+          )
+          .toList(growable: false),
+      'deliveryAddress': address.toJson(),
+      'paymentGroupId': paymentGroupId,
+      'verificationFeedbackId': verificationFeedbackId,
+      'slipStoragePath': slipStoragePath,
+      'slipDownloadUrl': slipDownloadUrl,
+      'slipFileName': slipFileName,
+      if (slipContentType != null) 'slipContentType': slipContentType,
+      'slipSizeBytes': slipSizeBytes,
+      'expectedCombinedAmount': expectedCombinedAmount,
+      if (verifiedSlipAmount != null) 'verifiedSlipAmount': verifiedSlipAmount,
+      'verificationMessage': verificationMessage,
+    });
 
-      await orderRef.set(<String, dynamic>{
-        'orderId': orderRef.id,
-        'orderCode': orderCode,
-        'orderType': 'nationwide_parcel',
-        'fulfillmentType': 'external_courier',
-        'serviceType': 'nationwide_parcel',
-        'status': 'accepted',
-        'statusLabel': 'ส่งทั่วประเทศ - รอร้านยืนยัน',
-        'shippingProvider': quote.provider,
-        'shippingProviderLabel': quote.providerLabel,
-        'shippingStatus': 'awaiting_booking',
-        'shippingStatusLabel': 'รอจองขนส่ง',
-        'paymentMethod': 'promptpay_qr',
-        'paymentMethodLabel': 'สแกนจ่าย',
-        'paymentStatus': 'verified',
-        'paymentStatusLabel': 'ชำระเงินแล้ว',
-        'paymentGroupId': paymentGroupId,
-        'paymentSubmittedAt': FieldValue.serverTimestamp(),
-        'paymentSlip': <String, dynamic>{
-          'storagePath': slipStoragePath,
-          'downloadUrl': slipDownloadUrl,
-          'fileName': slipFileName,
-          'contentType': slipContentType,
-          'sizeBytes': slipSizeBytes,
-          'uploadedBy': user.uid,
-          'uploadedAt': FieldValue.serverTimestamp(),
-        },
-        'paymentVerification': <String, dynamic>{
-          'provider': 'slipok',
-          'providerLabel': 'Slip OK',
-          'feedbackId': verificationFeedbackId,
-          'paymentGroupId': paymentGroupId,
-          'expectedCombinedAmount': expectedCombinedAmount,
-          'verifiedSlipAmount': verifiedSlipAmount,
-          'status': 'verified',
-          'statusLabel': 'ตรวจสอบสลิปผ่าน',
-          'message': verificationMessage,
-          'checkedAt': FieldValue.serverTimestamp(),
-        },
-        'sourceApp': 'van2_customer',
-        'customerId': user.uid,
-        'customerEmail': user.email,
-        'customerPhone': user.phoneNumber,
-        'customerSnapshot': <String, dynamic>{
-          'uid': user.uid,
-          'email': user.email,
-          'phoneNumber': user.phoneNumber,
-        },
-        'shopOwnerId': firstItem.shopId,
-        'shopId': firstItem.shopId,
-        'shopName': firstItem.shopName,
-        'deliveryAddress': address.toJson(),
-        'itemCount': items.length,
-        'totalQuantity': totalQuantity,
-        'products': products,
-        'productIds': productIds,
-        'parcel': quote.parcel.toJson(),
-        'shippingQuote': quote.toJson(),
-        'totalPrice': subtotal,
-        'subtotal': subtotal,
-        'merchantSubtotal': merchantSubtotal,
-        'shippingFee': quote.shippingFee,
-        'grandTotal': subtotal + quote.shippingFee,
-        'audit': <String, dynamic>{
-          'createdBy': user.uid,
-          'createdByRole': 'customer',
-          'createdSource': 'nationwide_manual_checkout',
-        },
-        'timestamp': FieldValue.serverTimestamp(),
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
-      unawaited(
-        orderRef.collection('timeline').add(<String, dynamic>{
-          'event': 'nationwide_order_created',
-          'eventLabel': 'ลูกค้าชำระเงินแล้ว ระบบสร้างออเดอร์ส่งทั่วประเทศ',
-          'actorRole': 'customer',
-          'actorId': user.uid,
-          'timestamp': FieldValue.serverTimestamp(),
-        }),
-      );
-      unawaited(
-        FirebaseFirestore.instance.collection('app_notifications').add(<
-          String,
-          dynamic
-        >{
-          'targetApp': 'van1',
-          'recipientUid': firstItem.shopId,
-          'orderId': orderRef.id,
-          'title': 'ออเดอร์ส่งทั่วประเทศใหม่',
-          'body':
-              'ใช้ขนส่งภายนอก • ${items.length} รายการ • ยอดรวม ฿${(subtotal + quote.shippingFee).toStringAsFixed(0)}',
-          'action': 'order_accepted',
-          'sourceApp': 'van2_customer',
-          'orderDecision': true,
-          'orderType': 'nationwide_parcel',
-          'fulfillmentType': 'external_courier',
-          'shippingProvider': quote.provider,
-          'shippingProviderLabel': quote.providerLabel,
-          'read': false,
-          'createdAt': FieldValue.serverTimestamp(),
-        }),
-      );
-      orderIds.add(orderRef.id);
+    final payload = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : const <String, dynamic>{};
+    final orderIds =
+        (payload['orderIds'] as List?)
+            ?.map((id) => id.toString())
+            .toList(growable: false) ??
+        const <String>[];
+    if (orderIds.isEmpty) {
+      throw Exception('ไม่สามารถสร้างออเดอร์ส่งทั่วประเทศได้');
     }
-
     return orderIds;
   }
 

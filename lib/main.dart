@@ -29,18 +29,21 @@ import 'map_picker_screen.dart';
 import 'nationwide_cart_screen.dart';
 import 'notification_screen.dart';
 import 'order_roadmap_screen.dart';
+import 'privacy_launch_gate.dart';
 import 'models/promotion_models.dart';
 import 'pricing_config_service.dart';
 import 'services/locale_service.dart';
 import 'services/promotion_catalog_service.dart';
 import 'services/promotion_display_config_service.dart';
 import 'widgets/home_promo_carousel.dart';
-import 'market_pricing_policy.dart';
 import 'shipping_pricing_policy.dart';
 import 'public_catalog_service.dart';
 import 'services/cart_session_service.dart';
 import 'services/favorites_service.dart';
 import 'services/notification_service.dart';
+import 'services/observability_service.dart';
+import 'services/privacy_consent_service.dart';
+import 'widgets/rider_unavailable_dialog.dart';
 import 'settings_screen.dart';
 import 'shop_map_screen.dart';
 import 'shop_qr_scanner_screen.dart';
@@ -115,8 +118,14 @@ Future<void> main() async {
   }
 
   try {
-    await NotificationService().initialize();
+    await ObservabilityService.instance.initialize(appName: 'van2_customer');
   } catch (_) {}
+
+  if (!kIsWeb) {
+    try {
+      await NotificationService().initialize();
+    } catch (_) {}
+  }
 
   try {
     await LocaleService.instance.load();
@@ -209,20 +218,22 @@ Future<PickedLocation?> tryDetectCurrentLocation() async {
     return null;
   }
 
-  // Emulator can return a valid cached fix faster than a fresh GNSS query.
-  final lastKnown = await Geolocator.getLastKnownPosition();
-  if (lastKnown != null) {
-    return buildPickedLocation(
-      latitude: lastKnown.latitude,
-      longitude: lastKnown.longitude,
-      fallbackTitle: 'พิกัดล่าสุดของฉัน',
-    );
+  if (!kIsWeb) {
+    // Emulator can return a valid cached fix faster than a fresh GNSS query.
+    final lastKnown = await Geolocator.getLastKnownPosition();
+    if (lastKnown != null) {
+      return buildPickedLocation(
+        latitude: lastKnown.latitude,
+        longitude: lastKnown.longitude,
+        fallbackTitle: 'พิกัดล่าสุดของฉัน',
+      );
+    }
   }
 
   final position = await Geolocator.getCurrentPosition(
-    locationSettings: const LocationSettings(
+    locationSettings: LocationSettings(
       accuracy: LocationAccuracy.medium,
-      timeLimit: Duration(seconds: 15),
+      timeLimit: const Duration(seconds: 15),
     ),
   );
 
@@ -314,9 +325,12 @@ class _SplashScreenState extends State<SplashScreen> {
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (context) => detectedLocation == null
-            ? const LocationSetupScreen(autoDetectionFailed: true)
-            : HomeScreen(userLocation: detectedLocation),
+        builder: (context) => PrivacyLaunchGate(
+          app: PrivacyAppKey.van2Customer,
+          child: detectedLocation == null
+              ? const LocationSetupScreen(autoDetectionFailed: true)
+              : HomeScreen(userLocation: detectedLocation),
+        ),
       ),
     );
   }
@@ -364,7 +378,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 ],
               ),
               child: Image.asset(
-                'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                'assets/app_logo.png',
                 fit: BoxFit.contain,
               ),
             ),
@@ -466,6 +480,12 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         if (!mounted) {
           return;
         }
+        if (kIsWeb) {
+          _showSnackBar(
+            'เบราว์เซอร์ไม่รองรับการระบุตำแหน่ง กรุณาเลือกพิกัดบนแผนที่แทน',
+          );
+          return;
+        }
         final openLocation = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -509,6 +529,12 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         if (!mounted) {
           return;
         }
+        if (kIsWeb) {
+          _showSnackBar(
+            'กรุณากดไอคอนแม่กุญแจในแถบที่อยู่ของเบราว์เซอร์ แล้วอนุญาตการเข้าถึงตำแหน่ง',
+          );
+          return;
+        }
         final openAppSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -544,7 +570,11 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       }
 
       if (permission == LocationPermission.denied) {
-        _showSnackBar('ยังไม่ได้รับสิทธิ์ตำแหน่ง กรุณาอนุญาตเพื่อใช้งานต่อ');
+        _showSnackBar(
+          kIsWeb
+              ? 'กรุณาอนุญาตตำแหน่งเมื่อเบราว์เซอร์ถาม หรือเลือกพิกัดบนแผนที่'
+              : 'ยังไม่ได้รับสิทธิ์ตำแหน่ง กรุณาอนุญาตเพื่อใช้งานต่อ',
+        );
         return;
       }
 
@@ -578,10 +608,11 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       }
 
       _setSelectedLocation(location);
-      setState(() {
-        _statusMessage =
-            'พบตำแหน่งของคุณแล้ว กรุณากดยืนยันเพื่อเข้าสู่หน้าหลัก';
-      });
+      if (!mounted) {
+        return;
+      }
+      _enterHomeScreen();
+      return;
     } catch (error) {
       if (!mounted) {
         return;
@@ -623,10 +654,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
     }
 
     _setSelectedLocation(selected);
-    setState(() {
-      _statusMessage =
-          'เลือกพิกัดเรียบร้อยแล้ว กรุณากดยืนยันเพื่อเข้าสู่หน้าหลัก';
-    });
+    _enterHomeScreen();
   }
 
   Future<void> _applyManualCoordinates() async {
@@ -660,10 +688,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       }
 
       _setSelectedLocation(location);
-      setState(() {
-        _statusMessage =
-            'บันทึกพิกัดเรียบร้อยแล้ว กรุณากดยืนยันเพื่อเข้าสู่หน้าหลัก';
-      });
+      _enterHomeScreen();
     } finally {
       if (mounted) {
         setState(() => _isSavingManualLocation = false);
@@ -702,6 +727,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -722,7 +748,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
             children: <Widget>[
               Center(
                 child: Image.asset(
-                  'assets/file_00000000be5472069245fc3bdb122dbb.png',
+                  'assets/app_logo.png',
                   width: 120,
                   height: 120,
                   fit: BoxFit.contain,
@@ -1724,6 +1750,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             userLatitude: _userLocation.latitude,
             userLongitude: _userLocation.longitude,
             userLocationLabel: _userLocation.title,
+            onConfirmOrder: _addToCart,
+            onNavigateToCart: _openCartTab,
           ),
         ),
       );
@@ -2242,333 +2270,79 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       throw Exception('ไม่มีสินค้าในตะกร้า');
     }
 
-    final cartSnapshot = List<CartLineItem>.from(_cartItems);
-    final groupedByShop = <String, List<CartLineItem>>{};
-    for (final item in cartSnapshot) {
-      groupedByShop.putIfAbsent(item.shopId, () => <CartLineItem>[]).add(item);
+    final checkoutQuoteId = checkoutContext?.checkoutQuoteId?.trim();
+    if (checkoutQuoteId == null || checkoutQuoteId.isEmpty) {
+      throw Exception('ยังไม่มี checkout quote กรุณารอระบบคำนวณยอดสักครู่');
     }
 
+    final cartSnapshot = List<CartLineItem>.from(_cartItems);
+    final discounts =
+        checkoutContext?.discounts ?? CartDiscountSnapshot.empty;
+
     try {
-      final ordersRef = FirebaseFirestore.instance.collection('orders');
-      final createdOrderIds = <String>[];
-      var combinedGrandTotal = 0.0;
-      final failedShops = <String>[];
-      final shopsWithoutRider = <String>[];
-      String? lastError;
-      final marketFees = MarketPricingPolicy.computeCheckoutFees(
-        groupedByShop.entries.map(
-          (entry) => MarketShopLocation(
-            shopId: entry.key,
-            latitude: entry.value.first.shopLatitude,
-            longitude: entry.value.first.shopLongitude,
-          ),
-        ),
-      );
-      var marketCollectionAssigned = false;
-      final discounts =
-          checkoutContext?.discounts ?? CartDiscountSnapshot.empty;
-      final shopSubtotals = <String, double>{
-        for (final entry in groupedByShop.entries)
-          entry.key: entry.value.fold<double>(
-            0,
-            (sumAcc, item) => sumAcc + (item.unitPrice * item.quantity),
-          ),
-      };
-      final combinedSubtotal = shopSubtotals.values.fold<double>(
-        0,
-        (sumAcc, value) => sumAcc + value,
-      );
-
-      for (final entry in groupedByShop.entries) {
-        final shopId = entry.key;
-        final items = entry.value;
-        if (items.isEmpty) {
-          continue;
-        }
-
-        final docRef = ordersRef.doc();
-        final now = DateTime.now();
-        final paymentExpiresAt = paymentMethod == 'promptpay_qr'
-            ? Timestamp.fromDate(now.add(const Duration(minutes: 30)))
-            : null;
-        final orderCode =
-            'ORD-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${docRef.id.substring(0, 6).toUpperCase()}';
-        final subtotal = items.fold<double>(
-          0,
-          (sumAcc, item) => sumAcc + (item.unitPrice * item.quantity),
-        );
-        final merchantSubtotal = items.fold<double>(
-          0,
-          (sumAcc, item) =>
-              sumAcc + (item.merchantUnitPayout * item.quantity),
-        );
-
-        final totalQuantity = items.fold<int>(
-          0,
-          (qtyAcc, item) => qtyAcc + item.quantity,
-        );
-
-        final preparationTimeMinutes = items.fold<int>(
-          10,
-          (maxMinutes, item) => item.preparationTimeMinutes > maxMinutes
-              ? item.preparationTimeMinutes
-              : maxMinutes,
-        );
-        final preparingDuration = preparationTimeMinutes * 60 * 1000;
-
-        final products = items
-            .map((item) {
-              final imageUrl = item.imageUrl?.trim();
-              final merchantLinePayout = item.merchantUnitPayout * item.quantity;
-              return <String, dynamic>{
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('createCheckoutOrders');
+      final response = await callable.call(<String, dynamic>{
+        'items': cartSnapshot
+            .map(
+              (item) => <String, dynamic>{
                 'productId': item.productId,
-                'name': item.productName,
+                'shopId': item.shopId,
                 'quantity': item.quantity,
-                'unitPrice': item.unitPrice,
-                'merchantBasePrice': item.merchantBasePrice,
-                'discountPercent': item.discountPercent,
-                'merchantUnitPayout': item.merchantUnitPayout,
-                'merchantLinePayout': merchantLinePayout,
-                'preparationTimeMinutes': item.preparationTimeMinutes,
-                'preparingDuration': item.preparationTimeMinutes * 60 * 1000,
                 'selectedToppings': item.selectedToppings,
-                'lineTotal': item.unitPrice * item.quantity,
-                if (imageUrl != null && imageUrl.isNotEmpty)
-                  'imageUrl': imageUrl,
-                if (imageUrl != null && imageUrl.isNotEmpty)
-                  'productImage': imageUrl,
-              };
-            })
-            .toList(growable: false);
-        final productIds = items
-            .map((item) => item.productId.trim())
-            .where((productId) => productId.isNotEmpty)
-            .toSet()
-            .toList(growable: false);
+                'shopLatitude': item.shopLatitude,
+                'shopLongitude': item.shopLongitude,
+              },
+            )
+            .toList(growable: false),
+        'customerLatitude': _userLocation.latitude,
+        'customerLongitude': _userLocation.longitude,
+        'customerLocation': <String, dynamic>{
+          'latitude': _userLocation.latitude,
+          'longitude': _userLocation.longitude,
+          'label': _userLocation.title,
+        },
+        'paymentMethod': paymentMethod,
+        'paymentMethodLabel': paymentMethodLabel,
+        'paymentStatus': paymentStatus,
+        'paymentStatusLabel': paymentStatusLabel,
+        'auditSource': auditSource,
+        'notifyRider': notifyRider,
+        'riderNotifyReady': riderNotifyReady,
+        'createdEventLabel': createdEventLabel,
+        'checkoutQuoteId': checkoutQuoteId,
+        if (checkoutContext?.couponCode != null &&
+            checkoutContext!.couponCode!.isNotEmpty)
+          'couponCode': checkoutContext.couponCode,
+      });
 
-        final firstItem = items.first;
-        final shippingFee = _estimateShippingFeeForOrder(
-          shopLatitude: firstItem.shopLatitude,
-          shopLongitude: firstItem.shopLongitude,
-          customerLatitude: _userLocation.latitude,
-          customerLongitude: _userLocation.longitude,
-        );
-        final shopQualifiesForMarket = marketFees.shopQualifies(shopId);
-        final orderServiceFee = shopQualifiesForMarket
-            ? marketFees.serviceFeePerOrder
-            : 0.0;
-        final orderCollectionFee =
-            !marketCollectionAssigned && shopQualifiesForMarket
-            ? marketFees.collectionFee
-            : 0.0;
-        if (orderCollectionFee > 0) {
-          marketCollectionAssigned = true;
-        }
-        final discountShare = combinedSubtotal > 0
-            ? discounts.discountTotal * (subtotal / combinedSubtotal)
-            : 0.0;
-        final promotionShare = combinedSubtotal > 0
-            ? discounts.promotionDiscount * (subtotal / combinedSubtotal)
-            : 0.0;
-        final couponShare = combinedSubtotal > 0
-            ? discounts.couponDiscount * (subtotal / combinedSubtotal)
-            : 0.0;
-        final grandTotal = (subtotal +
-                shippingFee +
-                orderServiceFee +
-                orderCollectionFee -
-                discountShare)
-            .clamp(0.0, double.infinity)
-            .toDouble();
-        combinedGrandTotal += grandTotal;
-        final riderSearch = await _findNearestRiderForShop(
-          shopLatitude: firstItem.shopLatitude,
-          shopLongitude: firstItem.shopLongitude,
-        );
-        final assignedRider = riderSearch.rider;
-        if (assignedRider == null) {
-          shopsWithoutRider.add(
-            '${firstItem.shopName} (${_describeRiderSearchFailure(riderSearch)})',
-          );
-        }
+      final payload = response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : const <String, dynamic>{};
+      final orderIds =
+          (payload['orderIds'] as List?)
+              ?.map((id) => id.toString())
+              .toList(growable: false) ??
+          const <String>[];
+      final combinedGrandTotal =
+          (payload['combinedGrandTotal'] as num?)?.toDouble() ?? 0.0;
+      final shopsWithoutRider =
+          (payload['shopsWithoutRider'] as List?)
+              ?.map((shop) => shop.toString())
+              .toList(growable: false) ??
+          const <String>[];
 
-        final initialOrderStatus = assignedRider == null
-            ? (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review')
-            : (notifyRider ? 'pending' : 'awaiting_payment_slip_review');
-        final initialStatusLabel = assignedRider == null
-            ? (notifyRider
-                  ? 'awaiting_nearest_rider'
-                  : 'awaiting_payment_slip_review')
-            : (notifyRider
-                  ? 'pending_customer_confirmation'
-                  : 'awaiting_payment_slip_review');
-
-        try {
-          final shouldAssignRiderImmediately = notifyRider;
-          await docRef.set(<String, dynamic>{
-            'orderId': docRef.id,
-            'orderCode': orderCode,
-            'status': initialOrderStatus,
-            'statusLabel': initialStatusLabel,
-            'customerConfirmed': true,
-            'customerConfirmedAt': FieldValue.serverTimestamp(),
-            'riderNotifyReady': riderNotifyReady,
-            'paymentMethod': paymentMethod,
-            'paymentMethodLabel': paymentMethodLabel,
-            'paymentStatus': paymentStatus,
-            'paymentStatusLabel': paymentStatusLabel,
-            if (paymentExpiresAt != null) ...<String, dynamic>{
-              'paymentExpiresAt': paymentExpiresAt,
-              'paymentExpiresInMinutes': 30,
-              'stockHoldStatus': 'pending',
-            },
-            'sourceApp': 'van2_customer',
-            'customerId': user.uid,
-            'customerEmail': user.email,
-            'customerPhone': user.phoneNumber,
-            'customerSnapshot': <String, dynamic>{
-              'uid': user.uid,
-              'email': user.email,
-              'phoneNumber': user.phoneNumber,
-            },
-            'shopOwnerId': shopId,
-            'shopId': shopId,
-            'shopName': firstItem.shopName,
-            'driverId': shouldAssignRiderImmediately
-                ? assignedRider?.riderId
-                : null,
-            'driverName': null,
-            'driverPhone': null,
-            'assignedRiderAt':
-                !shouldAssignRiderImmediately || assignedRider == null
-                ? null
-                : FieldValue.serverTimestamp(),
-            'customerLocation': <String, dynamic>{
-              'latitude': _userLocation.latitude,
-              'longitude': _userLocation.longitude,
-              'label': _userLocation.title,
-            },
-            'deliverySnapshot': <String, dynamic>{
-              'latitude': _userLocation.latitude,
-              'longitude': _userLocation.longitude,
-              'locationLabel': _userLocation.title,
-            },
-            'itemCount': items.length,
-            'totalQuantity': totalQuantity,
-            'preparationTimeMinutes': preparationTimeMinutes,
-            'preparingDuration': preparingDuration,
-            'products': products,
-            'productIds': productIds,
-            'totalPrice': subtotal,
-            'subtotal': subtotal,
-            'merchantSubtotal': merchantSubtotal,
-            'shippingFee': shippingFee,
-            'serviceFee': orderServiceFee,
-            'multiShopCollectionFee': orderCollectionFee,
-            if (marketFees.applies && shopQualifiesForMarket)
-              'marketHubFeesApplied': true,
-            if (marketFees.applies && shopQualifiesForMarket)
-              'marketQualifyingShopCount': marketFees.qualifyingShopCount,
-            'grandTotal': grandTotal,
-            if (discountShare > 0) ...<String, dynamic>{
-              'promotionDiscount': promotionShare,
-              'couponDiscount': couponShare,
-              'discountTotal': discountShare,
-              if (checkoutContext?.couponCode != null)
-                'appliedCouponCode': checkoutContext!.couponCode,
-              'discountLines': discounts.discountLines
-                  .map((line) => line.toPayload())
-                  .toList(growable: false),
-            },
-            'riderSearch': <String, dynamic>{
-              'stepKm': 2,
-              'maxRadiusKm': 10,
-              'searchedRadiusKm': riderSearch.searchedRadiusKm,
-              'onlineRiderCount': riderSearch.onlineRiderCount,
-              'eligibleRiderCount': riderSearch.eligibleRiderCount,
-              'matched': assignedRider != null,
-              'matchedRiderId': assignedRider?.riderId,
-              'matchedDistanceKm': assignedRider?.distanceKm,
-              if (riderSearch.excludedRiderCount > 0)
-                'excludedRiderCount': riderSearch.excludedRiderCount,
-              if (riderSearch.excludedBreakdown.isNotEmpty)
-                'excludedBreakdown': riderSearch.excludedBreakdown,
-              if (riderSearch.reason != null) 'reason': riderSearch.reason,
-            },
-            'audit': <String, dynamic>{
-              'createdBy': user.uid,
-              'createdByRole': 'customer',
-              'createdSource': auditSource,
-            },
-            'timestamp': FieldValue.serverTimestamp(),
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-
-          final timelineRef = docRef.collection('timeline').doc();
-          // Fire-and-forget: ไม่ต้องรอ timeline write เพราะออเดอร์หลักถูกสร้างแล้ว
-          unawaited(
-            timelineRef
-                .set(<String, dynamic>{
-                  'event': 'order_created',
-                  'eventLabel': createdEventLabel,
-                  'actorId': user.uid,
-                  'actorRole': 'customer',
-                  'orderId': docRef.id,
-                  'orderCode': orderCode,
-                  'status': initialOrderStatus,
-                  'timestamp': FieldValue.serverTimestamp(),
-                })
-                .catchError((_) {}),
-          );
-
-          if (notifyRider && assignedRider != null) {
-            // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว FCM แค่สำรอง ไม่ต้องรอ
-            unawaited(
-              FirebaseFirestore.instance
-                  .collection('app_notifications')
-                  .add({
-                    'targetApp': 'van3',
-                    'recipientUid': assignedRider.riderId,
-                    'orderId': docRef.id,
-                    'title': 'มีคำสั่งซื้อใหม่',
-                    'body': orderCode.isNotEmpty
-                        ? 'ออเดอร์ $orderCode จาก ${firstItem.shopName}'
-                        : 'มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}',
-                    'read': false,
-                    'createdAt': FieldValue.serverTimestamp(),
-                    'source': 'van2_customer',
-                    'sourceApp': 'van2_customer',
-                    'action': 'order_created_customer_confirmed',
-                    'customerConfirmed': true,
-                    'riderNotifyReady': riderNotifyReady,
-                  })
-                  .catchError(
-                    (_) => FirebaseFirestore.instance
-                        .collection('app_notifications')
-                        .doc(),
-                  ),
-            );
-          }
-
-          createdOrderIds.add(docRef.id);
-        } catch (e) {
-          failedShops.add(shopId);
-          lastError = e.toString();
-        }
-      }
-
-      if (createdOrderIds.isEmpty) {
-        final failedLabel = failedShops.isEmpty
-            ? ''
-            : ' ร้านที่ล้มเหลว: ${failedShops.join(', ')}';
-        throw Exception(
-          'ไม่สามารถสร้างออเดอร์ได้$failedLabel ${lastError ?? ''}'.trim(),
-        );
+      if (orderIds.isEmpty) {
+        throw Exception('ไม่สามารถสร้างออเดอร์ได้');
       }
 
       if (mounted && shopsWithoutRider.isNotEmpty) {
-        _showSnackBar('ยังไม่พบไรเดอร์: ${shopsWithoutRider.join(', ')}');
+        await showRiderUnavailableDialog(
+          context,
+          shopNames: shopsWithoutRider,
+          orderIds: orderIds,
+        );
       }
 
       if (mounted) {
@@ -2576,12 +2350,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       await _recordCheckoutDiscounts(
-        orderIds: createdOrderIds,
+        orderIds: orderIds,
         discounts: discounts,
       );
 
       return (
-        orderIds: createdOrderIds,
+        orderIds: orderIds,
         combinedGrandTotal: combinedGrandTotal,
       );
     } catch (e) {
@@ -2785,7 +2559,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (mounted && !hasAssignedRider) {
-      _showSnackBar('ยังไม่พบไรเดอร์รับผู้โดยสารที่พร้อมรับงานใกล้จุดรับ');
+      await showRiderUnavailableDialog(
+        context,
+        shopNames: const <String>['บริการเดินทาง'],
+        orderIds: <String>[orderRef.id],
+        isTravelOrder: true,
+      );
     }
 
     return (orderIds: <String>[orderRef.id], combinedGrandTotal: fare);
@@ -2877,6 +2656,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             excludedBreakdown: const <String, int>{},
             reason: 'single_online_no_shop_coords_fallback',
           );
+        }
+
+        if (snapshot.docs.length > 1) {
+          String? freshestId;
+          DateTime? freshestAt;
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final raw = data['locationUpdatedAt'] ?? data['updatedAt'];
+            final updatedAt = raw is Timestamp ? raw.toDate() : null;
+            if (updatedAt == null) {
+              continue;
+            }
+            if (freshestAt == null || updatedAt.isAfter(freshestAt)) {
+              freshestAt = updatedAt;
+              freshestId = doc.id;
+            }
+          }
+          if (freshestId != null) {
+            return _RiderSearchResult(
+              rider: _RiderDistance(riderId: freshestId, distanceKm: 0),
+              searchedRadiusKm: 0,
+              onlineRiderCount: snapshot.docs.length,
+              eligibleRiderCount: 1,
+              excludedRiderCount: snapshot.docs.length - 1,
+              excludedBreakdown: const <String, int>{},
+              reason: 'multi_online_no_shop_coords_fallback',
+            );
+          }
         }
 
         return _RiderSearchResult(
@@ -2991,6 +2798,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 : 0,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
             reason: 'single_online_fallback',
+          );
+        }
+
+        if (fallbackCandidates.length > 1) {
+          final nearest = [...fallbackCandidates]
+            ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+          return _RiderSearchResult(
+            rider: nearest.first,
+            searchedRadiusKm: 10,
+            onlineRiderCount: snapshot.docs.length,
+            eligibleRiderCount: 1,
+            excludedRiderCount:
+                snapshot.docs.length - fallbackCandidates.length,
+            excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
+            reason: 'multi_online_stale_location_fallback',
           );
         }
 
@@ -3304,6 +3126,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'เลือกไรเดอร์ออนไลน์คนเดียว (อยู่นอกรัศมี)',
       'nearest_out_of_radius_fallback' =>
         'เลือกรายที่ใกล้ที่สุดแม้อยู่นอกรัศมี',
+      'multi_online_stale_location_fallback' =>
+        'เลือกไรเดอร์ใกล้ร้านที่สุด (พิกัดเกิน 10 นาที)',
+      'multi_online_no_shop_coords_fallback' =>
+        'เลือกไรเดอร์ออนไลน์ (ร้านยังไม่มีพิกัด)',
       _ when reason.startsWith('rider_query_failed:') =>
         'ค้นหาไรเดอร์ไม่สำเร็จ',
       _ => reason,

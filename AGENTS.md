@@ -7,6 +7,10 @@
 3. Run `scripts\deploy-readiness.ps1 -App van2 -Target <target>`
 4. Deploy ONE target: `scripts\deploy-self.ps1 -App van2 -Target <target> ...`
 
+## Before removing production code
+
+See `DEPLOY_GOVERNANCE.md` § **Checkpoint ก่อนลบโค้ด**: report impact (which vans, SHARED/SELF, deploy targets) and wait for user confirmation before delete + deploy.
+
 ## Critical
 
 Firestore `(default)` rules are **SHARED** with van1, van3 (rider), van4.  

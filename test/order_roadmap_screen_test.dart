@@ -73,8 +73,7 @@ void main() {
           ),
         ),
       );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
 
       expect(
         find.byKey(const ValueKey<String>('roadmap-shop-image')),
@@ -281,6 +280,38 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('delivered order is hidden from active roadmap list', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('orders').doc('order-delivered-1').set({
+      'orderId': 'order-delivered-1',
+      'orderCode': 'ORD-DELIVERED-01',
+      'status': 'delivered',
+      'shopName': 'ร้านส่งแล้ว',
+      'grandTotal': 120.0,
+      'products': [
+        {'name': 'ข้าวมันไก่', 'quantity': 1},
+      ],
+      'deliveredAt': DateTime.now(),
+      'createdAt': DateTime.now(),
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OrderRoadmapScreen(
+          orderIds: const ['order-delivered-1'],
+          firestore: firestore,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ไม่มีออเดอร์ที่กำลังดำเนินการ'), findsOneWidget);
+    expect(find.text('ข้าวมันไก่'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'roadmap card asks customer to wait or cancel when shop rejects',

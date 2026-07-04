@@ -4,6 +4,7 @@ import 'admin_contact_screen.dart';
 import 'data/help_center_content.dart';
 import 'help_article_detail_screen.dart';
 import 'localization/settings_copy.dart';
+import 'pricing_config_service.dart';
 import 'services/admin_support_config.dart';
 import 'services/locale_service.dart';
 
@@ -83,10 +84,18 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
+      listenable: PricingConfigService.instance,
+      builder: (context, _) {
+        return ListenableBuilder(
       listenable: LocaleService.instance,
       builder: (context, _) {
         final english = LocaleService.instance.isEnglish;
-        final results = HelpCenterContent.search(_query, english);
+        final pricing = PricingConfigService.instance.current;
+        final results = HelpCenterContent.search(
+          _query,
+          english,
+          pricing: pricing,
+        );
         final popular = HelpCenterContent.popularArticles();
 
         return Scaffold(
@@ -151,7 +160,11 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
                 child: ListTile(
                   title: Text(article.title(english)),
                   subtitle: Text(
-                    article.body(english),
+                    HelpCenterContent.resolveBody(
+                      article,
+                      english,
+                      pricing: pricing,
+                    ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -190,6 +203,8 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
           ),
         ],
       ),
+    );
+      },
     );
       },
     );

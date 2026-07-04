@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,6 +9,7 @@ import '../models/chat_message.dart';
 import '../models/user_profile.dart';
 import '../storage_helper.dart';
 import '../utils/upload_image_compressor.dart';
+import 'chat_warmup_cache.dart';
 
 class ChatService {
   ChatService();
@@ -22,18 +24,64 @@ class ChatService {
     return 'chat_${sorted.join('_')}';
   }
 
-  Stream<List<ChatMessage>> watchMessages(String chatId) {
+  Stream<List<ChatMessage>> watchMessages(String chatId, {int limit = 50}) {
     final ref = _firestore
         .collection('chats')
         .doc(chatId)
         .collection('messages')
-        .orderBy('createdAt', descending: true);
+        .orderBy('createdAt', descending: true)
+        .limit(limit);
 
-    return ref.snapshots().map(
-          (snapshot) => snapshot.docs
+    return Stream<List<ChatMessage>>.multi((controller) {
+      final cached = ChatWarmupCache.instance.peekMessages(chatId);
+      if (cached != null && cached.isNotEmpty) {
+        controller.add(cached);
+      }
+
+      late StreamSubscription<QuerySnapshot<Map<String, dynamic>>> subscription;
+      subscription = ref.snapshots().listen(
+        (snapshot) {
+          final messages = snapshot.docs
               .map((doc) => ChatMessage.fromSnapshot(doc))
-              .toList(),
-        );
+              .toList();
+          if (messages.isNotEmpty) {
+            ChatWarmupCache.instance.putMessages(chatId, messages);
+          }
+          controller.add(messages);
+        },
+        onError: controller.addError,
+        onDone: controller.close,
+        cancelOnError: false,
+      );
+
+      controller.onCancel = () => subscription.cancel();
+    });
+  }
+
+  Future<List<ChatMessage>> prefetchMessages(
+    String chatId, {
+    int limit = 50,
+  }) async {
+    final cached = ChatWarmupCache.instance.peekMessages(chatId);
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+
+    final snapshot = await _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .get();
+
+    final messages = snapshot.docs
+        .map((doc) => ChatMessage.fromSnapshot(doc))
+        .toList();
+    if (messages.isNotEmpty) {
+      ChatWarmupCache.instance.putMessages(chatId, messages);
+    }
+    return messages;
   }
 
   Future<void> ensureChatAvailable({

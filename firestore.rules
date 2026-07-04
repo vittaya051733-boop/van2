@@ -31,7 +31,7 @@ service cloud.firestore {
     }
 
     function authEmail() {
-      return signedIn() ? request.auth.token.email : null;
+      return signedIn() && ('email' in request.auth.token) ? request.auth.token.email : null;
     }
 
     function isRegistrationCollection(collection) {
@@ -152,9 +152,16 @@ service cloud.firestore {
     function canCreateAppNotification() {
       return signedIn()
           && (
-            request.resource.data.targetApp != 'van3'
-            || request.resource.data.sourceApp != 'van2_customer'
-            || canCreateVan3NotificationForOrder()
+            (
+              isPrivilegedAdmin()
+              && request.resource.data.action == 'admin_announcement'
+              && request.resource.data.sourceApp == 'van4_admin'
+            )
+            || (
+              request.resource.data.targetApp != 'van3'
+              || request.resource.data.sourceApp != 'van2_customer'
+              || canCreateVan3NotificationForOrder()
+            )
           );
     }
 
@@ -639,6 +646,15 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
     }
 
+    // เอกสารลงทะเบียนไรเดอร์ (van3 RiderOnboardingGate)
+    match /rider_registrations/{riderId} {
+      allow get: if isSelf(riderId) || isPrivilegedAdmin();
+      allow list: if isPrivilegedAdmin();
+      allow create: if isSelf(riderId);
+      allow update: if isSelf(riderId) || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
     // ข้อมูลสัญญา
     match /contracts/{userId} {
       allow get: if isSelf(userId) || isPrivilegedAdmin();
@@ -666,6 +682,17 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /product_ai_jobs/{jobId} {
+      allow get: if signedIn() && resource.data.uid == uid();
+      allow list: if false;
+      allow write: if false;
+    }
+
+    match /product_drafts/{ownerUid}/items/{draftId} {
+      allow get, list: if signedIn() && uid() == ownerUid;
+      allow create, update, delete: if signedIn() && uid() == ownerUid;
+    }
+
     // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
     match /public_shops/{shopId} {
       allow get, list: if true;
@@ -684,10 +711,15 @@ service cloud.firestore {
     }
 
     // เอกสารลงทะเบียนร้านค้า
-    // - get (single doc): ผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์)
+    // - get (single doc): เจ้าของหรือ admins เท่านั้น (ข้อมูลส่วนตัว เช่น email/phone)
     // - list/query: เจ้าของหรือadmins
     match /{collection}/{docId} {
-      allow get: if isRegistrationCollection(collection) && signedIn();
+      allow get: if isRegistrationCollection(collection)
+          && signedIn()
+          && (
+            isPrivilegedAdmin()
+            || isRegistrationOwner(docId)
+          );
 
       allow list: if isRegistrationCollection(collection)
           && signedIn()
@@ -741,11 +773,36 @@ service cloud.firestore {
       }
     }
 
+    function isVan2CustomerDirectOrder(data) {
+      return signedIn()
+          && data != null
+          && data.customerId == uid()
+          && data.sourceApp == 'van2_customer';
+    }
+
+    function canClientCreateOrder(data) {
+      return isOrderParticipant(data)
+          && (
+            !isVan2CustomerDirectOrder(data)
+            || data.orderType == 'travel_passenger'
+          );
+    }
+
+    function orderSensitiveFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'paymentStatus',
+        'grandTotal',
+        'paymentVerification',
+        'paymentSlip',
+      ]);
+    }
+
     // ออเดอร์
     match /orders/{orderId} {
       allow read: if canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin();
-      allow create: if isOrderParticipant(request.resource.data);
-      allow update: if canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin();
+      allow create: if canClientCreateOrder(request.resource.data);
+      allow update: if (canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin())
+          && (isPrivilegedAdmin() || orderSensitiveFieldsUnchanged());
       allow delete: if isPrivilegedAdmin();
 
       match /timeline/{timelineId} {
@@ -769,11 +826,23 @@ service cloud.firestore {
       allow write: if isSelf(shopId) || isPrivilegedAdmin();
     }
 
-    // เครดิต
+    // เครดิต — client create เฉพาะ rider ledger (hold/release); top-up ผ่าน Cloud Function
     match /credits/{creditId} {
       allow read: if signedIn() && resource.data.uid == uid();
-      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow create: if signedIn()
+          && request.resource.data.uid == uid()
+          && request.resource.data.type in [
+            'order_pay_at_destination_hold',
+            'order_pay_at_destination_release'
+          ];
       allow update, delete: if isPrivilegedAdmin();
+    }
+
+    // กระเป๋าเงินร้านค้า — คำนวณและบันทึกโดย Cloud Function เท่านั้น
+    match /merchant_wallets/{merchantUid} {
+      allow get: if isSelf(merchantUid) || isPrivilegedAdmin();
+      allow list: if isPrivilegedAdmin();
+      allow write: if false;
     }
 
     // คำขอถอนเงิน
@@ -792,6 +861,17 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
     }
 
+    // ประกาศแพลตฟอร์มจาก van4 — บันทึกประวัติ + fan-out ไป app_notifications
+    match /platform_announcements/{announcementId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if isPrivilegedAdmin()
+          && request.resource.data.sourceApp == 'van4_admin'
+          && request.resource.data.title is string
+          && request.resource.data.body is string
+          && request.resource.data.targetApps is list;
+      allow update, delete: if isPrivilegedAdmin();
+    }
+
     // การแจ้งเตือนข้ามแอป (van1/van2/van3)
     match /app_notifications/{notificationId} {
       allow create: if canCreateAppNotification();
@@ -805,11 +885,32 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // รายชื่อadmins van4 — doc id = อีเมลตัวพิมพ์เล็ก, จัดการผ่าน Firebase Console เท่านั้น
+    // รายชื่อadmins van4 — doc id = อีเมลตัวพิมพ์เล็ก; สร้าง/ลบผ่าน Console เท่านั้น
+    function adminSelfPresenceFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'authUid',
+        'email',
+        'displayName',
+        'lastSeenAt',
+        'active',
+      ]);
+    }
+
     match /admins/{emailId} {
-      allow get: if signedIn() && authEmail() != null && authEmail().lower() == emailId;
-      allow list: if false;
-      allow create, update, delete: if false;
+      allow get: if signedIn()
+          && (
+            isPrivilegedAdmin()
+            || (
+              authEmail() != null
+              && authEmail().lower() == emailId
+            )
+          );
+      allow list: if isPrivilegedAdmin();
+      allow create, delete: if false;
+      allow update: if signedIn()
+          && authEmail() != null
+          && authEmail().lower() == emailId
+          && adminSelfPresenceFieldsOnly();
     }
 
     // สินค้าที่ AI ประเมินว่าผิดกฎหมาย — รอแอดมินอนุมัติก่อนขึ้น products
@@ -877,6 +978,38 @@ service cloud.firestore {
       allow get, list: if isPrivilegedAdmin();
       allow create: if canCreateAdminSupportKnowledge(ticketId);
       allow update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตั้งค่าแพลตฟอร์ม (GP / ไลด์เดอร์ / settlement — van4 แอดมิน)
+    match /platform_config/{docId} {
+      allow get: if signedIn();
+      allow list: if isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // บัญชีโปรเจกต / ROI (van4 — admin เท่านั้น)
+    match /project_finance/{docId} {
+      allow read, write: if isPrivilegedAdmin();
+    }
+
+    // แชทภายในแอดมิน van4
+    match /admin_internal_threads/{threadId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update: if isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if isPrivilegedAdmin();
+        allow create: if isPrivilegedAdmin();
+        allow update, delete: if isPrivilegedAdmin();
+      }
+    }
+
+    // สถานะออนไลน์ + FCM สำหรับโทรระหว่างแอดมิน
+    match /admin_presence/{uid} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update: if isPrivilegedAdmin() && uid() == uid;
+      allow delete: if isPrivilegedAdmin() && uid() == uid;
     }
 
     // Default deny

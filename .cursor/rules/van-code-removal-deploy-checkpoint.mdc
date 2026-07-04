@@ -1,0 +1,29 @@
+---
+description: MANDATORY — แจ้งผลกระทบก่อนลบโค้ด แล้วค่อย deploy
+alwaysApply: true
+---
+
+# Checkpoint ก่อนลบโค้ด (Van Ecosystem)
+
+อ่านร่วมกับ `scripts\DEPLOY_GOVERNANCE.md` § Checkpoint ก่อนลบโค้ด
+
+## ก่อนลบ / ย้าย / แทนที่ โค้ดสำคัญ
+
+**ห้ามลบหรือ deploy ทันที** — สรุปกลับผู้ใช้ก่อน:
+
+1. ไฟล์และพฤติกรรมที่จะหายหรือเปลี่ยน
+2. กระทบ van1 / van2 / van3 / van4 — SHARED หรือ SELF
+3. สถานะหน้าจอ: foreground / background / killed / locked
+4. Deploy ที่ต้องทำ: functions (ชื่อ), APK (van ไหน), rules
+5. ความเสี่ยงถ้า deploy ไม่ครบคู่
+
+## แล้วค่อย
+
+- รอยืนยันผู้ใช้ (“ลบได้”, “deploy ได้”)
+- Deploy ตาม `deploy-readiness.ps1` + `deploy-self.ps1` ทีละ target
+
+## ตัวอย่างที่ต้องแจ้งก่อนลบ
+
+- FCM handler, overlay, full-screen intent, wake activity
+- `functions/index.js` payload shape (data-only vs notification)
+- Firestore rules / indexes ที่ rider หรือ merchant listener ใช้

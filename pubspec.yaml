@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+4
+version: 1.0.2+5
 
 environment:
   sdk: ^3.9.2
@@ -43,6 +43,8 @@ dependencies:
   firebase_messaging: ^16.0.4
   firebase_storage: ^13.0.4
   firebase_app_check: ^0.4.1+2
+  firebase_analytics: ^12.0.4
+  firebase_crashlytics: ^5.0.5
   google_sign_in: ^6.3.0
   geocoding: ^4.0.0
   geolocator: ^14.0.1
@@ -135,19 +137,20 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: assets/file_00000000be5472069245fc3bdb122dbb.png
-  adaptive_icon_background: "#FFF7ED"
-  adaptive_icon_foreground: assets/file_00000000be5472069245fc3bdb122dbb.png
+  image_path: assets/app_launcher_icon.png
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/app_launcher_icon.png
+  adaptive_icon_foreground_inset: 0
   remove_alpha_ios: true
   web:
     generate: true
-    image_path: assets/file_00000000be5472069245fc3bdb122dbb.png
-    background_color: "#FFF7ED"
+    image_path: assets/app_launcher_icon.png
+    background_color: "#FFFFFF"
     theme_color: "#F57C00"
   windows:
     generate: true
-    image_path: assets/file_00000000be5472069245fc3bdb122dbb.png
+    image_path: assets/app_launcher_icon.png
     icon_size: 256
   macos:
     generate: true
-    image_path: assets/file_00000000be5472069245fc3bdb122dbb.png
+    image_path: assets/app_launcher_icon.png

@@ -173,10 +173,12 @@ class CartCheckoutContext {
   const CartCheckoutContext({
     required this.couponCode,
     required this.discounts,
+    this.checkoutQuoteId,
   });
 
   final String? couponCode;
   final CartDiscountSnapshot discounts;
+  final String? checkoutQuoteId;
 }
 
 class CartDiscountSnapshot {

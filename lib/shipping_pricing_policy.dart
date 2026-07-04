@@ -4,6 +4,7 @@ class ShippingPricingPolicy {
   static const double defaultBaseFee = 25;
   static const double defaultPerKmFee = 12.5;
   static const double defaultMinBillableKm = 1;
+  static const double defaultMaxBillableKm = 50;
   static const double defaultMissingCoordsFee = 25;
 
   static const double defaultNationwideBaseFee = 45;
@@ -13,6 +14,7 @@ class ShippingPricingPolicy {
   static double _shippingBaseFee = defaultBaseFee;
   static double _shippingPerKmFee = defaultPerKmFee;
   static double _shippingMinBillableKm = defaultMinBillableKm;
+  static const double _shippingMaxBillableKm = defaultMaxBillableKm;
   static double _shippingMissingCoordsFee = defaultMissingCoordsFee;
 
   static double _travelBaseFee = defaultBaseFee;
@@ -74,6 +76,7 @@ class ShippingPricingPolicy {
       baseFee: _shippingBaseFee,
       perKmFee: _shippingPerKmFee,
       minBillableKm: _shippingMinBillableKm,
+      maxBillableKm: _shippingMaxBillableKm,
     );
   }
 
@@ -103,12 +106,15 @@ class ShippingPricingPolicy {
     required double baseFee,
     required double perKmFee,
     required double minBillableKm,
+    double? maxBillableKm,
   }) {
     final normalizedKm = distanceKm.isNaN || distanceKm.isInfinite || distanceKm < 0
         ? 0
         : distanceKm;
-    final billableKm =
-        normalizedKm < minBillableKm ? minBillableKm : normalizedKm;
+    final cappedKm = maxBillableKm != null && normalizedKm > maxBillableKm
+        ? maxBillableKm
+        : normalizedKm;
+    final billableKm = cappedKm < minBillableKm ? minBillableKm : cappedKm;
     final fee = baseFee + ((billableKm - minBillableKm) * perKmFee);
     return double.parse(fee.toStringAsFixed(2));
   }

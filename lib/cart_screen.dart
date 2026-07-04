@@ -529,8 +529,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 discounts.appliedCouponCode ?? _appliedCouponCode;
             final grandTotal =
                 serverTotals?.grandTotal ?? localGrandTotal.toDouble();
+            final checkoutQuoteId = serverTotals?.checkoutQuoteId;
             final canCheckout =
-                isServerTotalTrusted && !isCalculatingServerTotals;
+                isServerTotalTrusted &&
+                !isCalculatingServerTotals &&
+                checkoutQuoteId != null &&
+                checkoutQuoteId.isNotEmpty;
 
             return SafeArea(
               child: Column(
@@ -894,6 +898,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                                         shippingFee: shippingFee,
                                         grandTotal: grandTotal,
                                         discounts: discounts,
+                                        checkoutQuoteId: checkoutQuoteId,
                                       );
                                     },
                             ),
@@ -907,6 +912,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                                         grandTotal: grandTotal,
                                         discounts: discounts,
                                         appliedCouponCode: appliedCouponCode,
+                                        checkoutQuoteId: checkoutQuoteId,
                                       );
                                     },
                             ),
@@ -941,6 +947,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
             .call(<String, dynamic>{
               'customerLatitude': customerLatitude,
               'customerLongitude': customerLongitude,
+              'persistQuote': true,
               if (couponCode != null && couponCode.isNotEmpty)
                 'couponCode': couponCode,
               'items': cartItems
@@ -973,6 +980,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
         final discounts = CartDiscountSnapshot.fromServerPayload(
           Map<String, dynamic>.from(payload),
         );
+        final checkoutQuoteId = payload['checkoutQuoteId']?.toString().trim();
         if (mounted) {
           final appliedCode = discounts.appliedCouponCode;
           if (appliedCode != null && appliedCode.isNotEmpty) {
@@ -992,6 +1000,10 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           grandTotal: grandTotal,
           discounts: discounts,
           trusted: true,
+          checkoutQuoteId:
+              checkoutQuoteId != null && checkoutQuoteId.isNotEmpty
+                  ? checkoutQuoteId
+                  : null,
         );
       } catch (_) {
         if (attempt < 2) {
@@ -1038,7 +1050,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     for (final item in uniqueByShop.values) {
       final shopLat = item.shopLatitude;
       final shopLng = item.shopLongitude;
-      if (shopLat == null || shopLng == null) {
+      if (shopLat == null ||
+          shopLng == null ||
+          (shopLat == 0 && shopLng == 0)) {
         missing += 1;
         shopCount += 1;
         final missingFee = ShippingPricingPolicy.shippingMissingCoordsFee;
@@ -1312,6 +1326,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required double shippingFee,
     required double grandTotal,
     required CartDiscountSnapshot discounts,
+    required String? checkoutQuoteId,
   }) async {
     if (_isSubmittingCashOnDelivery) {
       return;
@@ -1453,6 +1468,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           CartCheckoutContext(
             couponCode: discounts.appliedCouponCode ?? _appliedCouponCode,
             discounts: discounts,
+            checkoutQuoteId: checkoutQuoteId,
           ),
         );
       }
@@ -1492,10 +1508,12 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required double grandTotal,
     required CartDiscountSnapshot discounts,
     String? appliedCouponCode,
+    String? checkoutQuoteId,
   }) async {
     final checkoutContext = CartCheckoutContext(
       couponCode: appliedCouponCode,
       discounts: discounts,
+      checkoutQuoteId: checkoutQuoteId,
     );
     _trueMoneyDialogDraft =
         (_trueMoneyDialogDraft ??
@@ -2044,6 +2062,7 @@ class _ServerCartTotals {
     required this.grandTotal,
     required this.discounts,
     required this.trusted,
+    this.checkoutQuoteId,
   });
 
   final double subtotal;
@@ -2053,6 +2072,7 @@ class _ServerCartTotals {
   final double grandTotal;
   final CartDiscountSnapshot discounts;
   final bool trusted;
+  final String? checkoutQuoteId;
 
   static const zero = _ServerCartTotals(
     subtotal: 0,
@@ -2062,6 +2082,7 @@ class _ServerCartTotals {
     grandTotal: 0,
     discounts: CartDiscountSnapshot.empty,
     trusted: false,
+    checkoutQuoteId: null,
   );
 }
 

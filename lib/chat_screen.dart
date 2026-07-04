@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'chat_room_screen.dart';
 import 'models/user_profile.dart';
 import 'services/friend_service.dart';
+import 'services/chat_warmup.dart';
 import 'utils/app_colors.dart';
 import 'widgets/cached_app_avatar.dart';
 
@@ -127,6 +128,11 @@ class _ChatScreenState extends State<ChatScreen> {
           return const _EmptyState(message: 'ยังไม่มีเพื่อนในระบบ');
         }
 
+        ChatWarmup.prefetchRoomsForFriends(
+          friends.map((friend) => friend.profile).toList(growable: false),
+          friendService: _friendService,
+        );
+
         return ListView.separated(
           padding: const EdgeInsets.symmetric(vertical: 12),
           itemBuilder: (context, index) => _ChatTile(
@@ -142,6 +148,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _openChat(FriendPreview friend) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      ChatWarmup.prefetchRoom(
+        myUid: user.uid,
+        peer: friend.profile,
+        friendService: _friendService,
+      );
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChatRoomScreen(friendProfile: friend.profile),

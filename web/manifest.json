@@ -3,7 +3,7 @@
     "short_name": "VANTALAD",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#FFF7ED",
+    "background_color": "#FFFFFF",
     "theme_color": "#F57C00",
     "description": "A new Flutter project.",
     "orientation": "portrait-primary",

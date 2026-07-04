@@ -50,6 +50,10 @@ const AdminSupportConfig kVan2AdminSupportConfig = AdminSupportConfig(
       label: 'บัญชี / เข้าสู่ระบบ',
     ),
     AdminSupportTopic(
+      key: 'privacy_rights',
+      label: 'สิทธิข้อมูลส่วนบุคคล (PDPA)',
+    ),
+    AdminSupportTopic(
       key: 'app_bug',
       label: 'แจ้งข้อผิดพลาดแอป',
     ),

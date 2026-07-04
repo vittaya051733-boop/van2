@@ -9,7 +9,15 @@ const {
   assertSucceeds,
   assertFails,
 } = require('@firebase/rules-unit-testing');
-const { doc, setDoc, updateDoc, serverTimestamp } = require('firebase/firestore');
+const { doc, setDoc, updateDoc, getDoc, serverTimestamp } = require('firebase/firestore');
+
+async function mustFail(promise, label) {
+  try {
+    await assertFails(promise);
+  } catch (error) {
+    throw new Error(`${label}: ${error.message || error}`);
+  }
+}
 
 const RULES_PATH = join(__dirname, '..', '..', 'firestore.rules');
 
@@ -76,6 +84,14 @@ async function seed(testEnv) {
 
     await db.collection('public_shops').doc(UID.shop).set({
       shopName: 'Smoke Shop Public',
+      isActive: true,
+    });
+
+    await db.collection('shop_registrations').doc(UID.shop).set({
+      ownerId: UID.shop,
+      shopName: 'Smoke Shop Private',
+      email: 'smoke-shop@example.com',
+      phone: '0800000001',
       isActive: true,
     });
 
@@ -245,6 +261,25 @@ async function seed(testEnv) {
       action: 'order_accepted',
       createdAt: now,
     });
+
+    await db.collection('admins').doc('smoke-admin@example.com').set({
+      active: true,
+      displayName: 'Smoke Registry Admin',
+    });
+
+    await db.collection('product_admin_reviews').doc('smoke-product-review-pending').set({
+      ownerUid: UID.shop,
+      shopName: 'Smoke Shop',
+      name: 'Smoke Pending Review Product',
+      price: 120,
+      adminReviewStatus: 'pending',
+      aiIsLegalInThailand: false,
+      aiLegalAnalysisReason: 'smoke test illegal flag',
+      reviewType: 'create',
+      submittedByUid: UID.shop,
+      submittedAt: now,
+      updatedAt: now,
+    });
   });
 }
 
@@ -318,7 +353,7 @@ async function runVan1ShopTests(shopDb) {
   );
 
   // PromptPay unverified — shop must NOT read (regression guard)
-  await assertFails(
+  await mustFail(
     shopDb.collection('orders').doc(ORDER.promptpayShopBlocked).get(),
     'van1: shop blocked on unverified promptpay order',
   );
@@ -492,6 +527,161 @@ async function runVan2CustomerTests(customerDb) {
   );
 }
 
+async function runSecurityNegativeTests(customerDb, shopDb, riderDb) {
+  await mustFail(
+    customerDb.collection('orders').doc(ORDER.delivered).update({
+      paymentStatus: 'verified',
+    }),
+    'van2: customer cannot escalate paymentStatus to verified',
+  );
+  await mustFail(
+    customerDb.collection('orders').doc(ORDER.delivered).update({
+      grandTotal: 1,
+    }),
+    'van2: customer cannot lower grandTotal',
+  );
+  await mustFail(
+    setDoc(doc(customerDb, 'credits', 'smoke-fake-credit'), {
+      uid: UID.customer,
+      amount: 99999,
+      type: 'fake_top_up',
+      orderId: ORDER.delivered,
+      timestamp: serverTimestamp(),
+    }),
+    'van2: customer cannot mint arbitrary credits',
+  );
+  await mustFail(
+    customerDb.collection('shop_registrations').doc(UID.shop).get(),
+    'van2: customer cannot read private shop registration',
+  );
+  await mustFail(
+    customerDb.collection('admins').get(),
+    'van2: customer cannot list admins directory',
+  );
+  await assertSucceeds(
+    customerDb.collection('public_shops').doc(UID.shop).get(),
+    'van2: customer can read public_shops profile',
+  );
+  await assertSucceeds(
+    shopDb.collection('shop_registrations').doc(UID.shop).get(),
+    'van1: shop owner can read own registration',
+  );
+  await assertSucceeds(
+    updateDoc(doc(shopDb, 'orders', ORDER.shopActive), {
+      status: 'preparing',
+      shopDecisionStatus: 'accepted',
+      updatedAt: serverTimestamp(),
+    }),
+    'van1: shop can update order workflow fields',
+  );
+  await assertSucceeds(
+    setDoc(doc(riderDb, 'credits', `order_pay_at_destination_${ORDER.assigned}_${UID.rider}`), {
+      uid: UID.rider,
+      amount: -50,
+      type: 'order_pay_at_destination_hold',
+      orderId: ORDER.assigned,
+      source: 'smoke_test',
+      timestamp: serverTimestamp(),
+    }),
+    'van3: rider can create pay-at-destination hold ledger entry',
+  );
+  await mustFail(
+    setDoc(doc(customerDb, 'checkout_quotes', 'smoke-quote'), {
+      customerId: UID.customer,
+      grandTotal: 100,
+      createdAt: serverTimestamp(),
+    }),
+    'van2: client cannot write checkout_quotes (phase 2)',
+  );
+  await mustFail(
+    setDoc(doc(customerDb, 'orders', 'smoke-client-cart-order'), {
+      customerId: UID.customer,
+      sourceApp: 'van2_customer',
+      shopId: UID.shop,
+      shopOwnerId: UID.shop,
+      paymentStatus: 'cash_on_delivery',
+      paymentMethod: 'cash_on_delivery',
+      grandTotal: 150,
+      subtotal: 120,
+      shippingFee: 30,
+      createdAt: serverTimestamp(),
+    }),
+    'van2 phase2: client cannot create cart order directly',
+  );
+  await mustFail(
+    setDoc(doc(customerDb, 'orders', 'smoke-client-nationwide'), {
+      customerId: UID.customer,
+      sourceApp: 'van2_customer',
+      orderType: 'nationwide_parcel',
+      shopId: UID.shop,
+      paymentStatus: 'verified',
+      paymentMethod: 'promptpay_qr',
+      grandTotal: 200,
+      subtotal: 150,
+      shippingFee: 50,
+      paymentSlip: { storagePath: 'payment_slips/x/slip.jpg' },
+      paymentVerification: { status: 'verified' },
+      createdAt: serverTimestamp(),
+    }),
+    'van2 phase2: client cannot create nationwide_parcel order directly',
+  );
+  await assertSucceeds(
+    setDoc(doc(customerDb, 'orders', 'smoke-client-travel'), {
+      customerId: UID.customer,
+      sourceApp: 'van2_customer',
+      orderType: 'travel_passenger',
+      shopId: UID.shop,
+      paymentStatus: 'cash_on_delivery',
+      paymentMethod: 'cash_on_delivery',
+      grandTotal: 80,
+      subtotal: 80,
+      createdAt: serverTimestamp(),
+    }),
+    'van2 phase2: client can still create travel_passenger order',
+  );
+  await mustFail(
+    setDoc(doc(customerDb, 'auth_rate_limits', 'smoke-ip'), {
+      count: 1,
+      updatedAt: serverTimestamp(),
+    }),
+    'phase3: client cannot write auth_rate_limits',
+  );
+}
+
+async function runOrderLifecycleE2e(shopDb, riderDb, customerDb) {
+  await assertSucceeds(
+    updateDoc(doc(shopDb, 'orders', ORDER.shopActive), {
+      status: 'ready',
+      shopDecisionStatus: 'accepted',
+      updatedAt: serverTimestamp(),
+    }),
+    'e2e: van1 shop marks order ready',
+  );
+
+  await assertSucceeds(
+    updateDoc(doc(riderDb, 'orders', ORDER.assigned), {
+      status: 'delivering',
+      updatedAt: serverTimestamp(),
+    }),
+    'e2e: van3 rider starts delivery',
+  );
+
+  await assertSucceeds(
+    updateDoc(doc(riderDb, 'orders', ORDER.assigned), {
+      status: 'delivered',
+      deliveredAt: serverTimestamp(),
+      deliveryProofCapturedById: UID.rider,
+      updatedAt: serverTimestamp(),
+    }),
+    'e2e: van3 rider completes delivery',
+  );
+
+  const deliveredSnap = await getDoc(doc(customerDb, 'orders', ORDER.assigned));
+  if (!deliveredSnap.exists() || deliveredSnap.data().status !== 'delivered') {
+    throw new Error('e2e: van2 customer cannot read delivered order');
+  }
+}
+
 async function runVan4AdminTests(adminDb, customerDb) {
   await assertSucceeds(
     adminDb.collection('admin_support_tickets').orderBy('createdAt', 'desc').limit(20).get(),
@@ -547,6 +737,38 @@ async function runVan4AdminTests(adminDb, customerDb) {
     'van4: admin creates support reply notification',
   );
   await assertSucceeds(
+    adminDb.collection('platform_announcements').doc('smoke-announcement').set({
+      title: 'Smoke announcement',
+      body: 'Test announcement body',
+      targetApps: ['van2'],
+      recipientCount: 1,
+      createdAt: serverTimestamp(),
+      createdBy: UID.admin,
+      sourceApp: 'van4_admin',
+    }),
+    'van4: admin creates platform announcement record',
+  );
+  await assertSucceeds(
+    adminDb.collection('platform_announcements').orderBy('createdAt', 'desc').limit(10).get(),
+    'van4: admin lists platform announcements',
+  );
+  await assertSucceeds(
+    adminDb.collection('app_notifications').add({
+      targetApp: 'van2',
+      recipientUid: UID.customer,
+      title: 'Smoke announcement',
+      body: 'Test announcement body',
+      action: 'admin_announcement',
+      sourceApp: 'van4_admin',
+      senderId: UID.admin,
+      announcementId: 'smoke-announcement',
+      read: false,
+      isRead: false,
+      createdAt: serverTimestamp(),
+    }),
+    'van4: admin fan-out announcement notification',
+  );
+  await assertSucceeds(
     setDoc(doc(adminDb, 'admin_support_knowledge', 'smoke-ticket-open'), {
       ticketId: 'smoke-ticket-open',
       sourceApp: 'van2',
@@ -587,7 +809,7 @@ async function runVan4AdminTests(adminDb, customerDb) {
     }),
     'van4: admin closes support ticket',
   );
-  await assertFails(
+  await mustFail(
     setDoc(
       doc(
         customerDb,
@@ -615,6 +837,89 @@ async function runVan4AdminTests(adminDb, customerDb) {
     adminDb.collection('riders').limit(10).get(),
     'van4: admin riders list',
   );
+  await assertSucceeds(
+    adminDb
+      .collection('product_admin_reviews')
+      .where('adminReviewStatus', '==', 'pending')
+      .get(),
+    'van4: admin lists pending product reviews (custom claim)',
+  );
+  await assertSucceeds(
+    getDoc(doc(adminDb, 'product_admin_reviews', 'smoke-product-review-pending')),
+    'van4: admin reads pending product review doc',
+  );
+  await assertSucceeds(
+    setDoc(doc(adminDb, 'admin_internal_threads', 'team'), {
+      type: 'team',
+      title: 'ห้องทีมแอดมิน',
+      lastMessageAt: serverTimestamp(),
+    }),
+    'van4: admin creates internal team thread',
+  );
+  await assertSucceeds(
+    setDoc(doc(adminDb, 'admin_internal_threads', 'team', 'messages', 'smoke-team-msg'), {
+      senderUid: UID.admin,
+      senderName: 'Admin',
+      message: 'smoke admin team chat',
+      imageUrls: [],
+      attachments: [],
+      createdAt: serverTimestamp(),
+    }),
+    'van4: admin posts internal team message',
+  );
+  await assertSucceeds(
+    setDoc(doc(adminDb, 'admin_presence', UID.admin), {
+      uid: UID.admin,
+      fcmToken: 'smoke-admin-fcm',
+      lastSeenAt: serverTimestamp(),
+    }),
+    'van4: admin writes own presence doc',
+  );
+  await assertSucceeds(
+    adminDb.collection('admins').get(),
+    'van4: admin lists admins directory',
+  );
+}
+
+async function runVan4RegistryAdminTests(testEnv, shopDb) {
+  const registryAdminDb = testEnv
+    .authenticatedContext('smoke-registry-admin-uid', {
+      email: 'smoke-admin@example.com',
+    })
+    .firestore();
+
+  await assertSucceeds(
+    registryAdminDb
+      .collection('product_admin_reviews')
+      .where('adminReviewStatus', '==', 'pending')
+      .get(),
+    'van4: registry admin lists pending product reviews',
+  );
+  await assertSucceeds(
+    setDoc(
+      doc(registryAdminDb, 'admins', 'smoke-admin@example.com'),
+      {
+        authUid: 'smoke-registry-admin-uid',
+        email: 'smoke-admin@example.com',
+        displayName: 'Smoke Registry Admin',
+        lastSeenAt: serverTimestamp(),
+        active: true,
+      },
+      { merge: true },
+    ),
+    'van4: registry admin syncs own admins doc presence fields',
+  );
+  await mustFail(
+    shopDb
+      .collection('product_admin_reviews')
+      .where('adminReviewStatus', '==', 'pending')
+      .get(),
+    'van1: shop cannot list all pending product reviews',
+  );
+  await assertSucceeds(
+    shopDb.collection('product_admin_reviews').doc('smoke-product-review-pending').get(),
+    'van1: shop reads own pending product review',
+  );
 }
 
 async function run() {
@@ -639,7 +944,10 @@ async function run() {
     await runVan3RiderTests(riderDb);
     await runVan1ShopTests(shopDb);
     await runVan2CustomerTests(customerDb);
+    await runSecurityNegativeTests(customerDb, shopDb, riderDb);
     await runVan4AdminTests(adminDb, customerDb);
+    await runVan4RegistryAdminTests(testEnv, shopDb);
+    await runOrderLifecycleE2e(shopDb, riderDb, customerDb);
     await assertSucceeds(
       updateDoc(doc(customerDb, 'admin_support_tickets', 'smoke-ticket-open'), {
         unreadForRequester: false,
@@ -648,7 +956,7 @@ async function run() {
       'van2: customer marks support ticket read',
     );
 
-    console.log('PASS rules-emulator: van3 rider + van1 shop + van2 customer + van4 admin paths');
+    console.log('PASS rules-emulator: van3 rider + van1 shop + van2 customer + van4 admin + order lifecycle e2e');
   } finally {
     await testEnv.cleanup();
   }

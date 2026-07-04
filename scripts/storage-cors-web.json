@@ -1,0 +1,17 @@
+[
+  {
+    "origin": [
+      "https://van1.web.app",
+      "https://van2.web.app",
+      "https://van3.web.app",
+      "https://van4.web.app",
+      "http://localhost:5000",
+      "http://localhost:8080",
+      "http://127.0.0.1:5000",
+      "http://127.0.0.1:8080"
+    ],
+    "method": ["GET", "HEAD"],
+    "responseHeader": ["Content-Type", "Authorization", "Content-Length", "User-Agent", "X-Requested-With", "Accept", "Origin"],
+    "maxAgeSeconds": 3600
+  }
+]

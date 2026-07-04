@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -8,6 +10,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'auth_verification_screen.dart';
 import 'category_catalog_screen.dart';
 import 'phone_login_helper.dart';
+import 'services/notification_service.dart';
+import 'services/privacy_consent_service.dart';
+import 'web_google_auth.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -38,6 +43,9 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    if (kIsWeb) {
+      unawaited(_handleWebGoogleRedirectResult());
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
@@ -49,6 +57,37 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     });
   }
+
+  Future<void> _restoreAnonymousBrowsingSession() => restoreAnonymousBrowsingSession();
+
+  Future<void> _handleWebGoogleRedirectResult() async {
+    try {
+      final result = await handleWebGoogleRedirectResult();
+      final user = result?.user;
+      if (user == null || !mounted) {
+        return;
+      }
+
+      _showSnackBar(
+        user.displayName?.trim().isNotEmpty == true
+            ? 'เข้าสู่ระบบสำเร็จ: ${user.displayName}'
+            : 'เข้าสู่ระบบด้วย Google สำเร็จ',
+      );
+      _completeLogin();
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showSnackBar(
+        'เข้าสู่ระบบด้วย Google ไม่สำเร็จ: ${error.message ?? error.code}',
+      );
+      await _restoreAnonymousBrowsingSession();
+    } catch (_) {
+      await _restoreAnonymousBrowsingSession();
+    }
+  }
+
+  Future<void> _signOutAnonymousBeforeOAuth() => signOutAnonymousBeforeOAuth();
 
   @override
   void dispose() {
@@ -450,7 +489,29 @@ class _LoginScreenState extends State<LoginScreen> {
     return verified == true;
   }
 
-  void _completeLogin() {
+  Future<void> _completeLogin() async {
+    if (!mounted) {
+      return;
+    }
+
+    final consentOk = await PrivacyConsentService.instance.ensureConsent(
+      context,
+      app: PrivacyAppKey.van2Customer,
+      source: 'login_gate',
+    );
+    if (!mounted || !consentOk) {
+      return;
+    }
+
+    final local = await PrivacyConsentService.instance.loadLocalSnapshot();
+    if (!kIsWeb && local?.pushOptIn == true) {
+      await NotificationService().enablePushNotifications();
+    }
+
+    if (!mounted) {
+      return;
+    }
+
     if (widget.onLoggedIn != null) {
       widget.onLoggedIn!(context);
       return;
@@ -480,11 +541,10 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isSigningIn = true);
 
     try {
-      UserCredential credential;
+      final UserCredential credential;
       if (kIsWeb) {
-        credential = await FirebaseAuth.instance.signInWithPopup(
-          GoogleAuthProvider(),
-        );
+        await _signOutAnonymousBeforeOAuth();
+        credential = await signInWithGoogleForWeb();
       } else {
         final googleUser = await GoogleSignIn(
           scopes: <String>['email'],
@@ -517,11 +577,20 @@ class _LoginScreenState extends State<LoginScreen> {
 
       _completeLogin();
     } on FirebaseAuthException catch (error) {
+      if (error.code == 'auth/popup-closed-by-user' ||
+          error.code == 'auth/redirect-initiated') {
+        if (error.code == 'auth/popup-closed-by-user') {
+          await _restoreAnonymousBrowsingSession();
+        }
+        return;
+      }
       _showSnackBar(
         'เข้าสู่ระบบด้วย Google ไม่สำเร็จ: ${error.message ?? error.code}',
       );
+      await _restoreAnonymousBrowsingSession();
     } catch (error) {
       _showSnackBar('เข้าสู่ระบบด้วย Google ไม่สำเร็จ: $error');
+      await _restoreAnonymousBrowsingSession();
     } finally {
       if (mounted) {
         setState(() => _isSigningIn = false);

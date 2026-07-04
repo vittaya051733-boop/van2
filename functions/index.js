@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
+const { GoogleAuth } = require('google-auth-library');
 
 const admin = require('firebase-admin');
 const functions = require('firebase-functions/v1');
@@ -13,6 +14,12 @@ const {
   onDocumentUpdated,
   onDocumentWritten,
 } = require('firebase-functions/v2/firestore');
+const {
+  computeVan2CartTotals,
+  persistCheckoutQuote,
+  createCheckoutOrdersHandler,
+  createNationwideParcelOrdersHandler,
+} = require('./checkout_orders');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -22,6 +29,7 @@ const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 const DEFAULT_REGION = 'asia-southeast1';
 const CALL_TTL_MS = 30 * 1000;
+const VAN3_ORDER_ALERT_TTL_MS = 60 * 1000;
 const ACTIVE_CALL_INVITES_COLLECTION = 'active_call_invites';
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_INTERVAL_MS = 60 * 1000;
@@ -33,6 +41,7 @@ const DEFAULT_TOPPING_MARKUP_RATE = 0.07;
 const DEFAULT_SHIPPING_BASE_FEE = 25;
 const DEFAULT_SHIPPING_PER_KM_FEE = 12.5;
 const DEFAULT_SHIPPING_MIN_BILLABLE_KM = 1;
+const DEFAULT_SHIPPING_MAX_BILLABLE_KM = 50;
 const DEFAULT_SHIPPING_MISSING_COORDS_FEE = 25;
 const DEFAULT_MARKET_HUB_LATITUDE = 17.279915312140325;
 const DEFAULT_MARKET_HUB_LONGITUDE = 102.87070264132565;
@@ -69,6 +78,14 @@ const RIDER_COLLECTIONS = ['riders'];
 const PROFILE_COLLECTIONS = [...CUSTOMER_COLLECTIONS, ...RIDER_COLLECTIONS, ...REGISTRATION_COLLECTIONS];
 const SLIPOK_ENDPOINT = 'https://api.slipok.com/api/line/apikey/64492';
 const SLIPOK_FEEDBACK_COLLECTION = 'slipok_feedback';
+const PRIVACY_CONSENTS_COLLECTION = 'privacy_consents';
+const PRIVACY_REQUESTS_COLLECTION = 'privacy_requests';
+const PRIVACY_APP_KEYS = new Set([
+  'van2_customer',
+  'van1_merchant',
+  'van3_rider',
+]);
+const PRIVACY_REQUEST_TYPES = new Set(['export', 'delete', 'correct']);
 
 let pricingConfigCache = {
   expiresAt: 0,
@@ -488,6 +505,49 @@ function hashPhonePassword(phoneNumber, password) {
     .digest('hex');
 }
 
+function phoneToPseudoEmail(phoneNumber) {
+  const digits = normalizePhoneNumber(phoneNumber).replace(/^\+/, '');
+  return `${digits}@phone.vanmerchant.app`;
+}
+
+const identityToolkitAuth = new GoogleAuth({
+  scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+});
+
+async function identityToolkitRequest(path, body) {
+  const client = await identityToolkitAuth.getClient();
+  const projectId =
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    'van-merchant';
+  const url = `https://identitytoolkit.googleapis.com/v1/projects/${projectId}/${path}`;
+  const response = await client.request({
+    url,
+    method: 'POST',
+    data: body,
+  });
+  return response.data || {};
+}
+
+async function sendPhoneVerificationCode(phoneNumber) {
+  const data = await identityToolkitRequest('accounts:sendVerificationCode', {
+    phoneNumber: normalizePhoneNumber(phoneNumber),
+  });
+  const sessionInfo = String(data.sessionInfo || '').trim();
+  if (!sessionInfo) {
+    throw new Error('Identity Toolkit did not return sessionInfo');
+  }
+  return sessionInfo;
+}
+
+async function signInWithPhoneVerificationCode(sessionInfo, code) {
+  return identityToolkitRequest('accounts:signInWithPhoneNumber', {
+    sessionInfo,
+    code: normalizeOtp(code),
+  });
+}
+
 function parseNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -863,7 +923,9 @@ function computeShippingFeeByDistance(distanceKm, rates = defaultPricingRates())
   const normalized =
     !Number.isFinite(distanceKm) || distanceKm < 0 ? 0 : distanceKm;
   const minKm = rates.shippingMinBillableKm ?? DEFAULT_SHIPPING_MIN_BILLABLE_KM;
-  const billableKm = normalized < minKm ? minKm : normalized;
+  const maxKm = rates.shippingMaxBillableKm ?? DEFAULT_SHIPPING_MAX_BILLABLE_KM;
+  const cappedKm = normalized > maxKm ? maxKm : normalized;
+  const billableKm = cappedKm < minKm ? minKm : cappedKm;
   const baseFee = rates.shippingBaseFee ?? DEFAULT_SHIPPING_BASE_FEE;
   const perKmFee = rates.shippingPerKmFee ?? DEFAULT_SHIPPING_PER_KM_FEE;
   return baseFee + (billableKm - minKm) * perKmFee;
@@ -1332,6 +1394,168 @@ exports.verifyEmailOtp = onCall(
   },
 );
 
+exports.sendMerchantPhoneOtp = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => {
+    const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
+    if (!phoneNumber || !phoneNumber.startsWith('+')) {
+      throw new HttpsError('invalid-argument', 'เบอร์โทรไม่ถูกต้อง');
+    }
+
+    const docRef = db.collection('phone_otp_sessions').doc(phoneNumber);
+    const existingDoc = await docRef.get();
+    const now = Date.now();
+    if (existingDoc.exists) {
+      const data = existingDoc.data() || {};
+      const lastSentAt = data.lastSentAt?.toMillis?.() || 0;
+      if (now - lastSentAt < OTP_RESEND_INTERVAL_MS) {
+        throw new HttpsError('resource-exhausted', 'กรุณารอก่อนขอรหัสใหม่');
+      }
+    }
+
+    try {
+      const sessionInfo = await sendPhoneVerificationCode(phoneNumber);
+      await docRef.set(
+        {
+          phoneNumber,
+          sessionInfo,
+          attempts: 0,
+          lastSentAt: admin.firestore.Timestamp.fromMillis(now),
+          expiresAt: admin.firestore.Timestamp.fromMillis(now + OTP_TTL_MS),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return { success: true, expiresInSeconds: OTP_TTL_MS / 1000 };
+    } catch (error) {
+      logger.error('sendMerchantPhoneOtp failed', {
+        phoneNumber,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpsError(
+        'unavailable',
+        'ไม่สามารถส่ง SMS OTP ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง',
+      );
+    }
+  },
+);
+
+exports.verifyMerchantPhoneOtp = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => {
+    const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
+    const otp = normalizeOtp(request.data?.otp);
+    const password = String(request.data?.password || '').trim();
+
+    if (!phoneNumber || !phoneNumber.startsWith('+')) {
+      throw new HttpsError('invalid-argument', 'เบอร์โทรไม่ถูกต้อง');
+    }
+    if (otp.length !== 6) {
+      throw new HttpsError('invalid-argument', 'รหัส OTP ต้องเป็นตัวเลข 6 หลัก');
+    }
+
+    const docRef = db.collection('phone_otp_sessions').doc(phoneNumber);
+    const sessionDoc = await docRef.get();
+    if (!sessionDoc.exists) {
+      throw new HttpsError('failed-precondition', 'กรุณากดส่ง OTP ก่อนยืนยัน');
+    }
+
+    const sessionData = sessionDoc.data() || {};
+    const expiresAtMs = sessionData.expiresAt?.toMillis?.() || 0;
+    if (!expiresAtMs || expiresAtMs < Date.now()) {
+      throw new HttpsError('deadline-exceeded', 'รหัส OTP หมดอายุ กรุณาขอรหัสใหม่');
+    }
+
+    const attempts = Number(sessionData.attempts || 0);
+    if (attempts >= MAX_VERIFY_ATTEMPTS) {
+      throw new HttpsError('resource-exhausted', 'กรอก OTP ผิดเกินจำนวนที่กำหนด กรุณาขอรหัสใหม่');
+    }
+
+    const sessionInfo = String(sessionData.sessionInfo || '').trim();
+    if (!sessionInfo) {
+      throw new HttpsError('failed-precondition', 'เซสชัน OTP หมดอายุ กรุณาขอรหัสใหม่');
+    }
+
+    let signInResult;
+    try {
+      signInResult = await signInWithPhoneVerificationCode(sessionInfo, otp);
+    } catch (error) {
+      await docRef.set(
+        {
+          attempts: attempts + 1,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      throw new HttpsError('invalid-argument', 'รหัส OTP ไม่ถูกต้อง');
+    }
+
+    const uid = String(signInResult.localId || '').trim();
+    if (!uid) {
+      throw new HttpsError('internal', 'ยืนยัน OTP สำเร็จ แต่ไม่พบบัญชีผู้ใช้');
+    }
+
+    if (password.length >= 4) {
+      const pseudoEmail = phoneToPseudoEmail(phoneNumber);
+      try {
+        await admin.auth().updateUser(uid, {
+          email: pseudoEmail,
+          password,
+          emailVerified: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes('email-already-exists')) {
+          await admin.auth().updateUser(uid, { password });
+        } else {
+          logger.error('verifyMerchantPhoneOtp password link failed', {
+            uid,
+            phoneNumber,
+            message,
+          });
+          throw new HttpsError(
+            'internal',
+            'ยืนยัน OTP สำเร็จ แต่ตั้งรหัสผ่านไม่สำเร็จ',
+          );
+        }
+      }
+
+      await db.collection('phone_login_profiles').doc(phoneNumber).set(
+        {
+          uid,
+          phoneNumber,
+          passwordHash: hashPhonePassword(phoneNumber, password),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    await db.collection('users').doc(uid).set(
+      {
+        phoneNumber,
+        phoneVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(password.length >= 4
+          ? {
+              loginEmail: phoneToPseudoEmail(phoneNumber),
+              loginProvider: 'phone',
+            }
+          : {}),
+      },
+      { merge: true },
+    );
+
+    await docRef.delete().catch(() => {});
+
+    const customToken = await admin.auth().createCustomToken(uid);
+    return { success: true, customToken, uid };
+  },
+);
+
 exports.upsertPhonePasswordProfile = onCall(
   {
     region: DEFAULT_REGION,
@@ -1731,6 +1955,188 @@ async function applyCartDiscounts({
   };
 }
 
+function assertAuthenticatedNonAnonymous(request) {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อน');
+  }
+  if (request.auth?.token?.firebase?.sign_in_provider === 'anonymous') {
+    throw new HttpsError(
+      'failed-precondition',
+      'กรุณาเข้าสู่ระบบด้วยบัญชีจริงก่อนบันทึกความยินยอม',
+    );
+  }
+  return uid;
+}
+
+function normalizePrivacyAppKey(value) {
+  const appKey = String(value || '').trim();
+  if (!PRIVACY_APP_KEYS.has(appKey)) {
+    throw new HttpsError('invalid-argument', 'แอปไม่ถูกต้อง');
+  }
+  return appKey;
+}
+
+function normalizePrivacyRequestType(value) {
+  const requestType = String(value || '').trim().toLowerCase();
+  if (!PRIVACY_REQUEST_TYPES.has(requestType)) {
+    throw new HttpsError('invalid-argument', 'ประเภทคำขอไม่ถูกต้อง');
+  }
+  return requestType;
+}
+
+function privacyRequestTypeLabel(requestType) {
+  switch (requestType) {
+    case 'export':
+      return 'ขอส่งออกข้อมูลส่วนบุคคล';
+    case 'delete':
+      return 'ขอลบบัญชีและข้อมูล';
+    case 'correct':
+      return 'ขอแก้ไขข้อมูลส่วนบุคคล';
+    default:
+      return requestType;
+  }
+}
+
+function privacyAppSourceLabel(appKey) {
+  switch (appKey) {
+    case 'van2_customer':
+      return 'ลูกค้า (van2)';
+    case 'van1_merchant':
+      return 'ร้านค้า (van1)';
+    case 'van3_rider':
+      return 'ไรเดอร์ (van3)';
+    default:
+      return appKey;
+  }
+}
+
+exports.recordPrivacyConsent = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => {
+    const uid = assertAuthenticatedNonAnonymous(request);
+    const appKey = normalizePrivacyAppKey(request.data?.app);
+    const policyVersion = String(request.data?.policyVersion || '').trim();
+    if (!policyVersion) {
+      throw new HttpsError('invalid-argument', 'ไม่พบเวอร์ชันนโยบาย');
+    }
+
+    const pushOptIn = request.data?.pushOptIn === true;
+    const marketingOptIn = request.data?.marketingOptIn === true;
+    const locale = String(request.data?.locale || 'th').trim().slice(0, 16);
+    const platform = String(request.data?.platform || 'unknown')
+      .trim()
+      .slice(0, 32);
+    const source = String(request.data?.source || 'app').trim().slice(0, 64);
+    const now = FieldValue.serverTimestamp();
+
+    await db
+      .collection(PRIVACY_CONSENTS_COLLECTION)
+      .doc(uid)
+      .set(
+        {
+          uid,
+          apps: {
+            [appKey]: {
+              policyVersion,
+              termsAcceptedAt: now,
+              pushOptIn,
+              marketingOptIn,
+              locale,
+              platform,
+              source,
+              updatedAt: now,
+            },
+          },
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+
+    return {
+      success: true,
+      uid,
+      app: appKey,
+      policyVersion,
+      pushOptIn,
+      marketingOptIn,
+    };
+  },
+);
+
+exports.createPrivacyRequest = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => {
+    const uid = assertAuthenticatedNonAnonymous(request);
+    const appKey = normalizePrivacyAppKey(request.data?.app);
+    const requestType = normalizePrivacyRequestType(request.data?.type);
+    const note = String(request.data?.note || '').trim().slice(0, 500);
+    const now = FieldValue.serverTimestamp();
+
+    const requestRef = db.collection(PRIVACY_REQUESTS_COLLECTION).doc();
+    const typeLabel = privacyRequestTypeLabel(requestType);
+    const appLabel = privacyAppSourceLabel(appKey);
+
+    await requestRef.set({
+      uid,
+      app: appKey,
+      type: requestType,
+      typeLabel,
+      status: 'pending',
+      note: note || null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const userRecord = await admin.auth().getUser(uid).catch(() => null);
+    const requesterName =
+      String(userRecord?.displayName || '').trim() ||
+      String(userRecord?.email || '').trim() ||
+      'ผู้ใช้';
+    const ticketRef = db.collection('admin_support_tickets').doc();
+    const ticketMessage = [
+      `[PDPA] ${typeLabel}`,
+      `แอป: ${appLabel}`,
+      `Request ID: ${requestRef.id}`,
+      ...(note ? [`หมายเหตุ: ${note}`] : []),
+    ].join('\n');
+
+    await ticketRef.set({
+      sourceApp: appKey,
+      sourceLabel: appLabel,
+      requesterUid: uid,
+      requesterName,
+      requesterEmail: userRecord?.email || null,
+      requesterPhone: userRecord?.phoneNumber || null,
+      topicKey: 'privacy_rights',
+      topicLabel: typeLabel,
+      message: ticketMessage,
+      imageUrls: [],
+      status: 'open',
+      privacyRequestId: requestRef.id,
+      privacyRequestType: requestType,
+      unreadForRequester: false,
+      unreadForAdmin: true,
+      lastMessagePreview: typeLabel,
+      lastMessageRole: 'requester',
+      createdAt: now,
+      updatedAt: now,
+      lastMessageAt: now,
+    });
+
+    return {
+      success: true,
+      requestId: requestRef.id,
+      ticketId: ticketRef.id,
+      type: requestType,
+    };
+  },
+);
+
 exports.recordCheckoutDiscounts = onCall(
   {
     region: DEFAULT_REGION,
@@ -1800,6 +2206,29 @@ exports.recordCheckoutDiscounts = onCall(
   },
 );
 
+function buildCheckoutDeps() {
+  return {
+    db,
+    admin,
+    FieldValue,
+    HttpsError,
+    parseNumber,
+    loadProductsByIds,
+    getPricingRates,
+    isTaxableProduct,
+    applyProductMarkupWithRates,
+    extractToppings,
+    canonicalizeToppingLabel,
+    haversineDistanceKm,
+    computeShippingFeeByDistance,
+    computeMarketCheckoutFees,
+    applyCartDiscounts,
+    normalizeCouponCode,
+    toFiniteOrNull,
+    isShopNearMarketHub,
+  };
+}
+
 exports.calculateCartTotals = onCall(
   {
     region: DEFAULT_REGION,
@@ -1833,135 +2262,62 @@ exports.calculateCartTotals = onCall(
       throw new HttpsError('invalid-argument', 'พิกัดลูกค้าไม่ถูกต้อง');
     }
 
-    const productIds = [...new Set(items.map((item) => String(item?.productId || '').trim()).filter(Boolean))];
-    if (productIds.length === 0) {
-      throw new HttpsError('invalid-argument', 'ไม่พบสินค้าในคำขอ');
-    }
-
-    const products = await loadProductsByIds(productIds);
-    const pricingRates = await getPricingRates();
-
-    let subtotal = 0;
-    let itemCount = 0;
-    const shops = new Map();
-
-    for (const item of items) {
-      const productId = String(item?.productId || '').trim();
-      if (!productId) {
-        throw new HttpsError('invalid-argument', 'พบรายการสินค้าไม่มีรหัสสินค้า');
-      }
-
-      const product = products.get(productId);
-      if (!product) {
-        throw new HttpsError('not-found', `ไม่พบข้อมูลสินค้า ${productId}`);
-      }
-
-      const quantityRaw = Number(item?.quantity);
-      const quantity = Number.isFinite(quantityRaw) ? Math.max(1, Math.min(999, Math.floor(quantityRaw))) : 1;
-      itemCount += quantity;
-
-      const taxable = isTaxableProduct(product);
-      const basePrice = parseNumber(product.price);
-      const adjustedBasePrice = applyProductMarkupWithRates(basePrice, taxable, pricingRates);
-
-      const toppingOptions = extractToppings(product, pricingRates);
-      const toppingPriceByLabel = new Map(
-        toppingOptions.map((option) => [canonicalizeToppingLabel(option.label), parseNumber(option.adjustedPrice)]),
-      );
-
-      const selectedToppings = Array.isArray(item?.selectedToppings) ? item.selectedToppings : [];
-      let toppingTotal = 0;
-      for (const selected of selectedToppings) {
-        const key = canonicalizeToppingLabel(selected);
-        if (!key) {
-          continue;
-        }
-        toppingTotal += toppingPriceByLabel.get(key) || 0;
-      }
-
-      const unitPrice = adjustedBasePrice + toppingTotal;
-      subtotal += unitPrice * quantity;
-
-      const shopIdFromDb = String(item?.shopId || product.ownerUid || '').trim();
-      const shopId = shopIdFromDb || `shop-${productId}`;
-      const shopName = String(product.shopName || item?.shopName || 'ร้านค้า').trim() || 'ร้านค้า';
-
-      const latitude = toFiniteOrNull(product.shopLatitude ?? item?.shopLatitude);
-      const longitude = toFiniteOrNull(product.shopLongitude ?? item?.shopLongitude);
-      if (!shops.has(shopId)) {
-        shops.set(shopId, {
-          shopName,
-          latitude,
-          longitude,
-        });
-      } else {
-        const existing = shops.get(shopId);
-        if ((existing.latitude == null || existing.longitude == null) && latitude != null && longitude != null) {
-          existing.latitude = latitude;
-          existing.longitude = longitude;
-        }
-      }
-    }
-
-    let shippingFee = 0;
-    for (const shop of shops.values()) {
-      if (shop.latitude == null || shop.longitude == null) {
-        shippingFee += pricingRates.shippingMissingCoordsFee ?? DEFAULT_SHIPPING_MISSING_COORDS_FEE;
-        continue;
-      }
-
-      const distanceKm = haversineDistanceKm(
-        shop.latitude,
-        shop.longitude,
-        customerLatitude,
-        customerLongitude,
-      );
-      shippingFee += computeShippingFeeByDistance(distanceKm, pricingRates);
-    }
-
-    const marketFees = computeMarketCheckoutFees(shops, pricingRates);
-    const couponCode = normalizeCouponCode(request.data?.couponCode);
-    const cartContext = {
-      subtotal,
-      itemCount,
-      shopIds: [...shops.keys()],
-      productIds,
+    const totals = await computeVan2CartTotals({
+      uid: request.auth.uid,
+      items,
       customerLatitude,
       customerLongitude,
-    };
-
-    const discounts = await applyCartDiscounts({
-      userId: request.auth.uid,
-      subtotal,
-      shippingFee,
-      marketTotalFees: marketFees.marketTotalFees,
-      couponCode: couponCode || null,
-      context: cartContext,
-      rates: pricingRates,
+      couponCode: normalizeCouponCode(request.data?.couponCode),
+      helpers: buildCheckoutDeps(),
     });
 
-    return {
-      subtotal,
-      shippingFee,
-      marketCollectionFee: marketFees.marketCollectionFee,
-      marketServiceFee: marketFees.marketServiceFee,
-      marketFeesApplied: marketFees.applies,
-      marketQualifyingShopCount: marketFees.qualifyingShopCount,
-      promotionDiscount: discounts.promotionDiscount,
-      couponDiscount: discounts.couponDiscount,
-      discountTotal: discounts.discountTotal,
-      discountLines: discounts.discountLines,
-      nearMissPromotions: discounts.nearMissPromotions,
-      appliedCouponCode: discounts.appliedCouponCode,
-      couponError: discounts.couponError,
-      stackNote: discounts.stackNote,
-      grandTotal: discounts.grandTotal,
-      itemCount,
-      shopCount: shops.size,
-      pricingRates,
+    const response = {
+      subtotal: totals.subtotal,
+      shippingFee: totals.shippingFee,
+      marketCollectionFee: totals.marketFees.marketCollectionFee,
+      marketServiceFee: totals.marketFees.marketServiceFee,
+      marketFeesApplied: totals.marketFees.applies,
+      marketQualifyingShopCount: totals.marketFees.qualifyingShopCount,
+      promotionDiscount: totals.discounts.promotionDiscount,
+      couponDiscount: totals.discounts.couponDiscount,
+      discountTotal: totals.discounts.discountTotal,
+      discountLines: totals.discounts.discountLines,
+      nearMissPromotions: totals.discounts.nearMissPromotions,
+      appliedCouponCode: totals.discounts.appliedCouponCode,
+      couponError: totals.discounts.couponError,
+      stackNote: totals.discounts.stackNote,
+      grandTotal: totals.grandTotal,
+      itemCount: totals.itemCount,
+      shopCount: totals.shopCount,
       computedAt: Date.now(),
     };
+
+    if (request.data?.persistQuote === true) {
+      response.checkoutQuoteId = await persistCheckoutQuote(
+        db,
+        FieldValue,
+        request.auth.uid,
+        totals,
+        items,
+      );
+    }
+
+    return response;
   },
+);
+
+exports.createCheckoutOrders = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => createCheckoutOrdersHandler(request, buildCheckoutDeps()),
+);
+
+exports.createNationwideParcelOrders = onCall(
+  {
+    region: DEFAULT_REGION,
+  },
+  async (request) => createNationwideParcelOrdersHandler(request, buildCheckoutDeps()),
 );
 
 exports.reverseGeocodeDeliveryLocation = onCall(
@@ -2643,6 +2999,14 @@ async function resolveAnyRecipientFcmToken(recipientUid) {
     }
   }
 
+  try {
+    const presenceDoc = await db.collection('admin_presence').doc(recipientUid).get();
+    const adminToken = String(presenceDoc.data()?.fcmToken || '').trim();
+    if (adminToken) return adminToken;
+  } catch (_) {
+    // Ignore.
+  }
+
   return null;
 }
 
@@ -3240,8 +3604,36 @@ exports.pushAppNotification = onDocumentCreated(
     }
 
     const isChatNotification = action === 'chat_message';
+    const isVan1UrgentOrderAlert =
+      targetApp === 'van1' &&
+      Boolean(orderId) &&
+      action === 'order_accepted' &&
+      !isChatNotification;
+    const isVan3UrgentOrderAlert =
+      targetApp === 'van3' &&
+      Boolean(orderId) &&
+      customerConfirmed === 'true' &&
+      riderNotifyReady === 'true' &&
+      !isChatNotification &&
+      action !== 'admin_announcement';
+    const isDataOnlyUrgentAlert = isVan1UrgentOrderAlert || isVan3UrgentOrderAlert;
+    const includeNotificationPayload = !isChatNotification && !isDataOnlyUrgentAlert;
+    const androidChannelId =
+      action === 'admin_announcement' && targetApp === 'van3'
+        ? 'rider_announcements'
+        : targetApp === 'van3'
+          ? 'rider_jobs_urgent_sound'
+          : 'order_channel';
     const message = {
       token,
+      ...(includeNotificationPayload
+        ? {
+            notification: {
+              title,
+              body: body || title,
+            },
+          }
+        : {}),
       data: isChatNotification
         ? {
             type: 'chat',
@@ -3273,16 +3665,35 @@ exports.pushAppNotification = onDocumentCreated(
           },
       android: {
         priority: 'high',
+        ...(isDataOnlyUrgentAlert ? { ttl: VAN3_ORDER_ALERT_TTL_MS } : {}),
+        ...(includeNotificationPayload
+          ? {
+              notification: {
+                channelId: androidChannelId,
+                priority: 'HIGH',
+                defaultSound: true,
+                defaultVibrateTimings: true,
+              },
+            }
+          : {}),
       },
       apns: {
         headers: {
           'apns-priority': '10',
         },
         payload: {
-          aps: {
-            sound: 'default',
-            contentAvailable: true,
-          },
+          aps: isChatNotification || isDataOnlyUrgentAlert
+            ? {
+                sound: 'default',
+                contentAvailable: true,
+              }
+            : {
+                alert: {
+                  title,
+                  body: body || title,
+                },
+                sound: 'default',
+              },
         },
       },
     };
@@ -3313,6 +3724,320 @@ exports.pushAppNotification = onDocumentCreated(
         { merge: true },
       );
     }
+  },
+);
+
+const ANNOUNCEMENT_CONTACT_EMAIL_FIELDS = [
+  'email',
+  'contactEmail',
+  'contact_email',
+  'shopEmail',
+  'registrationEmail',
+  'customerEmail',
+];
+
+// Registration/profile docs first — contact email from forms beats Auth pseudo emails.
+const ANNOUNCEMENT_EMAIL_PROFILE_COLLECTIONS = [
+  ...REGISTRATION_COLLECTIONS,
+  'rider_registrations',
+  'riders',
+  'public_shops',
+  'customer_users',
+  'users',
+];
+
+const PSEUDO_EMAIL_SUFFIXES = ['@phone.vanmerchant.app'];
+
+function isPseudoOrInternalEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized || !normalized.includes('@')) {
+    return true;
+  }
+  if (PSEUDO_EMAIL_SUFFIXES.some((suffix) => normalized.endsWith(suffix))) {
+    return true;
+  }
+  const localPart = normalized.split('@')[0] || '';
+  if (/^\d{9,15}$/.test(localPart)) {
+    return true;
+  }
+  return false;
+}
+
+function pickContactEmailFromData(data) {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  for (const field of ANNOUNCEMENT_CONTACT_EMAIL_FIELDS) {
+    const candidate = normalizeEmail(data[field]);
+    if (candidate.includes('@') && !isPseudoOrInternalEmail(candidate)) {
+      return candidate;
+    }
+  }
+
+  if (data.customerSnapshot && typeof data.customerSnapshot === 'object') {
+    return pickContactEmailFromData(data.customerSnapshot);
+  }
+
+  return null;
+}
+
+function buildAnnouncementEmailHtml(title, body) {
+  const safeTitle = String(title || 'ประกาศจาก Van Market')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const safeBody = String(body || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br/>');
+
+  return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; max-width: 640px;">
+      <h2 style="color: #ea580c; margin-bottom: 12px;">${safeTitle}</h2>
+      <div style="margin: 16px 0;">${safeBody}</div>
+      <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+      <p style="font-size: 12px; color: #6b7280;">
+        อีเมลนี้ส่งจากระบบ Van Market สำหรับแจ้งข้อมูลทางการเงินและประกาศสำคัญ
+      </p>
+    </div>
+  `;
+}
+
+async function resolveProfileEmail(uid) {
+  if (!uid) {
+    return null;
+  }
+
+  for (const collection of ANNOUNCEMENT_EMAIL_PROFILE_COLLECTIONS) {
+    try {
+      const doc = await db.collection(collection).doc(uid).get();
+      if (!doc.exists) {
+        continue;
+      }
+      const email = pickContactEmailFromData(doc.data());
+      if (email) {
+        return email;
+      }
+    } catch (_) {
+      // Try next collection.
+    }
+  }
+
+  return null;
+}
+
+async function resolveAuthEmail(uid) {
+  if (!uid) {
+    return null;
+  }
+
+  try {
+    const user = await admin.auth().getUser(uid);
+    const email = normalizeEmail(user.email);
+    if (email.includes('@') && !isPseudoOrInternalEmail(email)) {
+      return email;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveAnnouncementRecipientEmail(uid) {
+  return (await resolveProfileEmail(uid)) || (await resolveAuthEmail(uid));
+}
+
+async function fetchAnnouncementRecipientUids(targetApp) {
+  switch (targetApp) {
+    case 'van1': {
+      const snapshot = await db.collection('users').get();
+      return snapshot.docs
+        .filter((doc) => doc.data()?.isAdmin !== true)
+        .map((doc) => doc.id)
+        .filter((uid) => uid.trim().length > 0);
+    }
+    case 'van2': {
+      const snapshot = await db.collection('customer_users').get();
+      return snapshot.docs
+        .map((doc) => doc.id)
+        .filter((uid) => uid.trim().length > 0);
+    }
+    case 'van3': {
+      const snapshot = await db.collection('riders').get();
+      return snapshot.docs
+        .filter((doc) => doc.data()?.registrationStatus === 'approved')
+        .map((doc) => doc.id)
+        .filter((uid) => uid.trim().length > 0);
+    }
+    default:
+      return [];
+  }
+}
+
+async function sendAnnouncementEmailBatch({
+  transport,
+  from,
+  title,
+  body,
+  recipients,
+}) {
+  let sentCount = 0;
+  let failedCount = 0;
+  let skippedNoAddress = 0;
+  const seenEmails = new Set();
+
+  for (const recipientUid of recipients) {
+    const email = await resolveAnnouncementRecipientEmail(recipientUid);
+    if (!email || seenEmails.has(email)) {
+      skippedNoAddress += 1;
+      continue;
+    }
+    seenEmails.add(email);
+
+    try {
+      await transport.sendMail({
+        from,
+        to: email,
+        subject: `[Van Market] ${title}`,
+        text: `${title}\n\n${body}`,
+        html: buildAnnouncementEmailHtml(title, body),
+      });
+      sentCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      logger.warn('sendAnnouncementEmails recipient failed', {
+        recipientUid,
+        email,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    sentCount,
+    failedCount,
+    skippedNoAddress,
+    uniqueRecipientCount: seenEmails.size,
+  };
+}
+
+exports.sendAnnouncementEmails = onDocumentCreated(
+  {
+    region: DEFAULT_REGION,
+    document: 'platform_announcements/{announcementId}',
+    secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM],
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data || data.sendEmail !== true) {
+      return;
+    }
+
+    const announcementId = event.params.announcementId;
+    const title = String(data.title || 'ประกาศจาก Van Market').trim();
+    const body = String(data.body || '').trim();
+    const targetApps = Array.isArray(data.targetApps)
+      ? data.targetApps.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    if (!title || !body || targetApps.length === 0) {
+      await event.data.ref.set(
+        {
+          emailDeliveryStatus: 'failed',
+          emailDeliveryError: 'missing_title_body_or_targets',
+          emailProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return;
+    }
+
+    await event.data.ref.set(
+      {
+        emailDeliveryStatus: 'in_progress',
+        emailProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    const recipientsByApp = {};
+    let totalRecipientUids = 0;
+    for (const targetApp of targetApps) {
+      const uids = await fetchAnnouncementRecipientUids(targetApp);
+      recipientsByApp[targetApp] = uids;
+      totalRecipientUids += uids.length;
+    }
+
+    if (totalRecipientUids === 0) {
+      await event.data.ref.set(
+        {
+          emailDeliveryStatus: 'skipped',
+          emailDeliveryError: 'no_recipients',
+          emailRecipientCount: 0,
+          emailSentCount: 0,
+          emailFailedCount: 0,
+          emailSkippedNoAddress: 0,
+          emailProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return;
+    }
+
+    let transport;
+    let from;
+    try {
+      transport = buildTransport();
+      from = readRequiredSecret(SMTP_FROM, 'SMTP_FROM');
+    } catch (error) {
+      logger.error('sendAnnouncementEmails SMTP unavailable', {
+        announcementId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      await event.data.ref.set(
+        {
+          emailDeliveryStatus: 'failed',
+          emailDeliveryError: 'smtp_unavailable',
+          emailRecipientCount: totalRecipientUids,
+          emailProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return;
+    }
+
+    const allUids = [...new Set(Object.values(recipientsByApp).flat())];
+    const stats = await sendAnnouncementEmailBatch({
+      transport,
+      from,
+      title,
+      body,
+      recipients: allUids,
+    });
+
+    await event.data.ref.set(
+      {
+        emailDeliveryStatus: stats.failedCount > 0 && stats.sentCount === 0
+          ? 'failed'
+          : 'completed',
+        emailRecipientCount: totalRecipientUids,
+        emailSentCount: stats.sentCount,
+        emailFailedCount: stats.failedCount,
+        emailSkippedNoAddress: stats.skippedNoAddress,
+        emailUniqueAddressCount: stats.uniqueRecipientCount,
+        emailProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    logger.info('sendAnnouncementEmails completed', {
+      announcementId,
+      targetApps,
+      totalRecipientUids,
+      ...stats,
+    });
   },
 );
 
@@ -3750,3 +4475,25 @@ exports.releaseExpiredVan2CartSessions = onSchedule(
     });
   },
 );
+
+// =============================================================================
+// van4 Social Dashboard (Meta / YouTube / TikTok)
+// =============================================================================
+Object.assign(exports, require('./social'));
+
+const riderOrders = require('./rider_orders');
+riderOrders.init({ db, DEFAULT_REGION });
+Object.assign(exports, riderOrders.registerHandlers());
+
+// =============================================================================
+// Security roadmap (Phase 2 / Phase 3 hooks)
+// -----------------------------------------------------------------------------
+// Phase 2 — createCheckoutOrders / createNationwideParcelOrder (onCall):
+//   - Recompute totals via calculateCartTotals logic
+//   - Write orders with Admin SDK; store checkout_quotes/{id} for rules validation
+//   - Van2 client stops direct orders.set for checkout flows
+//
+// Phase 3 — harden auth callables (sendEmailOtp, lookupLoginIdentifier):
+//   - enforceAppCheck: true once all apps register App Check
+//   - Use auth_rate_limits / email_otp_rate_limits collections (rules: client write false)
+// =============================================================================

@@ -88,13 +88,18 @@ function Get-VanGovernanceConfig {
     FunctionOwnershipVan2  = @(
       'sendEmailOtp',
       'verifyEmailOtp',
+      'sendMerchantPhoneOtp',
+      'verifyMerchantPhoneOtp',
       'lookupLoginIdentifier',
       'upsertPhonePasswordProfile',
       'signInWithPhonePassword',
       'calculateCartTotals',
+      'createCheckoutOrders',
+      'createNationwideParcelOrders',
       'verifyOrderPaymentSlip',
       'normalizeVan2SlipOrders',
       'pushAppNotification',
+      'sendAnnouncementEmails',
       'callUser',
       'initiateCall',
       'cancelCallInvite'

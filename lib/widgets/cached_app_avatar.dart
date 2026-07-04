@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../utils/app_image_cache.dart';
@@ -35,21 +36,32 @@ class CachedAppAvatar extends StatelessWidget {
     return CircleAvatar(
       radius: radius,
       backgroundColor: backgroundColor,
-      child: ClipOval(
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: CachedAppImage(
-            imageUrl: url,
-            width: size,
-            height: size,
-            fit: BoxFit.cover,
-            lightweight: true,
-            maxCachePx: maxCachePx,
-            errorWidget: fallback ?? const Icon(Icons.person_outline),
-          ),
-        ),
-      ),
+      child: kIsWeb
+          ? CachedAppImage(
+              imageUrl: url,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              lightweight: true,
+              maxCachePx: maxCachePx,
+              borderRadius: BorderRadius.circular(radius),
+              errorWidget: fallback ?? const Icon(Icons.person_outline),
+            )
+          : ClipOval(
+              child: SizedBox(
+                width: size,
+                height: size,
+                child: CachedAppImage(
+                  imageUrl: url,
+                  width: size,
+                  height: size,
+                  fit: BoxFit.cover,
+                  lightweight: true,
+                  maxCachePx: maxCachePx,
+                  errorWidget: fallback ?? const Icon(Icons.person_outline),
+                ),
+              ),
+            ),
     );
   }
 }

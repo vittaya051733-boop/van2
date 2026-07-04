@@ -13,6 +13,7 @@ class LegalDocumentScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final english = LocaleService.instance.isEnglish;
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text(document.title(english)),
       ),

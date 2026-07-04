@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -1148,9 +1149,10 @@ class _ShopAvatar extends StatelessWidget {
       child: hasImage
           ? CachedAppImage(
               imageUrl: imageUrl!,
-              width: 40,
-              height: 40,
+              width: 52,
+              height: 52,
               fit: BoxFit.cover,
+              borderRadius: BorderRadius.circular(16),
               lightweight: true,
               errorWidget:
                   const Icon(Icons.storefront, color: Color(0xFF9A3412)),

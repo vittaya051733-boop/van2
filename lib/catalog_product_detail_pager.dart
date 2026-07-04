@@ -81,7 +81,7 @@ class _CatalogProductDetailPagerState
   }
 
   void _openCart() {
-    Navigator.of(context).pop();
+    Navigator.of(context).popUntil((route) => route.isFirst);
     widget.onNavigateToCart?.call();
   }
 

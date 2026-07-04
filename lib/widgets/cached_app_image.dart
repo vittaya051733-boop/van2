@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../utils/app_image_cache.dart';
+import 'web_dom_image.dart';
 
 /// Network image with on-device disk cache and decode capped at 150px edge.
 class CachedAppImage extends StatefulWidget {
@@ -56,6 +58,10 @@ class _CachedAppImageState extends State<CachedAppImage> {
   }
 
   Future<void> _resolveDiskCache() async {
+    if (kIsWeb) {
+      return;
+    }
+
     final url = widget.imageUrl?.trim();
     if (url == null || url.isEmpty) {
       return;
@@ -133,6 +139,23 @@ class _CachedAppImageState extends State<CachedAppImage> {
     return image;
   }
 
+  Widget _buildWebNetworkImage({
+    required String url,
+    double? boxWidth,
+    double? boxHeight,
+    required Widget placeholderWidget,
+    required Widget error,
+  }) {
+    return buildWebDomImage(
+      url: url,
+      width: boxWidth,
+      height: boxHeight,
+      fit: widget.fit,
+      borderRadius: widget.borderRadius,
+      errorBuilder: (_) => error,
+    );
+  }
+
   Widget _buildNetworkImage({
     required String url,
     required BoxConstraints constraints,
@@ -154,6 +177,28 @@ class _CachedAppImageState extends State<CachedAppImage> {
         _defaultPlaceholder(w: boxWidth, h: boxHeight);
     final error =
         widget.errorWidget ?? _defaultError(w: boxWidth, h: boxHeight);
+
+    if (kIsWeb) {
+      final webImage = _buildWebNetworkImage(
+        url: url,
+        boxWidth: boxWidth,
+        boxHeight: boxHeight,
+        placeholderWidget: placeholderWidget,
+        error: error,
+      );
+      final expandWidth = layoutDimIsExpand(widget.width) && boxWidth == null;
+      final expandHeight = layoutDimIsExpand(widget.height) && boxHeight == null;
+      if (expandWidth || expandHeight) {
+        return SizedBox(
+          width: boxWidth ??
+              (constraints.maxWidth.isFinite ? constraints.maxWidth : null),
+          height: boxHeight ??
+              (constraints.maxHeight.isFinite ? constraints.maxHeight : null),
+          child: webImage,
+        );
+      }
+      return webImage;
+    }
 
     final networkImage = CachedNetworkImage(
       imageUrl: url,
@@ -202,7 +247,7 @@ class _CachedAppImageState extends State<CachedAppImage> {
           _defaultError(w: layoutWidth, h: layoutHeight);
     }
 
-    if (_diskFile != null) {
+    if (!kIsWeb && _diskFile != null) {
       final boxWidth = layoutWidth ??
           (constraints.maxWidth.isFinite ? constraints.maxWidth : null);
       final boxHeight = layoutHeight ??

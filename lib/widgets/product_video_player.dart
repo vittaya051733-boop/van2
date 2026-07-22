@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:better_player/better_player.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
@@ -10,6 +11,7 @@ import '../services/media_cache_service.dart';
 import '../services/video_prefetch_service.dart';
 import '../services/video_source_helper.dart';
 import 'cached_app_image.dart';
+import 'product_video_player_web.dart';
 
 class ProductVideoPlayer extends StatefulWidget {
   const ProductVideoPlayer({
@@ -32,7 +34,8 @@ class ProductVideoPlayer extends StatefulWidget {
   State<ProductVideoPlayer> createState() => _ProductVideoPlayerState();
 }
 
-class _ProductVideoPlayerState extends State<ProductVideoPlayer> {
+class _ProductVideoPlayerState extends State<ProductVideoPlayer>
+    with WidgetsBindingObserver {
   static const BetterPlayerConfiguration _playerConfig =
       BetterPlayerConfiguration(
     autoPlay: true,
@@ -88,6 +91,7 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     VideoPrefetchService.instance.preloadVideo(widget.videoUrl);
     _loadThumbnail();
     if (widget.isActive == true) {
@@ -373,30 +377,49 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      _wantsAutoplay = false;
+      unawaited(_releaseController());
+      return;
+    }
+    if (state == AppLifecycleState.resumed && !_released) {
+      _onPlaybackAllowedChanged();
+    }
+  }
+
+  @override
   void dispose() {
     _released = true;
     _wantsAutoplay = false;
+    WidgetsBinding.instance.removeObserver(this);
     final controller = _controller;
     _controller = null;
     _isInitialized = false;
     _isPlaying = false;
     _isBuffering = false;
     if (controller != null) {
-      controller.removeEventsListener(_handleBetterPlayerEvent);
-      unawaited(_disposeControllerQuietly(controller));
+      _disposeControllerSync(controller);
     }
     super.dispose();
   }
 
-  Future<void> _disposeControllerQuietly(BetterPlayerController controller) async {
+  void _disposeControllerSync(BetterPlayerController controller) {
     try {
-      await controller.pause();
+      controller.removeEventsListener(_handleBetterPlayerEvent);
+      if (!controller.isDisposed) {
+        controller.dispose(forceDispose: true);
+      }
     } catch (error) {
-      debugPrint('ProductVideoPlayer: pause on release failed -> $error');
+      debugPrint('ProductVideoPlayer: sync dispose failed -> $error');
     }
-    if (!controller.isDisposed) {
-      controller.dispose(forceDispose: true);
-    }
+  }
+
+  Future<void> _disposeControllerQuietly(BetterPlayerController controller) async {
+    _disposeControllerSync(controller);
   }
 
   Future<void> _releaseController() async {
@@ -442,6 +465,15 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer> {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return ProductVideoPlayerWeb(
+        videoUrl: widget.videoUrl,
+        thumbnailUrl: widget.thumbnailUrl,
+        isActive: widget.isActive,
+        hostActive: widget.hostActive,
+      );
+    }
+
     if (_hasError) {
       return const Center(
         child: Column(

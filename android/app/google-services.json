@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "802503541368-5ni2cekhmmp9rsi4mnf6b2ikh9cke910.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "Van2.com",
+            "certificate_hash": "17d51e94743cdd9958bb4389876feb67d68e6061"
+          }
+        },
+        {
           "client_id": "802503541368-6sh9d08648ctf3e6ujlsd8l8400uu0ej.apps.googleusercontent.com",
           "client_type": 3
         }

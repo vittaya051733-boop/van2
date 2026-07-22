@@ -36,7 +36,11 @@ class UserProfile {
       displayName:
           (resolvedName ?? map['displayName'] ?? map['name'] ?? 'ผู้ใช้ใหม่').toString(),
       phoneNumber: (map['phoneNumber'] ?? map['phone']) as String?,
-      photoUrl: (resolvedImageUrl ?? map['photoUrl'] ?? map['imageUrl'] ?? map['shopImageUrl'])
+      photoUrl: (resolvedImageUrl ??
+              map['profilePhotoUrl'] ??
+              map['photoUrl'] ??
+              map['imageUrl'] ??
+              map['shopImageUrl'])
           as String?,
       serviceType: (map['serviceType'] ?? map['type']) as String?,
       isOfficial: (map['isOfficial'] as bool?) ?? false,

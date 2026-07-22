@@ -4,7 +4,11 @@
 
 ## สถานะปัจจุบัน
 
-- `Android/iOS SDK key` ยังใช้อยู่ตามเดิมสำหรับแสดงแผนที่ในแอพ
+- `Android/iOS SDK key` ใช้ **key เดียวกับ van1 (van.merchant)**: `AIzaSyABo43mqmfEuAQJ4CKnzl6dePIIoGyyGsU` ใน `AndroidManifest.xml` และ `AppDelegate.swift`
+- `Web JS key` ใช้ Firebase Web key (`AIzaSyB6Q5DE_...`) ใน `web/index.html`
+- ใน GCP ให้ **เพิ่ม** `Van2.com` + SHA-1 debug คู่กับ `van.merchant` บน key เดียวกัน (ไม่ต้องสร้าง key ใหม่)
+- **ทางลัดสำหรับ emulator:** `scripts/run-van2-by-avd.ps1` จะ build ด้วย package `van.merchant` (key เดียวกับ van1) โดยอัตโนมัติ — ไม่ต้องแก้ GCP
+- Production release ยังใช้ `Van2.com` ได้ด้วย `-UseVan2Package` (ต้องเพิ่ม Van2.com ใน GCP ก่อนแผนที่จะขึ้น)
 - `Places Autocomplete`, `Place Details`, และ `Geocoding API` จะอ่านจาก `GOOGLE_MAPS_WEB_API_KEY`
 - ถ้ายังไม่ส่ง `GOOGLE_MAPS_WEB_API_KEY` เข้าแอพ การค้นหาสถานที่จะไม่ทำงาน แต่ยังปักหมุดบนแผนที่ได้
 
@@ -15,6 +19,17 @@
 - https://console.cloud.google.com/apis/library/places-backend.googleapis.com
 - https://console.cloud.google.com/apis/library/geocoding-backend.googleapis.com
 - https://console.cloud.google.com/apis/credentials
+
+## ถ้าแผนที่ยังว่างบน Android
+
+1. เปิด https://console.cloud.google.com/apis/library/maps-android-backend.googleapis.com
+2. เปิด **Maps SDK for Android** ใน project `van-merchant`
+3. ไปที่ Credentials แล้วตรวจ key `AIzaSyABo43mqmfEuAQJ4CKnzl6dePIIoGyyGsU` (key เดียวกับ van1)
+4. ตั้ง Application restrictions = Android apps แล้ว **เพิ่ม** (อย่าลบ van.merchant):
+   - Package: `Van2.com`
+   - SHA-1: `17:D5:1E:94:74:3C:DD:99:58:BB:43:89:87:6F:EB:67:D6:8E:60:61`
+5. ตั้ง API restrictions ให้รวม **Maps SDK for Android**
+6. Build ใหม่ด้วย `scripts/run-van2-by-avd.ps1` (hot reload ไม่พอ ต้อง reinstall APK)
 
 ## ขั้นตอนที่ต้องทำ
 

@@ -4,6 +4,8 @@ void showCatalogProductDetailPager({
   required BuildContext context,
   required List<PublicCatalogProduct> products,
   required int initialIndex,
+  double? customerLatitude,
+  double? customerLongitude,
   ValueChanged<CartProductSelection>? onConfirmOrder,
   VoidCallback? onNavigateToCart,
 }) {
@@ -12,6 +14,8 @@ void showCatalogProductDetailPager({
       builder: (_) => _CatalogProductDetailPager(
         products: products,
         initialIndex: initialIndex,
+        customerLatitude: customerLatitude,
+        customerLongitude: customerLongitude,
         onConfirmOrder: onConfirmOrder,
         onNavigateToCart: onNavigateToCart,
       ),
@@ -23,12 +27,16 @@ class _CatalogProductDetailPager extends StatefulWidget {
   const _CatalogProductDetailPager({
     required this.products,
     required this.initialIndex,
+    this.customerLatitude,
+    this.customerLongitude,
     this.onConfirmOrder,
     this.onNavigateToCart,
   });
 
   final List<PublicCatalogProduct> products;
   final int initialIndex;
+  final double? customerLatitude;
+  final double? customerLongitude;
   final ValueChanged<CartProductSelection>? onConfirmOrder;
   final VoidCallback? onNavigateToCart;
 
@@ -148,8 +156,10 @@ class _CatalogProductDetailPagerState
           return _CatalogProductDetailPage(
             product: widget.products[index],
             isCurrentProduct: index == _currentIndex,
+            customerLatitude: widget.customerLatitude,
+            customerLongitude: widget.customerLongitude,
             onAddToCart: _handleAddToCart,
-            bottomInset: showCartBar ? 112 : 24,
+            bottomInset: showCartBar ? 112 : 0,
           );
         },
       ),
@@ -264,12 +274,16 @@ class _CatalogProductDetailPage extends StatefulWidget {
   const _CatalogProductDetailPage({
     required this.product,
     required this.isCurrentProduct,
+    this.customerLatitude,
+    this.customerLongitude,
     required this.onAddToCart,
     this.bottomInset = 24,
   });
 
   final PublicCatalogProduct product;
   final bool isCurrentProduct;
+  final double? customerLatitude;
+  final double? customerLongitude;
   final ValueChanged<CartProductSelection> onAddToCart;
   final double bottomInset;
 
@@ -297,6 +311,16 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
     final int? availableStock = _extractAvailableStock(data);
     final int preparationTimeMinutes = _extractPreparationTimeMinutes(data);
     final int parcelWeightGrams = _extractParcelWeightGrams(data);
+    final shopDistanceKm = computeCatalogShopDistanceKm(
+      customerLatitude: widget.customerLatitude,
+      customerLongitude: widget.customerLongitude,
+      shopLatitude: product.shopLatitude,
+      shopLongitude: product.shopLongitude,
+    );
+    final travelMinutes =
+        DeliveryEtaPolicy.estimateTravelMinutesFromStraightDistanceKm(
+      shopDistanceKm,
+    );
     final String shopName = product.shopName?.trim().isNotEmpty == true
         ? product.shopName!.trim()
         : 'ร้านค้า';
@@ -343,11 +367,14 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
     final unitPrice = adjustedBasePrice + toppingTotal;
     final lineTotal = unitPrice * _quantity;
 
-    return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, widget.bottomInset),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
+    return Column(
+      children: <Widget>[
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
           Row(
             children: <Widget>[
               _ShopAvatar(imageUrl: product.shopImageUrl),
@@ -399,6 +426,18 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
             shopId: product.shopId,
           ),
           _ProductRatingSummary(productId: product.id),
+          const SizedBox(height: 10),
+          ProductReactionBar(
+            productId: product.id,
+            shopId: product.shopId,
+            onCommentTap: () {
+              showProductCommentComposerSheet(
+                context: context,
+                productId: product.id,
+                shopId: product.shopId,
+              );
+            },
+          ),
           if (description.isNotEmpty) ...<Widget>[
             const SizedBox(height: 6),
             Text(
@@ -408,6 +447,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF4B5563)),
             ),
           ],
+          const SizedBox(height: 10),
           _ProductRecentReviews(productId: product.id),
           const SizedBox(height: 10),
           Container(
@@ -419,7 +459,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
             ),
             child: Row(
               children: <Widget>[
-                const Icon(Icons.schedule, color: Color(0xFFF57C00), size: 20),
+                const Icon(Icons.restaurant, color: Color(0xFFF57C00), size: 20),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -433,6 +473,37 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               ],
             ),
           ),
+          if (travelMinutes > 0) ...<Widget>[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFBFDBFE)),
+              ),
+              child: Row(
+                children: <Widget>[
+                  const Icon(
+                    Icons.delivery_dining,
+                    color: Color(0xFF2563EB),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'เวลาส่งถึงคุณ: ประมาณ $travelMinutes นาที'
+                      ' (ห่าง ${_formatDistanceKm(shopDistanceKm)!})',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF1D4ED8),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Row(
             children: <Widget>[
@@ -596,46 +667,80 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                 ),
               ),
             ),
-          const SizedBox(height: 16),
-          SizedBox(
+          ProductCommentList(productId: product.id),
+              ],
+            ),
+          ),
+        ),
+        _CatalogProductAddToCartBar(
+          outOfStock: outOfStock,
+          extraBottomPadding: widget.bottomInset,
+          onAddToCart: () {
+            final selectedNames = selectedOptions
+                .map((option) => option.label)
+                .toList(growable: false);
+            widget.onAddToCart(
+              CartProductSelection(
+                productId: product.id,
+                shopId: product.shopId,
+                shopName: shopName,
+                shopLatitude: product.shopLatitude,
+                shopLongitude: product.shopLongitude,
+                productName: name.isEmpty ? 'สินค้า' : name,
+                unitPrice: unitPrice,
+                merchantBasePrice: merchantBasePrice,
+                discountPercent: discountPercent,
+                merchantUnitPayout: merchantUnitPayout,
+                imageUrl: imageUrl,
+                selectedToppings: selectedNames,
+                quantity: _quantity,
+                availableStock: availableStock,
+                preparationTimeMinutes: preparationTimeMinutes,
+                parcelWeightGrams: parcelWeightGrams,
+                parcelLengthCm: _parsePositiveDouble(
+                  data['parcelLengthCm'],
+                ),
+                parcelWidthCm: _parsePositiveDouble(
+                  data['parcelWidthCm'],
+                ),
+                parcelHeightCm: _parsePositiveDouble(
+                  data['parcelHeightCm'],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _CatalogProductAddToCartBar extends StatelessWidget {
+  const _CatalogProductAddToCartBar({
+    required this.outOfStock,
+    required this.onAddToCart,
+    this.extraBottomPadding = 0,
+  });
+
+  final bool outOfStock;
+  final VoidCallback onAddToCart;
+  final double extraBottomPadding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      elevation: 10,
+      color: Colors.white,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: extraBottomPadding),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: outOfStock
-                  ? null
-                  : () {
-                      final selectedNames = selectedOptions
-                          .map((option) => option.label)
-                          .toList(growable: false);
-                      widget.onAddToCart(
-                        CartProductSelection(
-                          productId: product.id,
-                          shopId: product.shopId,
-                          shopName: shopName,
-                          shopLatitude: product.shopLatitude,
-                          shopLongitude: product.shopLongitude,
-                          productName: name.isEmpty ? 'สินค้า' : name,
-                          unitPrice: unitPrice,
-                          merchantBasePrice: merchantBasePrice,
-                          discountPercent: discountPercent,
-                          merchantUnitPayout: merchantUnitPayout,
-                          imageUrl: imageUrl,
-                          selectedToppings: selectedNames,
-                          quantity: _quantity,
-                          availableStock: availableStock,
-                          preparationTimeMinutes: preparationTimeMinutes,
-                          parcelWeightGrams: parcelWeightGrams,
-                          parcelLengthCm: _parsePositiveDouble(
-                            data['parcelLengthCm'],
-                          ),
-                          parcelWidthCm: _parsePositiveDouble(
-                            data['parcelWidthCm'],
-                          ),
-                          parcelHeightCm: _parsePositiveDouble(
-                            data['parcelHeightCm'],
-                          ),
-                        ),
-                      );
-                    },
+              onPressed: outOfStock ? null : onAddToCart,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF16A34A),
                 foregroundColor: Colors.white,
@@ -651,8 +756,9 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               ),
             ),
           ),
-        ],
+        ),
       ),
+    ),
     );
   }
 }

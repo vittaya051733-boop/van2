@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -12,6 +14,15 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    val localProperties = Properties()
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { localProperties.load(it) }
+    }
+    val useVan1MapsIdentity =
+        (project.findProperty("useVan1MapsIdentity") as String?) == "true" ||
+            localProperties.getProperty("useVan1MapsIdentity", "false") == "true"
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -23,8 +34,9 @@ android {
     }
 
     defaultConfig {
-        // Unique from van1 merchant app (van.merchant) so both can install on one device.
-        applicationId = "Van2.com"
+        // Van2.com for production (side-by-side with van1). Emulator dev can set
+        // useVan1MapsIdentity=true in android/local.properties to reuse van1 Maps SDK key.
+        applicationId = if (useVan1MapsIdentity) "van.merchant" else "Van2.com"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

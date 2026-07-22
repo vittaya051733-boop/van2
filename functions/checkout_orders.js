@@ -768,9 +768,21 @@ async function createCheckoutOrdersHandler(request, deps) {
 
   const paymentMethod = String(request.data?.paymentMethod || '').trim();
   const paymentStatus = String(request.data?.paymentStatus || '').trim();
-  if (!['cash_on_delivery', 'awaiting_slip_review'].includes(paymentStatus)) {
+  const verificationFeedbackId = String(request.data?.verificationFeedbackId || '').trim();
+  const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
+  const allowedPaymentStatuses = ['cash_on_delivery', 'awaiting_slip_review', 'verified'];
+  if (!allowedPaymentStatuses.includes(paymentStatus)) {
     throw new HttpsError('invalid-argument', 'สถานะชำระเงินไม่รองรับ');
   }
+  if (paymentStatus === 'verified') {
+    if (!verificationFeedbackId || !paymentGroupId) {
+      throw new HttpsError('invalid-argument', 'ข้อมูลการชำระเงินไม่ครบ');
+    }
+    if (paymentMethod !== 'promptpay_qr') {
+      throw new HttpsError('invalid-argument', 'การชำระเงินที่ยืนยันแล้วรองรับเฉพาะ PromptPay');
+    }
+  }
+  const isVerifiedPayment = paymentStatus === 'verified';
 
   const helpers = {
     parseNumber,
@@ -841,7 +853,7 @@ async function createCheckoutOrdersHandler(request, deps) {
   const batch = db.batch();
   const now = new Date();
   const paymentExpiresAt =
-    paymentMethod === 'promptpay_qr'
+    paymentMethod === 'promptpay_qr' && paymentStatus === 'awaiting_slip_review'
       ? admin.firestore.Timestamp.fromDate(new Date(now.getTime() + 30 * 60 * 1000))
       : null;
 
@@ -917,20 +929,24 @@ async function createCheckoutOrdersHandler(request, deps) {
     }
 
     const shouldAssignRiderImmediately = notifyRider && assignedRider != null;
-    const initialOrderStatus = assignedRider == null
-      ? notifyRider
-        ? 'awaiting_rider'
-        : 'awaiting_payment_slip_review'
-      : notifyRider
-        ? 'pending'
-        : 'awaiting_payment_slip_review';
-    const initialStatusLabel = assignedRider == null
-      ? notifyRider
-        ? 'awaiting_nearest_rider'
-        : 'awaiting_payment_slip_review'
-      : notifyRider
-        ? 'pending_customer_confirmation'
-        : 'awaiting_payment_slip_review';
+    const initialOrderStatus = isVerifiedPayment
+      ? (assignedRider == null ? 'awaiting_rider' : 'pending')
+      : assignedRider == null
+        ? notifyRider
+          ? 'awaiting_rider'
+          : 'awaiting_payment_slip_review'
+        : notifyRider
+          ? 'pending'
+          : 'awaiting_payment_slip_review';
+    const initialStatusLabel = isVerifiedPayment
+      ? (assignedRider == null ? 'awaiting_nearest_rider' : 'pending_customer_confirmation')
+      : assignedRider == null
+        ? notifyRider
+          ? 'awaiting_nearest_rider'
+          : 'awaiting_payment_slip_review'
+        : notifyRider
+          ? 'pending_customer_confirmation'
+          : 'awaiting_payment_slip_review';
 
     const orderRef = db.collection('orders').doc();
     const orderCode = buildOrderCode('ORD', orderRef.id, now);
@@ -1077,6 +1093,33 @@ async function createCheckoutOrdersHandler(request, deps) {
         ...(riderSearch.reason ? { reason: riderSearch.reason } : {}),
       },
       checkoutQuoteId: checkoutQuoteId || null,
+      ...(isVerifiedPayment
+        ? {
+            paymentGroupId,
+            paymentSubmittedAt: FieldValue.serverTimestamp(),
+            paymentSlip: {
+              storagePath: String(request.data?.slipStoragePath || '').trim(),
+              downloadUrl: String(request.data?.slipDownloadUrl || '').trim(),
+              fileName: String(request.data?.slipFileName || 'slip.jpg').trim(),
+              contentType: request.data?.slipContentType || null,
+              sizeBytes: parseNumber(request.data?.slipSizeBytes),
+              uploadedBy: uid,
+              uploadedAt: FieldValue.serverTimestamp(),
+            },
+            paymentVerification: {
+              provider: 'slipok',
+              providerLabel: 'Slip OK',
+              feedbackId: verificationFeedbackId,
+              paymentGroupId,
+              expectedCombinedAmount: combinedGrandTotal,
+              verifiedSlipAmount: parseNumber(request.data?.verifiedSlipAmount),
+              status: 'verified',
+              statusLabel: 'ตรวจสอบสลิปผ่าน',
+              message: String(request.data?.verificationMessage || '').trim(),
+              checkedAt: FieldValue.serverTimestamp(),
+            },
+          }
+        : {}),
       audit: {
         createdBy: uid,
         createdByRole: 'cloud_function',
@@ -1100,23 +1143,43 @@ async function createCheckoutOrdersHandler(request, deps) {
       timestamp: FieldValue.serverTimestamp(),
     });
 
+    if (isVerifiedPayment) {
+      const verifiedTimelineRef = orderRef.collection('timeline').doc();
+      batch.set(verifiedTimelineRef, {
+        event: 'payment_slip_verified',
+        eventLabel: 'ระบบตรวจสลิปผ่านแล้ว',
+        orderId: orderRef.id,
+        paymentGroupId,
+        actorRole: 'system',
+        actorId: 'createCheckoutOrders',
+        message: String(request.data?.verificationMessage || '').trim(),
+        timestamp: FieldValue.serverTimestamp(),
+      });
+    }
+
     if (notifyRider && assignedRider) {
       const notificationRef = db.collection('app_notifications').doc();
       batch.set(notificationRef, {
         targetApp: 'van3',
         recipientUid: assignedRider.riderId,
         orderId: orderRef.id,
-        title: 'มีคำสั่งซื้อใหม่',
+        title: isVerifiedPayment ? 'ชำระเงินแล้ว มีออเดอร์ใหม่' : 'มีคำสั่งซื้อใหม่',
         body: orderCode
-          ? `ออเดอร์ ${orderCode} จาก ${firstItem.shopName}`
-          : `มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}`,
+          ? isVerifiedPayment
+            ? `ออเดอร์ ${orderCode} ชำระเงินแล้ว`
+            : `ออเดอร์ ${orderCode} จาก ${firstItem.shopName}`
+          : isVerifiedPayment
+            ? 'มีออเดอร์ที่ชำระเงินแล้ว'
+            : `มีคำสั่งซื้อใหม่จาก ${firstItem.shopName}`,
         read: false,
         createdAt: FieldValue.serverTimestamp(),
         source: 'van2_customer',
         sourceApp: 'van2_customer',
-        action: 'order_created_customer_confirmed',
+        action: isVerifiedPayment
+          ? 'order_payment_verified'
+          : 'order_created_customer_confirmed',
         customerConfirmed: true,
-        riderNotifyReady,
+        riderNotifyReady: isVerifiedPayment ? true : riderNotifyReady,
       });
     }
 

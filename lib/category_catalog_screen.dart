@@ -14,10 +14,13 @@ import 'services/app_image_prefetch.dart';
 import 'services/catalog_product_media_prefetch.dart';
 import 'tax_pricing_policy.dart';
 import 'utils/catalog_product_image_url.dart';
+import 'utils/delivery_eta_policy.dart';
 import 'widgets/cached_app_image.dart';
 import 'widgets/catalog_product_media_carousel.dart';
+import 'widgets/product_comment_section.dart';
 import 'widgets/product_discount_badge.dart';
 import 'widgets/product_discount_price.dart';
+import 'widgets/product_reaction_bar.dart';
 
 part 'catalog_product_detail_pager.dart';
 part 'catalog_shop_browser.dart';
@@ -424,6 +427,8 @@ class CatalogProductCard extends StatelessWidget {
     this.shopLatitude,
     this.shopLongitude,
     this.shopDistanceKm,
+    this.customerLatitude,
+    this.customerLongitude,
     this.onConfirmOrder,
     this.onNavigateToCart,
     this.compact = false,
@@ -435,6 +440,8 @@ class CatalogProductCard extends StatelessWidget {
   final double? shopLatitude;
   final double? shopLongitude;
   final double? shopDistanceKm;
+  final double? customerLatitude;
+  final double? customerLongitude;
   final ValueChanged<CartProductSelection>? onConfirmOrder;
   final VoidCallback? onNavigateToCart;
   final bool compact;
@@ -450,7 +457,10 @@ class CatalogProductCard extends StatelessWidget {
     );
     final String? distanceText = compact
         ? null
-        : _formatDistanceKm(shopDistanceKm);
+        : buildCatalogDeliveryDistanceLabel(
+            shopDistanceKm: shopDistanceKm,
+            preparationTimeMinutes: _extractPreparationTimeMinutes(data),
+          );
 
     void openProductDetails() =>
         unawaited(_openProductDetailPager(context, shopProducts: shopProducts));
@@ -548,54 +558,69 @@ class CatalogProductCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         imageTile,
-        const SizedBox(height: 8),
-        Text(
-          name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: const Color(0xFF111827),
-          ),
-        ),
-        if (showRatingSummary) _ProductRatingSummary(productId: product.id),
-        if (cleanDescription.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 4),
-          Text(
-            cleanDescription,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
-          ),
-        ],
-        if (distanceText != null) ...<Widget>[
-          const SizedBox(height: 6),
-          Row(
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const Icon(
-                Icons.near_me_outlined,
-                size: 14,
-                color: Color(0xFF6B7280),
+              const SizedBox(height: 8),
+              Text(
+                name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF111827),
+                  height: 1.15,
+                ),
               ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  'ห่าง $distanceText',
-                  maxLines: 1,
+              if (showRatingSummary)
+                _ProductRatingSummary(productId: product.id),
+              if (cleanDescription.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 4),
+                Text(
+                  cleanDescription,
+                  maxLines: distanceText != null ? 1 : 2,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF6B7280),
-                    fontWeight: FontWeight.w600,
+                    height: 1.2,
                   ),
                 ),
-              ),
+              ],
+              if (distanceText != null) ...<Widget>[
+                const SizedBox(height: 4),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 1),
+                      child: Icon(
+                        Icons.near_me_outlined,
+                        size: 14,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        distanceText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF6B7280),
+                          fontWeight: FontWeight.w600,
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 6),
+              priceRow,
             ],
           ),
-        ],
-        const SizedBox(height: 6),
-        priceRow,
+        ),
       ],
     );
   }
@@ -628,6 +653,8 @@ class CatalogProductCard extends StatelessWidget {
       context: context,
       products: products,
       initialIndex: initialIndex,
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
       onConfirmOrder: onConfirmOrder,
       onNavigateToCart: onNavigateToCart,
     );
@@ -1191,6 +1218,22 @@ bool _isRecentlyUpdatedShop(DateTime? updatedAt) {
   return DateTime.now().difference(updatedAt) <= const Duration(days: 14);
 }
 
+String? buildCatalogDeliveryDistanceLabel({
+  required double? shopDistanceKm,
+  required int preparationTimeMinutes,
+}) {
+  final distanceText = _formatDistanceKm(shopDistanceKm);
+  if (distanceText == null) {
+    return null;
+  }
+
+  final totalMinutes = DeliveryEtaPolicy.estimateTotalDeliveryMinutes(
+    preparationTimeMinutes: preparationTimeMinutes,
+    straightDistanceKm: shopDistanceKm,
+  );
+  return 'ห่าง $distanceText · ส่งถึง ~$totalMinutes นาที';
+}
+
 String? _formatDistanceKm(double? distanceKm) {
   if (distanceKm == null) {
     return null;
@@ -1211,7 +1254,7 @@ String? _formatDistanceKm(double? distanceKm) {
   const catalogHorizontalPadding = 40.0;
   const columnGap = 8.0;
   final width = (screenWidth - catalogHorizontalPadding - columnGap) / 2;
-  const textAndActionsHeight = 152.0;
+  const textAndActionsHeight = 166.0;
   final height = width / 1.05 + textAndActionsHeight;
   return (width: width, height: height);
 }

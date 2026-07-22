@@ -90,10 +90,14 @@ class PaymentQrService {
   static PaymentCollectionSettings resolveSettingsForQr(
     PaymentCollectionSettings config,
   ) {
-    final merchantQrPayload = _normalizedMerchantPayload(config.merchantQrPayload);
-    final promptPayPhoneNumber = _normalizedPhoneNumber(config.promptPayPhoneNumber);
+    final normalized =
+        PaymentCollectionSettings.normalizePromptPayFields(config);
+    final merchantQrPayload =
+        _normalizedMerchantPayload(normalized.merchantQrPayload);
+    final promptPayPhoneNumber =
+        _normalizedPhoneNumber(normalized.promptPayPhoneNumber);
     final promptPayNationalIdOrTaxId = _normalizedNationalId(
-      config.promptPayNationalIdOrTaxId,
+      normalized.promptPayNationalIdOrTaxId,
     );
 
     final hasValidConfiguredQr =

@@ -69,7 +69,10 @@ dependencies:
   promptpay_qrcode_generate: ^1.0.2
   image_gallery_saver_plus: ^4.0.1
   google_maps_flutter: ^2.14.2
+  google_maps_flutter_android: ^2.14.2
+  google_maps_flutter_platform_interface: ^2.14.2
   share_plus: ^12.0.2
+  video_player: ^2.10.0
   better_player:
     path: ../van1/my-flutter/local_packages/better_player
   video_thumbnail: ^0.5.3

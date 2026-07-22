@@ -365,6 +365,91 @@ service cloud.firestore {
           || isPrivilegedAdmin();
     }
 
+    function productCommentTextIsValid(data) {
+      return !('text' in data)
+          || (data.text is string && data.text.size() <= 1000);
+    }
+
+    function productCommentImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    function canReadProductComment(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.authorId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function canCreateProductComment() {
+      return signedIn()
+          && request.resource.data.authorId == uid()
+          && request.resource.data.productId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.authorName is string
+          && productCommentTextIsValid(request.resource.data)
+          && productCommentImageUrlsIsValid(request.resource.data)
+          && (
+            (request.resource.data.text is string && request.resource.data.text.size() > 0)
+            || (
+              'imageUrls' in request.resource.data
+              && request.resource.data.imageUrls is list
+              && request.resource.data.imageUrls.size() > 0
+            )
+          )
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnProductComment() {
+      return signedIn()
+          && resource.data.authorId == uid()
+          && request.resource.data.authorId == resource.data.authorId
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'text',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && productCommentTextIsValid(request.resource.data)
+          && productCommentImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function productReactionTypeIsValid(data) {
+      return data.type == 'like' || data.type == 'dislike' || data.type == 'love';
+    }
+
+    function canCreateProductReactionStats(productId) {
+      return signedIn()
+          && request.resource.data.productId == productId
+          && request.resource.data.shopId is string
+          && request.resource.data.likeCount is int
+          && request.resource.data.dislikeCount is int
+          && request.resource.data.loveCount is int
+          && request.resource.data.likeCount >= 0
+          && request.resource.data.dislikeCount >= 0
+          && request.resource.data.loveCount >= 0
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateProductReactionStats() {
+      return signedIn()
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'likeCount',
+            'dislikeCount',
+            'loveCount',
+            'updatedAt',
+          ])
+          && request.resource.data.updatedAt == request.time;
+    }
+
     function adminSupportSourceIsValid(sourceApp) {
       return sourceApp == 'van1' || sourceApp == 'van2' || sourceApp == 'van3';
     }
@@ -610,6 +695,32 @@ service cloud.firestore {
     match /shop_review_stats/{shopId} {
       allow get, list: if true;
       allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    match /product_reaction_stats/{productId} {
+      allow get, list: if true;
+      allow create: if canCreateProductReactionStats(productId);
+      allow update: if canUpdateProductReactionStats()
+          || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+
+      match /user_reactions/{userId} {
+        allow get, list: if signedIn();
+        allow create, update: if signedIn()
+            && userId == uid()
+            && productReactionTypeIsValid(request.resource.data)
+            && request.resource.data.updatedAt == request.time;
+        allow delete: if signedIn() && userId == uid();
+      }
+    }
+
+    match /product_comments/{commentId} {
+      allow get, list: if canReadProductComment(resource.data);
+      allow create: if canCreateProductComment();
+      allow update: if canUpdateOwnProductComment()
+          || isPrivilegedAdmin();
+      allow delete: if (signedIn() && resource.data.authorId == uid())
+          || isPrivilegedAdmin();
     }
 
     // โปรไฟล์ผู้ใช้ฝั่งลูกค้า (ใช้เก็บ fcmToken ฯลฯ)

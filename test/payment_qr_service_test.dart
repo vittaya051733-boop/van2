@@ -26,6 +26,33 @@ void main() {
     expect(payload, contains('540589.50'));
   });
 
+  test('treats phone stored in national-id field as PromptPay phone', () {
+    const misconfigured = PaymentCollectionSettings(
+      recipientDisplayName: 'วิทยา ทนหงษา',
+      bankName: 'ธนาคารกสิกรไทย',
+      bankAccountNumber: '1643440349',
+      promptPayPhoneNumber: null,
+      promptPayNationalIdOrTaxId: '0988170447',
+      merchantQrPayload: null,
+      slipProviderLabel: 'Slip OK',
+    );
+
+    final normalized =
+        PaymentCollectionSettings.normalizePromptPayFields(misconfigured);
+    final resolved = PaymentQrService.resolveSettingsForQr(misconfigured);
+    final channel = PaymentQrService.pickDefaultChannel(
+      amount: 159.0,
+      config: misconfigured,
+    );
+
+    expect(normalized.promptPayPhoneNumber, '0988170447');
+    expect(normalized.promptPayNationalIdOrTaxId, isNull);
+    expect(resolved.promptPayPhoneNumber, '0988170447');
+    expect(resolved.promptPayNationalIdOrTaxId, isNull);
+    expect(channel.type, PaymentChannelType.promptPayPhone);
+    expect(channel.qrPayload, contains('66988170447'));
+  });
+
   test('falls back to default QR settings when remote config is malformed', () {
     const malformed = PaymentCollectionSettings(
       recipientDisplayName: 'ร้านทดสอบ',

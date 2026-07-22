@@ -242,6 +242,47 @@ function defaultPaymentCollectionSettings() {
   };
 }
 
+function isPromptPayPhoneDigits(value) {
+  const digits = normalizeDigits(value);
+  return digits.length >= 9 && digits.length <= 10;
+}
+
+function normalizePaymentCollectionSettings(raw = {}) {
+  const defaults = defaultPaymentCollectionSettings();
+  let promptPayPhoneNumber = String(raw.promptPayPhoneNumber || '').trim();
+  let promptPayNationalIdOrTaxId = String(
+    raw.promptPayNationalIdOrTaxId || defaults.promptPayNationalIdOrTaxId,
+  ).trim();
+
+  if (!isPromptPayPhoneDigits(promptPayPhoneNumber)) {
+    promptPayPhoneNumber = '';
+  } else {
+    promptPayPhoneNumber = normalizeDigits(promptPayPhoneNumber);
+  }
+
+  const nationalDigits = normalizeDigits(promptPayNationalIdOrTaxId);
+  if (nationalDigits.length === 13) {
+    promptPayNationalIdOrTaxId = nationalDigits;
+  } else if (isPromptPayPhoneDigits(nationalDigits) && !promptPayPhoneNumber) {
+    // Some configs store a phone number in the national-id field.
+    promptPayPhoneNumber = nationalDigits;
+    promptPayNationalIdOrTaxId = defaults.promptPayNationalIdOrTaxId;
+  } else if (nationalDigits.length !== 13) {
+    promptPayNationalIdOrTaxId = defaults.promptPayNationalIdOrTaxId;
+  }
+
+  return {
+    recipientDisplayName:
+      String(raw.recipientDisplayName || defaults.recipientDisplayName).trim()
+      || defaults.recipientDisplayName,
+    bankAccountNumber:
+      String(raw.bankAccountNumber || defaults.bankAccountNumber).trim()
+      || defaults.bankAccountNumber,
+    promptPayPhoneNumber,
+    promptPayNationalIdOrTaxId,
+  };
+}
+
 async function getPaymentCollectionSettings() {
   const defaults = defaultPaymentCollectionSettings();
 
@@ -250,15 +291,7 @@ async function getPaymentCollectionSettings() {
       .collection(PAYMENT_CONFIG_COLLECTION)
       .doc(PAYMENT_CONFIG_DOC_ID)
       .get();
-    const data = snapshot.data() || {};
-
-    return {
-      recipientDisplayName: String(data.recipientDisplayName || defaults.recipientDisplayName).trim() || defaults.recipientDisplayName,
-      bankAccountNumber: String(data.bankAccountNumber || defaults.bankAccountNumber).trim() || defaults.bankAccountNumber,
-      promptPayPhoneNumber: String(data.promptPayPhoneNumber || '').trim(),
-      promptPayNationalIdOrTaxId:
-        String(data.promptPayNationalIdOrTaxId || defaults.promptPayNationalIdOrTaxId).trim() || defaults.promptPayNationalIdOrTaxId,
-    };
+    return normalizePaymentCollectionSettings(snapshot.data() || defaults);
   } catch (error) {
     logger.warn('Failed to read payment config. Falling back to defaults.', {
       message: error instanceof Error ? error.message : String(error),
@@ -317,11 +350,30 @@ function namePartiallyMatches(actualValue, expectedValue) {
 }
 
 function buildExpectedReceiverTargets(settings) {
-  return [
+  const defaults = defaultPaymentCollectionSettings();
+  const targets = new Set();
+
+  for (const value of [
     settings.bankAccountNumber,
     settings.promptPayPhoneNumber,
     settings.promptPayNationalIdOrTaxId,
-  ].map((value) => normalizeDigits(value)).filter(Boolean);
+    defaults.promptPayNationalIdOrTaxId,
+  ]) {
+    const digits = normalizeDigits(value);
+    if (!digits) {
+      continue;
+    }
+    targets.add(digits);
+    if (isPromptPayPhoneDigits(digits)) {
+      const local = digits.startsWith('0') ? digits.slice(1) : digits;
+      targets.add(`66${local}`);
+      if (!digits.startsWith('0')) {
+        targets.add(`0${digits}`);
+      }
+    }
+  }
+
+  return [...targets];
 }
 
 function validateSlipReceiver(providerPayload, settings) {
@@ -2421,6 +2473,138 @@ exports.reverseGeocodeDeliveryLocation = onCall(
   },
 );
 
+async function fetchGoogleDrivingDirectionsRoute({
+  apiKey,
+  originLatitude,
+  originLongitude,
+  destinationLatitude,
+  destinationLongitude,
+}) {
+  const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
+  url.searchParams.set('origin', `${originLatitude},${originLongitude}`);
+  url.searchParams.set(
+    'destination',
+    `${destinationLatitude},${destinationLongitude}`,
+  );
+  url.searchParams.set('mode', 'driving');
+  url.searchParams.set('language', 'th');
+  url.searchParams.set('region', 'th');
+  url.searchParams.set('key', apiKey);
+
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    logger.error('fetchGoogleDrivingDirectionsRoute network failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ok: false,
+      status: 'NETWORK_ERROR',
+      errorMessage: 'network failed',
+    };
+  }
+
+  const payload = await response.json().catch(() => null);
+  const status = String(payload?.status || '').trim();
+  if (!response.ok || status !== 'OK') {
+    logger.warn('fetchGoogleDrivingDirectionsRoute google response not OK', {
+      httpStatus: response.status,
+      googleStatus: status,
+      errorMessage: payload?.error_message,
+    });
+    return {
+      ok: false,
+      status: status || String(response.status),
+      errorMessage: String(payload?.error_message || '').trim(),
+    };
+  }
+
+  const route = Array.isArray(payload?.routes) ? payload.routes[0] : null;
+  const leg = Array.isArray(route?.legs) ? route.legs[0] : null;
+  const encodedPolyline = String(route?.overview_polyline?.points || '').trim();
+  const distanceMeters = Number(leg?.distance?.value || 0);
+  const durationSeconds = Number(leg?.duration?.value || 0);
+
+  if (!encodedPolyline || !Number.isFinite(distanceMeters) || distanceMeters <= 0) {
+    return {
+      ok: false,
+      status: 'NO_ROUTE',
+      errorMessage: 'missing route geometry',
+    };
+  }
+
+  return {
+    ok: true,
+    distanceMeters: Math.round(distanceMeters),
+    durationSeconds: Math.max(0, Math.round(durationSeconds)),
+    encodedPolyline,
+    provider: 'google_directions',
+  };
+}
+
+exports.computeRouteMetrics = onCall(
+  {
+    region: DEFAULT_REGION,
+    secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนคำนวณเส้นทาง');
+    }
+
+    const originLatitude = parseNumber(request.data?.originLatitude);
+    const originLongitude = parseNumber(request.data?.originLongitude);
+    const destinationLatitude = parseNumber(request.data?.destinationLatitude);
+    const destinationLongitude = parseNumber(request.data?.destinationLongitude);
+
+    if (
+      !Number.isFinite(originLatitude) ||
+      !Number.isFinite(originLongitude) ||
+      !Number.isFinite(destinationLatitude) ||
+      !Number.isFinite(destinationLongitude) ||
+      originLatitude < -90 ||
+      originLatitude > 90 ||
+      destinationLatitude < -90 ||
+      destinationLatitude > 90 ||
+      originLongitude < -180 ||
+      originLongitude > 180 ||
+      destinationLongitude < -180 ||
+      destinationLongitude > 180
+    ) {
+      throw new HttpsError('invalid-argument', 'พิกัดเส้นทางไม่ถูกต้อง');
+    }
+
+    const apiKey = readRequiredConfiguredSecret(
+      GOOGLE_GEOCODING_API_KEY_SECRET,
+      'GOOGLE_GEOCODING_API_KEY',
+      'Google Directions',
+    );
+
+    const route = await fetchGoogleDrivingDirectionsRoute({
+      apiKey,
+      originLatitude,
+      originLongitude,
+      destinationLatitude,
+      destinationLongitude,
+    });
+
+    if (!route.ok) {
+      throw new HttpsError(
+        'unavailable',
+        route.errorMessage || 'คำนวณเส้นทางจาก Google ไม่สำเร็จ',
+      );
+    }
+
+    return {
+      distanceMeters: route.distanceMeters,
+      durationSeconds: route.durationSeconds,
+      encodedPolyline: route.encodedPolyline,
+      provider: route.provider,
+    };
+  },
+);
+
 exports.verifyOrderPaymentSlip = onCall(
   {
     region: DEFAULT_REGION,
@@ -3616,14 +3800,27 @@ exports.pushAppNotification = onDocumentCreated(
       riderNotifyReady === 'true' &&
       !isChatNotification &&
       action !== 'admin_announcement';
+    const isVan3LightStatusAlert =
+      targetApp === 'van3' &&
+      (action === 'shop_accepted_order' ||
+        action === 'shop_rejected_order' ||
+        action === 'payout_pending' ||
+        action === 'payout_paid');
+    const isVan1LightPayoutAlert =
+      targetApp === 'van1' &&
+      (action === 'payout_pending' || action === 'payout_paid');
     const isDataOnlyUrgentAlert = isVan1UrgentOrderAlert || isVan3UrgentOrderAlert;
     const includeNotificationPayload = !isChatNotification && !isDataOnlyUrgentAlert;
     const androidChannelId =
       action === 'admin_announcement' && targetApp === 'van3'
         ? 'rider_announcements'
-        : targetApp === 'van3'
-          ? 'rider_jobs_urgent_sound'
-          : 'order_channel';
+        : isVan3LightStatusAlert
+          ? 'rider_status_updates'
+          : isVan1LightPayoutAlert
+            ? 'order_channel'
+            : targetApp === 'van3'
+              ? 'rider_jobs_urgent_sound'
+              : 'order_channel';
     const message = {
       token,
       ...(includeNotificationPayload

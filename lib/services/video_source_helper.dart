@@ -1,4 +1,5 @@
 import 'package:better_player/better_player.dart';
+import 'package:flutter/foundation.dart';
 
 import 'media_cache_service.dart';
 
@@ -24,6 +25,9 @@ class VideoSourceHelper {
 
   static Future<String> resolveMediaUrl(String url) async {
     if (!isNetworkUrl(url)) {
+      return url;
+    }
+    if (kIsWeb) {
       return url;
     }
     final cachedPath = await MediaCacheService.instance.getCachedPath(url);

@@ -143,11 +143,20 @@ class _CatalogProductSearchScreenState
                   itemCount: products.length,
                   itemBuilder: (context, index) {
                     final product = products[index];
+                    final shopDistanceKm = computeCatalogShopDistanceKm(
+                      customerLatitude: widget.customerLatitude,
+                      customerLongitude: widget.customerLongitude,
+                      shopLatitude: product.shopLatitude,
+                      shopLongitude: product.shopLongitude,
+                    );
                     return CatalogProductCard(
                       product: product,
                       shopProducts: products,
                       shopLatitude: product.shopLatitude,
                       shopLongitude: product.shopLongitude,
+                      shopDistanceKm: shopDistanceKm,
+                      customerLatitude: widget.customerLatitude,
+                      customerLongitude: widget.customerLongitude,
                       onConfirmOrder: widget.onConfirmOrder,
                       onNavigateToCart: widget.onNavigateToCart,
                     );

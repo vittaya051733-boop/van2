@@ -37,10 +37,16 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCuGZF0-EUBTuARrToDWQM5pNBMNDg2yYU',
-    appId: '1:802503541368:android:c8333c4310663e19f6a38d',
+    appId: String.fromEnvironment(
+      'FIREBASE_ANDROID_APP_ID',
+      defaultValue: '1:802503541368:android:8512943c62753f90f6a38d',
+    ),
     messagingSenderId: '802503541368',
     projectId: 'van-merchant',
-    storageBucket: 'van-merchant-van2-storage-802503541368',
+    storageBucket: String.fromEnvironment(
+      'FIREBASE_ANDROID_STORAGE_BUCKET',
+      defaultValue: 'van-merchant-van2-storage-802503541368',
+    ),
   );
 
   static const FirebaseOptions ios = FirebaseOptions(

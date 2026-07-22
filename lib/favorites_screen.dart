@@ -57,6 +57,8 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         context: context,
         products: <PublicCatalogProduct>[product],
         initialIndex: 0,
+        customerLatitude: widget.customerLatitude,
+        customerLongitude: widget.customerLongitude,
         onConfirmOrder: widget.onConfirmOrder,
         onNavigateToCart: widget.onNavigateToCart,
       );

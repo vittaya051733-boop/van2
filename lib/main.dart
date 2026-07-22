@@ -10,7 +10,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
@@ -49,9 +48,17 @@ import 'shop_map_screen.dart';
 import 'shop_qr_scanner_screen.dart';
 import 'storage_helper.dart';
 import 'travel_planner_screen.dart';
+import 'travel_tracking_screen.dart';
+import 'travel_vehicle_type.dart';
+import 'utils/customer_location.dart';
 
 const bool kAppCheckForceDebug = bool.fromEnvironment(
   'APP_CHECK_DEBUG',
+  defaultValue: false,
+);
+
+const bool kDebugMapPicker = bool.fromEnvironment(
+  'DEBUG_MAP_PICKER',
   defaultValue: false,
 );
 
@@ -161,87 +168,28 @@ bool supportsEmbeddedMap() {
   };
 }
 
-Future<PickedLocation> buildPickedLocation({
-  required double latitude,
-  required double longitude,
-  required String fallbackTitle,
-}) async {
-  try {
-    final placemarks = await placemarkFromCoordinates(latitude, longitude);
-    if (placemarks.isNotEmpty) {
-      final place = placemarks.first;
-      final titleParts = <String>[
-        if ((place.name ?? '').trim().isNotEmpty) place.name!.trim(),
-        if ((place.subLocality ?? '').trim().isNotEmpty)
-          place.subLocality!.trim(),
-      ];
-      final subtitleParts = <String>[
-        if ((place.locality ?? '').trim().isNotEmpty) place.locality!.trim(),
-        if ((place.administrativeArea ?? '').trim().isNotEmpty)
-          place.administrativeArea!.trim(),
-        if ((place.country ?? '').trim().isNotEmpty) place.country!.trim(),
-      ];
+class _VerifiedSlipCheckout {
+  const _VerifiedSlipCheckout({
+    required this.paymentGroupId,
+    required this.storagePath,
+    required this.downloadUrl,
+    required this.fileName,
+    required this.sizeBytes,
+    required this.verificationFeedbackId,
+    required this.verificationMessage,
+    this.contentType,
+    this.verifiedSlipAmount,
+  });
 
-      return PickedLocation(
-        latitude: latitude,
-        longitude: longitude,
-        title: titleParts.isEmpty ? fallbackTitle : titleParts.join(', '),
-        subtitle: subtitleParts.isEmpty ? null : subtitleParts.join(', '),
-      );
-    }
-  } catch (_) {
-    // Fall back to coordinates when reverse geocoding is unavailable.
-  }
-
-  return PickedLocation(
-    latitude: latitude,
-    longitude: longitude,
-    title: fallbackTitle,
-  );
-}
-
-Future<PickedLocation?> tryDetectCurrentLocation() async {
-  final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) {
-    return null;
-  }
-
-  var permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-    if (permission == LocationPermission.denied) {
-      return null;
-    }
-  }
-
-  if (permission == LocationPermission.deniedForever) {
-    return null;
-  }
-
-  if (!kIsWeb) {
-    // Emulator can return a valid cached fix faster than a fresh GNSS query.
-    final lastKnown = await Geolocator.getLastKnownPosition();
-    if (lastKnown != null) {
-      return buildPickedLocation(
-        latitude: lastKnown.latitude,
-        longitude: lastKnown.longitude,
-        fallbackTitle: 'พิกัดล่าสุดของฉัน',
-      );
-    }
-  }
-
-  final position = await Geolocator.getCurrentPosition(
-    locationSettings: LocationSettings(
-      accuracy: LocationAccuracy.medium,
-      timeLimit: const Duration(seconds: 15),
-    ),
-  );
-
-  return buildPickedLocation(
-    latitude: position.latitude,
-    longitude: position.longitude,
-    fallbackTitle: 'พิกัดปัจจุบันของฉัน',
-  );
+  final String paymentGroupId;
+  final String storagePath;
+  final String downloadUrl;
+  final String fileName;
+  final String? contentType;
+  final int sizeBytes;
+  final String verificationFeedbackId;
+  final double? verifiedSlipAmount;
+  final String verificationMessage;
 }
 
 class MyApp extends StatefulWidget {
@@ -294,7 +242,12 @@ class _MyAppState extends State<MyApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF57C00)),
         scaffoldBackgroundColor: const Color(0xFFFFF7ED),
       ),
-      home: const SplashScreen(),
+      home: kDebugMapPicker
+          ? const MapPickerScreen(
+              title: 'Debug Map Picker',
+              confirmLabel: 'ยืนยัน',
+            )
+          : const SplashScreen(),
     );
   }
 }
@@ -947,15 +900,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  static const PickedLocation _defaultDestination = PickedLocation(
-    latitude: 13.7563,
-    longitude: 100.5018,
-    title: 'ตลาดแว๊น',
-    subtitle: 'จุดหมายเริ่มต้นในระบบ',
-  );
-
   late PickedLocation _userLocation;
-  PickedLocation _destinationLocation = _defaultDestination;
+  PickedLocation? _destinationLocation;
   TravelRideSelection? _travelRideSelection;
   int _selectedBottomTab = 0;
   List<String> _roadmapFocusOrderIds = const <String>[];
@@ -2005,23 +1951,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       throw Exception('ไฟล์สลิปว่างเปล่า');
     }
 
-    final creation = await _createCheckoutOrders(
-      user: user,
-      paymentMethod: 'promptpay_qr',
-      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
-      paymentStatus: 'awaiting_slip_review',
-      paymentStatusLabel: 'รอตรวจสลิป',
-      auditSource: 'promptpay_slip_dialog',
-      riderNotifyReady: false,
-      notifyRider: false,
-      createdEventLabel: 'ลูกค้าสร้างออเดอร์และแนบสลิปรอตรวจ',
-      checkoutContext: request.checkoutContext,
-    );
-
-    if (creation.orderIds.isEmpty) {
-      throw Exception('ไม่สามารถสร้างออเดอร์ได้');
-    }
-
     final paymentGroupId = 'PAY-${DateTime.now().millisecondsSinceEpoch}';
     final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
     final storagePath =
@@ -2036,48 +1965,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             customMetadata: <String, String>{
               'uploadedBy': user.uid,
               'paymentGroupId': paymentGroupId,
-              'orderIds': creation.orderIds.join(','),
+              'checkoutType': 'local_cart',
             },
           ),
         );
     final downloadUrl = await uploadTask.ref.getDownloadURL();
 
-    await _attachSlipToOrders(
-      orderIds: creation.orderIds,
-      paymentGroupId: paymentGroupId,
+    final verification = await _verifyStandalonePaymentSlip(
       storagePath: storagePath,
-      downloadUrl: downloadUrl,
+      paymentGroupId: paymentGroupId,
       fileName: sanitizedFileName,
+      expectedAmount: request.grandTotal,
       contentType: request.contentType,
-      sizeBytes: request.sizeBytes,
-      uploadedBy: user.uid,
-      combinedExpectedAmount: creation.combinedGrandTotal,
     );
 
-    final callable = FirebaseFunctions.instanceFor(
-      region: 'asia-southeast1',
-    ).httpsCallable('verifyOrderPaymentSlip');
-    final response = await callable.call(<String, dynamic>{
-      'orderIds': creation.orderIds,
-      'storagePath': storagePath,
-      'paymentGroupId': paymentGroupId,
-      'fileName': sanitizedFileName,
-      if (request.contentType != null) 'contentType': request.contentType,
-    });
+    if (verification.status != 'verified') {
+      return PaymentSlipSubmissionResult(
+        orderIds: const <String>[],
+        verificationStatus: verification.status,
+        message: verification.message.isEmpty
+            ? 'สลิปยังไม่ผ่านการตรวจสอบ กรุณาตรวจสอบยอดและบัญชีผู้รับแล้วลองใหม่อีกครั้ง'
+            : verification.message,
+      );
+    }
 
-    final payload = response.data;
-    final data = payload is Map
-        ? Map<String, dynamic>.from(payload)
-        : const <String, dynamic>{};
-    final status = (data['status'] as String?)?.trim() ?? 'submitted';
-    final message = (data['message'] as String?)?.trim();
+    final creation = await _createCheckoutOrders(
+      user: user,
+      paymentMethod: 'promptpay_qr',
+      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
+      paymentStatus: 'verified',
+      paymentStatusLabel: 'ชำระเงินแล้ว',
+      auditSource: 'promptpay_slip_dialog',
+      riderNotifyReady: true,
+      notifyRider: true,
+      createdEventLabel: 'ลูกค้าชำระเงินและสร้างออเดอร์แล้ว',
+      checkoutContext: request.checkoutContext,
+      verifiedSlip: _VerifiedSlipCheckout(
+        paymentGroupId: paymentGroupId,
+        storagePath: storagePath,
+        downloadUrl: downloadUrl,
+        fileName: sanitizedFileName,
+        contentType: request.contentType,
+        sizeBytes: request.sizeBytes,
+        verificationFeedbackId: verification.feedbackId,
+        verifiedSlipAmount: verification.verifiedSlipAmount,
+        verificationMessage: verification.message,
+      ),
+    );
+
+    if (creation.orderIds.isEmpty) {
+      throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+    }
 
     return PaymentSlipSubmissionResult(
       orderIds: creation.orderIds,
-      verificationStatus: status,
-      message: message == null || message.isEmpty
-          ? 'แนบสลิปเรียบร้อยแล้ว'
-          : message,
+      verificationStatus: 'verified',
+      message: verification.message.isEmpty
+          ? 'ตรวจสลิปผ่านและสร้างออเดอร์แล้ว'
+          : '${verification.message}\nสร้างออเดอร์แล้ว ${creation.orderIds.length} รายการ',
     );
   }
 
@@ -2088,23 +2033,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final user = await _requireCheckoutUser();
     if (request.bytes.isEmpty) {
       throw Exception('ไฟล์สลิปว่างเปล่า');
-    }
-
-    final creation = await _createTravelOrder(
-      user: user,
-      request: travel,
-      paymentMethod: 'promptpay_qr',
-      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
-      paymentStatus: 'awaiting_slip_review',
-      paymentStatusLabel: 'รอตรวจสลิป',
-      auditSource: 'travel_promptpay_slip_dialog',
-      riderNotifyReady: false,
-      notifyRider: false,
-      createdEventLabel: 'ลูกค้าสร้างคำขอเดินทางและแนบสลิปรอตรวจ',
-    );
-
-    if (creation.orderIds.isEmpty) {
-      throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
     }
 
     final paymentGroupId =
@@ -2122,49 +2050,99 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             customMetadata: <String, String>{
               'uploadedBy': user.uid,
               'paymentGroupId': paymentGroupId,
-              'orderIds': creation.orderIds.join(','),
               'orderType': 'travel_passenger',
             },
           ),
         );
     final downloadUrl = await uploadTask.ref.getDownloadURL();
 
-    await _attachSlipToOrders(
-      orderIds: creation.orderIds,
-      paymentGroupId: paymentGroupId,
+    final verification = await _verifyStandalonePaymentSlip(
       storagePath: storagePath,
-      downloadUrl: downloadUrl,
+      paymentGroupId: paymentGroupId,
       fileName: sanitizedFileName,
+      expectedAmount: request.grandTotal,
       contentType: request.contentType,
-      sizeBytes: request.sizeBytes,
-      uploadedBy: user.uid,
-      combinedExpectedAmount: creation.combinedGrandTotal,
     );
 
+    if (verification.status != 'verified') {
+      return PaymentSlipSubmissionResult(
+        orderIds: const <String>[],
+        verificationStatus: verification.status,
+        message: verification.message.isEmpty
+            ? 'สลิปยังไม่ผ่านการตรวจสอบ กรุณาตรวจสอบยอดและบัญชีผู้รับแล้วลองใหม่อีกครั้ง'
+            : verification.message,
+      );
+    }
+
+    final creation = await _createTravelOrder(
+      user: user,
+      request: travel,
+      paymentMethod: 'promptpay_qr',
+      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
+      paymentStatus: 'verified',
+      paymentStatusLabel: 'ชำระเงินแล้ว',
+      auditSource: 'travel_promptpay_slip_dialog',
+      riderNotifyReady: true,
+      notifyRider: true,
+      createdEventLabel: 'ลูกค้าชำระเงินและสร้างคำขอเดินทางแล้ว',
+      verifiedSlip: _VerifiedSlipCheckout(
+        paymentGroupId: paymentGroupId,
+        storagePath: storagePath,
+        downloadUrl: downloadUrl,
+        fileName: sanitizedFileName,
+        contentType: request.contentType,
+        sizeBytes: request.sizeBytes,
+        verificationFeedbackId: verification.feedbackId,
+        verifiedSlipAmount: verification.verifiedSlipAmount,
+        verificationMessage: verification.message,
+      ),
+    );
+
+    if (creation.orderIds.isEmpty) {
+      throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+    }
+
+    return PaymentSlipSubmissionResult(
+      orderIds: creation.orderIds,
+      verificationStatus: 'verified',
+      message: verification.message.isEmpty
+          ? 'ตรวจสลิปผ่านและสร้างคำขอเดินทางแล้ว'
+          : verification.message,
+    );
+  }
+
+  Future<({
+    String status,
+    String message,
+    String feedbackId,
+    double? verifiedSlipAmount,
+  })> _verifyStandalonePaymentSlip({
+    required String storagePath,
+    required String paymentGroupId,
+    required String fileName,
+    required double expectedAmount,
+    required String? contentType,
+  }) async {
     final callable = FirebaseFunctions.instanceFor(
       region: 'asia-southeast1',
-    ).httpsCallable('verifyOrderPaymentSlip');
+    ).httpsCallable('verifyStandalonePaymentSlip');
     final response = await callable.call(<String, dynamic>{
-      'orderIds': creation.orderIds,
       'storagePath': storagePath,
       'paymentGroupId': paymentGroupId,
-      'fileName': sanitizedFileName,
-      if (request.contentType != null) 'contentType': request.contentType,
+      'fileName': fileName,
+      'expectedAmount': expectedAmount,
+      if (contentType != null) 'contentType': contentType,
     });
 
     final payload = response.data;
     final data = payload is Map
         ? Map<String, dynamic>.from(payload)
         : const <String, dynamic>{};
-    final status = (data['status'] as String?)?.trim() ?? 'submitted';
-    final message = (data['message'] as String?)?.trim();
-
-    return PaymentSlipSubmissionResult(
-      orderIds: creation.orderIds,
-      verificationStatus: status,
-      message: message == null || message.isEmpty
-          ? 'แนบสลิปการเดินทางเรียบร้อยแล้ว'
-          : message,
+    return (
+      status: (data['status'] as String?)?.trim() ?? 'error',
+      message: (data['message'] as String?)?.trim() ?? '',
+      feedbackId: (data['feedbackId'] as String?)?.trim() ?? paymentGroupId,
+      verifiedSlipAmount: (data['verifiedSlipAmount'] as num?)?.toDouble(),
     );
   }
 
@@ -2175,59 +2153,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return 'slip_${DateTime.now().millisecondsSinceEpoch}.jpg';
     }
     return safe;
-  }
-
-  Future<void> _attachSlipToOrders({
-    required List<String> orderIds,
-    required String paymentGroupId,
-    required String storagePath,
-    required String downloadUrl,
-    required String fileName,
-    required String? contentType,
-    required int sizeBytes,
-    required String uploadedBy,
-    required double combinedExpectedAmount,
-  }) async {
-    final ordersRef = FirebaseFirestore.instance.collection('orders');
-
-    for (final orderId in orderIds) {
-      await ordersRef.doc(orderId).set(<String, dynamic>{
-        'paymentGroupId': paymentGroupId,
-        'paymentSubmittedAt': FieldValue.serverTimestamp(),
-        'paymentStatus': 'awaiting_slip_review',
-        'paymentStatusLabel': 'รอตรวจสลิป',
-        'paymentSlip': <String, dynamic>{
-          'storagePath': storagePath,
-          'downloadUrl': downloadUrl,
-          'fileName': fileName,
-          'contentType': contentType,
-          'sizeBytes': sizeBytes,
-          'uploadedBy': uploadedBy,
-          'uploadedAt': FieldValue.serverTimestamp(),
-        },
-        'paymentVerification': <String, dynamic>{
-          'provider': 'slipok',
-          'providerLabel': 'Slip OK',
-          'status': 'processing',
-          'statusLabel': 'กำลังส่งตรวจสลิป',
-          'requestedAt': FieldValue.serverTimestamp(),
-          'paymentGroupId': paymentGroupId,
-          'expectedCombinedAmount': combinedExpectedAmount,
-          'apiEndpoint': 'https://api.slipok.com/api/line/apikey/64492',
-        },
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      await ordersRef.doc(orderId).collection('timeline').add(<String, dynamic>{
-        'event': 'payment_slip_submitted',
-        'eventLabel': 'ลูกค้าแนบสลิปเพื่อรอตรวจสอบ',
-        'paymentGroupId': paymentGroupId,
-        'orderId': orderId,
-        'actorRole': 'customer',
-        'actorId': uploadedBy,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    }
   }
 
   Future<void> _recordCheckoutDiscounts({
@@ -2265,6 +2190,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required bool notifyRider,
     required String createdEventLabel,
     CartCheckoutContext? checkoutContext,
+    _VerifiedSlipCheckout? verifiedSlip,
   }) async {
     if (_cartItems.isEmpty) {
       throw Exception('ไม่มีสินค้าในตะกร้า');
@@ -2315,6 +2241,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (checkoutContext?.couponCode != null &&
             checkoutContext!.couponCode!.isNotEmpty)
           'couponCode': checkoutContext.couponCode,
+        if (verifiedSlip != null) ...<String, dynamic>{
+          'paymentGroupId': verifiedSlip.paymentGroupId,
+          'verificationFeedbackId': verifiedSlip.verificationFeedbackId,
+          'slipStoragePath': verifiedSlip.storagePath,
+          'slipDownloadUrl': verifiedSlip.downloadUrl,
+          'slipFileName': verifiedSlip.fileName,
+          if (verifiedSlip.contentType != null)
+            'slipContentType': verifiedSlip.contentType,
+          'slipSizeBytes': verifiedSlip.sizeBytes,
+          if (verifiedSlip.verifiedSlipAmount != null)
+            'verifiedSlipAmount': verifiedSlip.verifiedSlipAmount,
+          'verificationMessage': verifiedSlip.verificationMessage,
+        },
       });
 
       final payload = response.data is Map
@@ -2375,12 +2314,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required bool riderNotifyReady,
     required bool notifyRider,
     required String createdEventLabel,
+    _VerifiedSlipCheckout? verifiedSlip,
   }) async {
-    final fare = _estimateTravelFare(
-      pickupLatitude: request.pickup.latitude,
-      pickupLongitude: request.pickup.longitude,
-      destinationLatitude: request.destination.latitude,
-      destinationLongitude: request.destination.longitude,
+    final fare = ShippingPricingPolicy.computeTravelFareForVehicle(
+      request.distanceKm,
+      request.rideSelection.vehicleType,
     );
     final riderSearch = await _findNearestPassengerRider(
       pickupLatitude: request.pickup.latitude,
@@ -2393,17 +2331,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final orderCode =
         'TRV-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${orderRef.id.substring(0, 6).toUpperCase()}';
     final hasAssignedRider = assignedRider != null;
-    final initialOrderStatus = hasAssignedRider
-        ? (notifyRider ? 'pending' : 'awaiting_payment_slip_review')
-        : (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review');
-    final initialStatusLabel = hasAssignedRider
-        ? (notifyRider
-              ? 'pending_customer_confirmation'
-              : 'awaiting_payment_slip_review')
-        : (notifyRider
-              ? 'awaiting_nearest_rider'
-              : 'awaiting_payment_slip_review');
-    final shouldAssignRiderImmediately = notifyRider;
+    final isVerifiedPayment = paymentStatus == 'verified';
+    final initialOrderStatus = isVerifiedPayment
+        ? (hasAssignedRider ? 'pending' : 'awaiting_rider')
+        : hasAssignedRider
+            ? (notifyRider ? 'pending' : 'awaiting_payment_slip_review')
+            : (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review');
+    final initialStatusLabel = isVerifiedPayment
+        ? (hasAssignedRider
+            ? 'pending_customer_confirmation'
+            : 'awaiting_nearest_rider')
+        : hasAssignedRider
+            ? (notifyRider
+                ? 'pending_customer_confirmation'
+                : 'awaiting_payment_slip_review')
+            : (notifyRider
+                ? 'awaiting_nearest_rider'
+                : 'awaiting_payment_slip_review');
+    final shouldAssignRiderImmediately = notifyRider && assignedRider != null;
 
     await orderRef.set(<String, dynamic>{
       'orderId': orderRef.id,
@@ -2414,11 +2359,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'statusLabel': initialStatusLabel,
       'customerConfirmed': true,
       'customerConfirmedAt': FieldValue.serverTimestamp(),
-      'riderNotifyReady': riderNotifyReady,
+      'riderNotifyReady': isVerifiedPayment ? hasAssignedRider : riderNotifyReady,
       'paymentMethod': paymentMethod,
       'paymentMethodLabel': paymentMethodLabel,
       'paymentStatus': paymentStatus,
       'paymentStatusLabel': paymentStatusLabel,
+      if (verifiedSlip != null) ...<String, dynamic>{
+        'paymentGroupId': verifiedSlip.paymentGroupId,
+        'paymentSubmittedAt': FieldValue.serverTimestamp(),
+        'paymentSlip': <String, dynamic>{
+          'storagePath': verifiedSlip.storagePath,
+          'downloadUrl': verifiedSlip.downloadUrl,
+          'fileName': verifiedSlip.fileName,
+          'contentType': verifiedSlip.contentType,
+          'sizeBytes': verifiedSlip.sizeBytes,
+          'uploadedBy': user.uid,
+          'uploadedAt': FieldValue.serverTimestamp(),
+        },
+        'paymentVerification': <String, dynamic>{
+          'provider': 'slipok',
+          'providerLabel': 'Slip OK',
+          'feedbackId': verifiedSlip.verificationFeedbackId,
+          'paymentGroupId': verifiedSlip.paymentGroupId,
+          'expectedCombinedAmount': fare,
+          if (verifiedSlip.verifiedSlipAmount != null)
+            'verifiedSlipAmount': verifiedSlip.verifiedSlipAmount,
+          'status': 'verified',
+          'statusLabel': 'ตรวจสอบสลิปผ่าน',
+          'message': verifiedSlip.verificationMessage,
+          'checkedAt': FieldValue.serverTimestamp(),
+        },
+      },
       'sourceApp': 'van2_customer',
       'customerId': user.uid,
       'customerEmail': user.email,
@@ -2434,12 +2405,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'shopAddress': request.pickup.subtitle,
       'shopLatitude': request.pickup.latitude,
       'shopLongitude': request.pickup.longitude,
-      'driverId': shouldAssignRiderImmediately ? assignedRider?.riderId : null,
+      'driverId': shouldAssignRiderImmediately ? assignedRider.riderId : null,
       'driverName': null,
       'driverPhone': null,
-      'assignedRiderAt': !shouldAssignRiderImmediately || assignedRider == null
-          ? null
-          : FieldValue.serverTimestamp(),
+      'assignedRiderAt': shouldAssignRiderImmediately
+          ? FieldValue.serverTimestamp()
+          : null,
       'customerLocation': <String, dynamic>{
         'latitude': request.destination.latitude,
         'longitude': request.destination.longitude,
@@ -2538,17 +2509,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               'targetApp': 'van3',
               'recipientUid': assignedRider.riderId,
               'orderId': orderRef.id,
-              'title': 'มีคำขอเดินทางใหม่',
+              'title': isVerifiedPayment
+                  ? 'ชำระเงินแล้ว มีงานเดินทางใหม่'
+                  : 'มีคำขอเดินทางใหม่',
               'body': orderCode.isNotEmpty
-                  ? 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
+                  ? isVerifiedPayment
+                      ? 'งานเดินทาง $orderCode ชำระเงินแล้ว'
+                      : 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
                   : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
               'read': false,
               'createdAt': FieldValue.serverTimestamp(),
               'source': 'van2_customer',
               'sourceApp': 'van2_customer',
-              'action': 'travel_order_created_customer_confirmed',
+              'action': isVerifiedPayment
+                  ? 'order_payment_verified'
+                  : 'travel_order_created_customer_confirmed',
               'customerConfirmed': true,
-              'riderNotifyReady': riderNotifyReady,
+              'riderNotifyReady': isVerifiedPayment ? true : riderNotifyReady,
             })
             .catchError(
               (_) => FirebaseFirestore.instance
@@ -2568,22 +2545,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return (orderIds: <String>[orderRef.id], combinedGrandTotal: fare);
-  }
-
-  double _estimateTravelFare({
-    required double pickupLatitude,
-    required double pickupLongitude,
-    required double destinationLatitude,
-    required double destinationLongitude,
-  }) {
-    final meters = Geolocator.distanceBetween(
-      pickupLatitude,
-      pickupLongitude,
-      destinationLatitude,
-      destinationLongitude,
-    );
-    final km = meters <= 0 ? 0.0 : meters / 1000.0;
-    return ShippingPricingPolicy.computeTravelFare(km);
   }
 
   void _focusRoadmapOrders(List<String> orderIds) {
@@ -2609,6 +2570,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    final orderId = orderIds.first.trim();
+    if (orderId.isNotEmpty) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('orders')
+            .doc(orderId)
+            .get();
+        final data = doc.data();
+        final isTravel = data?['orderType'] == 'travel_passenger' ||
+            data?['serviceType'] == 'travel_passenger';
+        if (isTravel && mounted) {
+          showTravelTrackingScreen(context: context, orderId: orderId);
+        }
+      } catch (_) {
+        // Fall back to roadmap tab only.
+      }
+    }
+
     _focusRoadmapOrders(orderIds);
   }
 
@@ -2618,14 +2597,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required TravelVehicleType vehicleType,
   }) async {
     try {
-      const freshLocationThresholdMinutes = 10;
-      final snapshot = await FirebaseFirestore.instance
-          .collection('riders')
-          .where('passengerReady', isEqualTo: true)
-          .get();
-      final singleOnlineRiderId = snapshot.docs.length == 1
-          ? snapshot.docs.first.id
-          : null;
+      final docs = await fetchTravelAvailableRiders();
+      final singleOnlineRiderId = docs.length == 1 ? docs.first.id : null;
 
       final candidates = <_RiderDistance>[];
       final fallbackCandidates = <_RiderDistance>[];
@@ -2635,9 +2608,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         excludedBreakdown[reason] = (excludedBreakdown[reason] ?? 0) + 1;
       }
 
-      for (final doc in snapshot.docs) {
+      for (final doc in docs) {
         final data = doc.data();
-        final riderVehicleType = _readPassengerVehicleType(data);
+        if (!isRiderAvailableForTravel(data)) {
+          addExcludedReason('not_travel_available');
+          continue;
+        }
+
+        final riderVehicleType = readRiderTravelVehicleType(data);
         if (riderVehicleType != vehicleType) {
           addExcludedReason('vehicle_type_mismatch');
           continue;
@@ -2673,29 +2651,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
         fallbackCandidates.add(riderDistance);
 
-        final locationStatus =
-            (data['locationStatus'] as String?)?.trim() ?? '';
-        final locationUpdatedAtRaw = data['locationUpdatedAt'];
-        final updatedAtRaw = data['updatedAt'];
-        final locationUpdatedAt = locationUpdatedAtRaw is Timestamp
-            ? locationUpdatedAtRaw.toDate()
-            : (updatedAtRaw is Timestamp ? updatedAtRaw.toDate() : null);
-
-        if (locationStatus == 'offline') {
-          addExcludedReason('offline');
-          continue;
-        }
-
-        if (locationUpdatedAt == null) {
-          addExcludedReason('missing_location_timestamp');
-          continue;
-        }
-
-        final ageMinutes = DateTime.now()
-            .difference(locationUpdatedAt)
-            .inMinutes;
-        if (ageMinutes > freshLocationThresholdMinutes) {
-          addExcludedReason('stale_location');
+        if (!isRiderTravelLocationFresh(data)) {
+          addExcludedReason('stale_or_offline_location');
           continue;
         }
 
@@ -2707,13 +2664,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _RiderSearchResult(
             rider: fallbackCandidates.first,
             searchedRadiusKm: 10,
-            onlineRiderCount: snapshot.docs.length,
+            onlineRiderCount: docs.length,
             eligibleRiderCount: 1,
-            excludedRiderCount: snapshot.docs.length > 1
-                ? snapshot.docs.length - 1
-                : 0,
+            excludedRiderCount: docs.length > 1 ? docs.length - 1 : 0,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-            reason: 'single_passenger_ready_fallback',
+            reason: 'single_travel_ready_fallback',
           );
         }
 
@@ -2721,24 +2676,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _RiderSearchResult(
             rider: _RiderDistance(riderId: singleOnlineRiderId, distanceKm: 0),
             searchedRadiusKm: 10,
-            onlineRiderCount: snapshot.docs.length,
+            onlineRiderCount: docs.length,
             eligibleRiderCount: 1,
             excludedRiderCount: 0,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-            reason: 'single_passenger_ready_no_location_fallback',
+            reason: 'single_travel_ready_no_location_fallback',
           );
         }
 
         return _RiderSearchResult(
           rider: null,
           searchedRadiusKm: 10,
-          onlineRiderCount: snapshot.docs.length,
+          onlineRiderCount: docs.length,
           eligibleRiderCount: 0,
-          excludedRiderCount: snapshot.docs.length,
+          excludedRiderCount: docs.length,
           excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-          reason: snapshot.docs.isEmpty
-              ? 'no_passenger_ready_riders'
-              : 'no_eligible_passenger_riders',
+          reason: docs.isEmpty
+              ? 'no_travel_ready_riders'
+              : 'no_eligible_travel_riders',
         );
       }
 
@@ -2753,9 +2708,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _RiderSearchResult(
             rider: inRadius.first,
             searchedRadiusKm: radiusKm.toDouble(),
-            onlineRiderCount: snapshot.docs.length,
+            onlineRiderCount: docs.length,
             eligibleRiderCount: candidates.length,
-            excludedRiderCount: snapshot.docs.length - candidates.length,
+            excludedRiderCount: docs.length - candidates.length,
             excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
           );
         }
@@ -2766,11 +2721,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return _RiderSearchResult(
         rider: nearest.first,
         searchedRadiusKm: 10,
-        onlineRiderCount: snapshot.docs.length,
+        onlineRiderCount: docs.length,
         eligibleRiderCount: candidates.length,
-        excludedRiderCount: snapshot.docs.length - candidates.length,
+        excludedRiderCount: docs.length - candidates.length,
         excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-        reason: 'nearest_passenger_out_of_radius_fallback',
+        reason: 'nearest_travel_ready_out_of_radius_fallback',
       );
     } catch (e) {
       return _RiderSearchResult(
@@ -2783,38 +2738,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         reason: 'passenger_rider_query_failed:$e',
       );
     }
-  }
-
-  TravelVehicleType? _readPassengerVehicleType(Map<String, dynamic> data) {
-    final rawCandidates = <String?>[
-      data['vehicleType']?.toString(),
-      data['vehicle']?.toString(),
-      data['type']?.toString(),
-      data['vehicleCategory']?.toString(),
-    ];
-
-    for (final raw in rawCandidates) {
-      final normalized = raw?.trim().toLowerCase();
-      switch (normalized) {
-        case 'motorcycle':
-        case 'bike':
-        case 'motorbike':
-        case 'motorcycle_taxi':
-        case 'มอเตอร์ไซค์':
-          return TravelVehicleType.motorcycle;
-        case 'sedan':
-        case 'car':
-        case 'รถเก๋ง':
-          return TravelVehicleType.sedan;
-        case 'pickup':
-        case 'truck':
-        case 'กระบะ':
-        case 'รถกระบะ':
-          return TravelVehicleType.pickup;
-      }
-    }
-
-    return null;
   }
 
   bool _isValidRiderCoordinates(double latitude, double longitude) {

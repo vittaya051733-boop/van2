@@ -38,26 +38,83 @@ class PaymentCollectionSettings {
 
   factory PaymentCollectionSettings.fromFirestore(Map<String, dynamic>? data) {
     final source = data ?? const <String, dynamic>{};
-    return PaymentCollectionSettings(
-      recipientDisplayName: _readString(
-        source['recipientDisplayName'],
-        defaults.recipientDisplayName,
-      ),
-      bankName: _readString(source['bankName'], defaults.bankName),
-      bankAccountNumber: _readString(
-        source['bankAccountNumber'],
-        defaults.bankAccountNumber,
-      ),
-      promptPayPhoneNumber: _readOptionalString(source['promptPayPhoneNumber']),
-      promptPayNationalIdOrTaxId: _readOptionalString(
-        source['promptPayNationalIdOrTaxId'],
-      ),
-      merchantQrPayload: _readOptionalString(source['merchantQrPayload']),
-      slipProviderLabel: _readString(
-        source['slipProviderLabel'],
-        defaults.slipProviderLabel,
+    return normalizePromptPayFields(
+      PaymentCollectionSettings(
+        recipientDisplayName: _readString(
+          source['recipientDisplayName'],
+          defaults.recipientDisplayName,
+        ),
+        bankName: _readString(source['bankName'], defaults.bankName),
+        bankAccountNumber: _readString(
+          source['bankAccountNumber'],
+          defaults.bankAccountNumber,
+        ),
+        promptPayPhoneNumber: _readOptionalString(source['promptPayPhoneNumber']),
+        promptPayNationalIdOrTaxId: _readOptionalString(
+          source['promptPayNationalIdOrTaxId'],
+        ),
+        merchantQrPayload: _readOptionalString(source['merchantQrPayload']),
+        slipProviderLabel: _readString(
+          source['slipProviderLabel'],
+          defaults.slipProviderLabel,
+        ),
       ),
     );
+  }
+
+  /// Aligns with [normalizePaymentCollectionSettings] in Cloud Functions.
+  /// Moves 9–10 digit values stored in the national-id field to phone.
+  static PaymentCollectionSettings normalizePromptPayFields(
+    PaymentCollectionSettings source,
+  ) {
+    final phoneDigits = _normalizedPhoneDigits(source.promptPayPhoneNumber);
+    var nationalIdDigits = _normalizedNationalIdDigits(
+      source.promptPayNationalIdOrTaxId,
+    );
+
+    var resolvedPhone = phoneDigits;
+    if (resolvedPhone == null &&
+        nationalIdDigits == null &&
+        source.promptPayNationalIdOrTaxId != null) {
+      final rawNationalDigits = _digitsOnly(source.promptPayNationalIdOrTaxId!);
+      if (_isPromptPayPhoneDigits(rawNationalDigits)) {
+        resolvedPhone = rawNationalDigits;
+      }
+    }
+
+    return PaymentCollectionSettings(
+      recipientDisplayName: source.recipientDisplayName,
+      bankName: source.bankName,
+      bankAccountNumber: source.bankAccountNumber,
+      promptPayPhoneNumber: resolvedPhone,
+      promptPayNationalIdOrTaxId: nationalIdDigits,
+      merchantQrPayload: source.merchantQrPayload,
+      slipProviderLabel: source.slipProviderLabel,
+    );
+  }
+
+  static String _digitsOnly(String input) {
+    return input.replaceAll(RegExp(r'\D'), '');
+  }
+
+  static bool _isPromptPayPhoneDigits(String digits) {
+    return digits.length >= 9 && digits.length <= 10;
+  }
+
+  static String? _normalizedPhoneDigits(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    final digits = _digitsOnly(value);
+    return _isPromptPayPhoneDigits(digits) ? digits : null;
+  }
+
+  static String? _normalizedNationalIdDigits(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    final digits = _digitsOnly(value);
+    return digits.length == 13 ? digits : null;
   }
 
   static String _readString(Object? value, String fallback) {

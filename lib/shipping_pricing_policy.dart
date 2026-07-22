@@ -1,3 +1,17 @@
+import 'travel_vehicle_type.dart';
+
+class TravelFareQuote {
+  const TravelFareQuote({
+    required this.vehicleType,
+    required this.fare,
+  });
+
+  final TravelVehicleType vehicleType;
+  final double fare;
+
+  int get displayFare => fare.round();
+}
+
 class ShippingPricingPolicy {
   ShippingPricingPolicy._();
 
@@ -80,13 +94,44 @@ class ShippingPricingPolicy {
     );
   }
 
+  static const Map<TravelVehicleType, double> travelVehicleMultipliers =
+      <TravelVehicleType, double>{
+    TravelVehicleType.motorcycle: 1.0,
+    TravelVehicleType.sedan: 1.25,
+    TravelVehicleType.pickup: 1.45,
+  };
+
   static double computeTravelFare(double distanceKm) {
-    return _computeDistanceFee(
+    return computeTravelFareForVehicle(
+      distanceKm,
+      TravelVehicleType.motorcycle,
+    );
+  }
+
+  static double computeTravelFareForVehicle(
+    double distanceKm,
+    TravelVehicleType vehicleType,
+  ) {
+    final baseFare = _computeDistanceFee(
       distanceKm: distanceKm,
       baseFee: _travelBaseFee,
       perKmFee: _travelPerKmFee,
       minBillableKm: _travelMinBillableKm,
     );
+    final multiplier = travelVehicleMultipliers[vehicleType] ?? 1.0;
+    final fare = baseFare * multiplier;
+    return double.parse(fare.toStringAsFixed(2));
+  }
+
+  static List<TravelFareQuote> computeTravelFareQuotes(double distanceKm) {
+    return TravelVehicleType.values
+        .map(
+          (vehicleType) => TravelFareQuote(
+            vehicleType: vehicleType,
+            fare: computeTravelFareForVehicle(distanceKm, vehicleType),
+          ),
+        )
+        .toList(growable: false);
   }
 
   static double computeNationwideFee({

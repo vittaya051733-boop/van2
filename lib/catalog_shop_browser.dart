@@ -363,6 +363,8 @@ class _ShopCatalogSection extends StatelessWidget {
         _ShopProductsPanel(
           section: section,
           shopDistanceKm: shopDistanceKm,
+          customerLatitude: customerLatitude,
+          customerLongitude: customerLongitude,
           onConfirmOrder: onConfirmOrder,
           onNavigateToCart: onNavigateToCart,
         ),
@@ -524,12 +526,16 @@ class _ShopProductsPanel extends StatefulWidget {
   const _ShopProductsPanel({
     required this.section,
     required this.shopDistanceKm,
+    this.customerLatitude,
+    this.customerLongitude,
     this.onConfirmOrder,
     this.onNavigateToCart,
   });
 
   final PublicCatalogSection section;
   final double? shopDistanceKm;
+  final double? customerLatitude;
+  final double? customerLongitude;
   final ValueChanged<CartProductSelection>? onConfirmOrder;
   final VoidCallback? onNavigateToCart;
 
@@ -635,6 +641,8 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
                       shopLatitude: widget.section.shopLatitude,
                       shopLongitude: widget.section.shopLongitude,
                       shopDistanceKm: widget.shopDistanceKm,
+                      customerLatitude: widget.customerLatitude,
+                      customerLongitude: widget.customerLongitude,
                       onConfirmOrder: widget.onConfirmOrder,
                       onNavigateToCart: widget.onNavigateToCart,
                     ),

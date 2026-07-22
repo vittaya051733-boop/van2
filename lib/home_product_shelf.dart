@@ -151,6 +151,10 @@ class HomeProductShelfSection extends StatelessWidget {
 
                           shopDistanceKm: shopDistanceKm,
 
+                          customerLatitude: customerLatitude,
+
+                          customerLongitude: customerLongitude,
+
                           onConfirmOrder: onConfirmOrder,
 
                           onNavigateToCart: onNavigateToCart,

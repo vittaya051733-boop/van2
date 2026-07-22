@@ -1,12 +1,22 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'cart_screen.dart';
 import 'map_picker_screen.dart';
+import 'shipping_pricing_policy.dart';
 import 'travel_payment_flow.dart';
+import 'travel_vehicle_type.dart';
+import 'utils/customer_location.dart';
+import 'utils/customer_location_gate.dart';
+import 'utils/driving_route_service.dart';
+import 'utils/places_autocomplete_service.dart';
+
+enum _TravelActivePin { pickup, destination }
 
 class TravelPlannerResult {
   const TravelPlannerResult({
@@ -22,53 +32,18 @@ class TravelPlannerResult {
   final double distanceKm;
 }
 
-enum TravelVehicleType { motorcycle, sedan, pickup }
-
-extension TravelVehicleTypePresentation on TravelVehicleType {
-  String get label {
-    switch (this) {
-      case TravelVehicleType.motorcycle:
-        return 'มอเตอร์ไซค์';
-      case TravelVehicleType.sedan:
-        return 'รถเก๋ง';
-      case TravelVehicleType.pickup:
-        return 'รถกระบะ';
-    }
-  }
-
-  IconData get icon {
-    switch (this) {
-      case TravelVehicleType.motorcycle:
-        return Icons.two_wheeler;
-      case TravelVehicleType.sedan:
-        return Icons.directions_car_filled_rounded;
-      case TravelVehicleType.pickup:
-        return Icons.local_shipping_rounded;
-    }
-  }
-
-  Color get accentColor {
-    switch (this) {
-      case TravelVehicleType.motorcycle:
-        return const Color(0xFF16A34A);
-      case TravelVehicleType.sedan:
-        return const Color(0xFF2563EB);
-      case TravelVehicleType.pickup:
-        return const Color(0xFFB45309);
-    }
-  }
-}
-
 class TravelRideSelection {
   const TravelRideSelection({
     required this.vehicleType,
     required this.scheduledAt,
     required this.isImmediate,
+    required this.estimatedFare,
   });
 
   final TravelVehicleType vehicleType;
   final DateTime scheduledAt;
   final bool isImmediate;
+  final double estimatedFare;
 
   String get scheduleLabel {
     if (isImmediate) {
@@ -88,7 +63,7 @@ class TravelPlannerScreen extends StatefulWidget {
   const TravelPlannerScreen({
     super.key,
     required this.initialPickup,
-    required this.initialDestination,
+    this.initialDestination,
     this.initialRideSelection,
     this.onConfirmCashOnDelivery,
     this.onSubmitPromptPaySlip,
@@ -96,7 +71,7 @@ class TravelPlannerScreen extends StatefulWidget {
   });
 
   final PickedLocation initialPickup;
-  final PickedLocation initialDestination;
+  final PickedLocation? initialDestination;
   final TravelRideSelection? initialRideSelection;
   final Future<List<String>> Function(TravelPlannerResult request)? onConfirmCashOnDelivery;
   final Future<PaymentSlipSubmissionResult> Function(
@@ -109,35 +84,219 @@ class TravelPlannerScreen extends StatefulWidget {
   State<TravelPlannerScreen> createState() => _TravelPlannerScreenState();
 }
 
-class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
+class _TravelPlannerScreenState extends State<TravelPlannerScreen>
+    with WidgetsBindingObserver {
+  final TextEditingController _destinationSearchController =
+      TextEditingController();
+  final FocusNode _destinationFocusNode = FocusNode();
+
+  GoogleMapController? _mapController;
   late PickedLocation _pickup;
-  late PickedLocation _destination;
+  PickedLocation? _destination;
   TravelRideSelection? _rideSelection;
   late bool _locationsConfirmed;
+
+  _TravelActivePin _activePin = _TravelActivePin.destination;
+  bool _pickupReady = false;
+  bool _isLoadingPickup = false;
+  bool _isSearchingDestination = false;
+  bool _retryPickupOnResume = false;
+  bool _isRequestingLocationGate = false;
+  List<LatLng> _routePoints = const <LatLng>[];
+  double? _routeDistanceKm;
+  bool _isLoadingRoute = false;
+  Timer? _routeRefreshDebounce;
+  int _routeRequestId = 0;
+  List<PlaceSuggestion> _placeSuggestions = const <PlaceSuggestion>[];
+  bool _isLoadingSuggestions = false;
+  bool _showSuggestions = false;
+  Timer? _suggestionRefreshDebounce;
+  int _suggestionsRequestId = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pickup = widget.initialPickup;
     _destination = widget.initialDestination;
     _rideSelection = widget.initialRideSelection;
     _locationsConfirmed = widget.initialRideSelection != null;
+    _pickupReady = true;
+
+    if (_destination != null) {
+      _destinationSearchController.text = _destination!.title;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _destinationFocusNode.requestFocus();
+      unawaited(_refreshPickupFromGps(forceGate: true));
+      if (_hasDestination) {
+        _scheduleDrivingRouteRefresh();
+      }
+    });
   }
 
-  double get _distanceKm {
-    final meters = Geolocator.distanceBetween(
-      _pickup.latitude,
-      _pickup.longitude,
-      _destination.latitude,
-      _destination.longitude,
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _routeRefreshDebounce?.cancel();
+    _suggestionRefreshDebounce?.cancel();
+    _destinationSearchController.dispose();
+    _destinationFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state != AppLifecycleState.resumed || !_retryPickupOnResume) {
+      return;
+    }
+
+    _retryPickupOnResume = false;
+    unawaited(_refreshPickupFromGps(forceGate: true));
+  }
+
+  bool get _hasDestination => _destination != null;
+
+  double? get _distanceKm {
+    if (!_hasDestination) {
+      return null;
+    }
+    return _routeDistanceKm;
+  }
+
+  double? get _startingFare {
+    final distanceKm = _distanceKm;
+    if (distanceKm == null) {
+      return null;
+    }
+    return ShippingPricingPolicy.computeTravelFareForVehicle(
+      distanceKm,
+      TravelVehicleType.motorcycle,
     );
-    return meters / 1000;
   }
 
-  double get _estimatedFare {
-    final billableKm = _distanceKm < 1 ? 1.0 : _distanceKm;
-    final fee = 25 + ((billableKm - 1) * 12.5);
-    return double.parse(fee.toStringAsFixed(2));
+  LatLng get _mapCenter => LatLng(_pickup.latitude, _pickup.longitude);
+
+  Set<Marker> get _markers {
+    final markers = <Marker>{
+      Marker(
+        markerId: const MarkerId('pickup'),
+        position: LatLng(_pickup.latitude, _pickup.longitude),
+        draggable: true,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        onDragEnd: (position) {
+          unawaited(_updatePickupFromLatLng(position));
+        },
+        onTap: () {
+          setState(() => _activePin = _TravelActivePin.pickup);
+        },
+      ),
+    };
+
+    if (_hasDestination) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('destination'),
+          position: LatLng(
+            _destination!.latitude,
+            _destination!.longitude,
+          ),
+          draggable: true,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          onDragEnd: (position) {
+            unawaited(_updateDestinationFromLatLng(position));
+          },
+          onTap: () {
+            setState(() => _activePin = _TravelActivePin.destination);
+          },
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  Set<Polyline> get _polylines {
+    if (_routePoints.length < 2) {
+      return const <Polyline>{};
+    }
+
+    return <Polyline>{
+      Polyline(
+        polylineId: const PolylineId('route'),
+        points: _routePoints,
+        color: const Color(0xFFF57C00),
+        width: 5,
+        geodesic: true,
+      ),
+    };
+  }
+
+  void _scheduleDrivingRouteRefresh() {
+    _routeRefreshDebounce?.cancel();
+    _routeRefreshDebounce = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_refreshDrivingRoute());
+    });
+  }
+
+  Future<void> _refreshDrivingRoute() async {
+    if (!_hasDestination) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _routePoints = const <LatLng>[];
+        _routeDistanceKm = null;
+        _isLoadingRoute = false;
+      });
+      return;
+    }
+
+    final requestId = ++_routeRequestId;
+    if (mounted) {
+      setState(() => _isLoadingRoute = true);
+    }
+
+    try {
+      final fetchResult = await DrivingRouteService.fetchDrivingRoute(
+        originLat: _pickup.latitude,
+        originLng: _pickup.longitude,
+        destinationLat: _destination!.latitude,
+        destinationLng: _destination!.longitude,
+      );
+
+      if (!mounted || requestId != _routeRequestId) {
+        return;
+      }
+
+      final result = fetchResult.route;
+      setState(() {
+        _routePoints = result?.points ?? const <LatLng>[];
+        _routeDistanceKm =
+            result != null ? result.distanceMeters / 1000 : null;
+        _isLoadingRoute = false;
+      });
+
+      if (_routePoints.length >= 2) {
+        await _fitRouteBounds();
+      } else if (fetchResult.failureMessage != null) {
+        _showSnackBar(fetchResult.failureMessage!);
+      }
+    } catch (_) {
+      if (!mounted || requestId != _routeRequestId) {
+        return;
+      }
+      setState(() {
+        _routePoints = const <LatLng>[];
+        _routeDistanceKm = null;
+        _isLoadingRoute = false;
+      });
+    }
   }
 
   String _formatLocationLabel(PickedLocation location) {
@@ -148,57 +307,405 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
     return '${location.title} - $subtitle';
   }
 
-  Future<PickedLocation?> _pickTravelLocation({
-    required String title,
-    required String confirmLabel,
-    required PickedLocation initialLocation,
-  }) {
-    return Navigator.of(context).push<PickedLocation>(
-      MaterialPageRoute<PickedLocation>(
-        builder: (context) => MapPickerScreen(
-          title: title,
-          confirmLabel: confirmLabel,
-          initialLocation: initialLocation,
+  String _pickupReadout() {
+    return _formatLocationLabel(_pickup);
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  Future<void> _moveCamera(LatLng target, {double zoom = 16}) async {
+    await _mapController?.animateCamera(
+      CameraUpdate.newLatLngZoom(target, zoom),
+    );
+  }
+
+  Future<void> _fitRouteBounds() async {
+    if (!_hasDestination || _mapController == null) {
+      return;
+    }
+
+    if (_routePoints.length >= 2) {
+      var minLat = _routePoints.first.latitude;
+      var maxLat = _routePoints.first.latitude;
+      var minLng = _routePoints.first.longitude;
+      var maxLng = _routePoints.first.longitude;
+
+      for (final point in _routePoints) {
+        minLat = minLat < point.latitude ? minLat : point.latitude;
+        maxLat = maxLat > point.latitude ? maxLat : point.latitude;
+        minLng = minLng < point.longitude ? minLng : point.longitude;
+        maxLng = maxLng > point.longitude ? maxLng : point.longitude;
+      }
+
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(minLat, minLng),
+            northeast: LatLng(maxLat, maxLng),
+          ),
+          80,
         ),
+      );
+      return;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(
+        _pickup.latitude < _destination!.latitude
+            ? _pickup.latitude
+            : _destination!.latitude,
+        _pickup.longitude < _destination!.longitude
+            ? _pickup.longitude
+            : _destination!.longitude,
+      ),
+      northeast: LatLng(
+        _pickup.latitude > _destination!.latitude
+            ? _pickup.latitude
+            : _destination!.latitude,
+        _pickup.longitude > _destination!.longitude
+            ? _pickup.longitude
+            : _destination!.longitude,
       ),
     );
+
+    await _mapController!.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 80),
+    );
   }
 
-  Future<void> _pickPickup() async {
-    final selected = await _pickTravelLocation(
-      title: 'กำหนดจุดรับผู้โดยสาร',
-      confirmLabel: 'ใช้เป็นจุดรับ',
-      initialLocation: _pickup,
+  Future<void> _refreshPickupFromGps({required bool forceGate}) async {
+    if (_isLoadingPickup || _isRequestingLocationGate) {
+      return;
+    }
+
+    setState(() => _isLoadingPickup = true);
+
+    try {
+      if (forceGate) {
+        setState(() => _isRequestingLocationGate = true);
+        final gateResult = await ensureCustomerLocationAccess(
+          context,
+          onSnackBar: _showSnackBar,
+        );
+        if (!mounted) {
+          return;
+        }
+
+        if (gateResult == CustomerLocationGateResult.retryOnResume) {
+          _retryPickupOnResume = true;
+          return;
+        }
+
+        if (gateResult != CustomerLocationGateResult.granted) {
+          setState(() => _pickupReady = false);
+          return;
+        }
+      }
+
+      final location = await tryDetectCurrentLocation();
+      if (!mounted) {
+        return;
+      }
+
+      if (location == null) {
+        setState(() => _pickupReady = true);
+        return;
+      }
+
+      setState(() {
+        _pickup = location;
+        _pickupReady = true;
+        _locationsConfirmed = false;
+      });
+
+      await _moveCamera(LatLng(location.latitude, location.longitude));
+      if (_hasDestination) {
+        _scheduleDrivingRouteRefresh();
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPickup = false;
+          _isRequestingLocationGate = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _updatePickupFromLatLng(LatLng position) async {
+    final picked = await buildPickedLocation(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      fallbackTitle: 'จุดรับที่เลือก',
     );
 
-    if (!mounted || selected == null) {
+    if (!mounted) {
       return;
     }
 
     setState(() {
-      _pickup = selected;
+      _pickup = picked;
       _locationsConfirmed = false;
     });
+
+    if (_hasDestination) {
+      _scheduleDrivingRouteRefresh();
+    }
   }
 
-  Future<void> _pickDestination() async {
-    final selected = await _pickTravelLocation(
-      title: 'กำหนดจุดส่งผู้โดยสาร',
-      confirmLabel: 'ใช้เป็นจุดส่ง',
-      initialLocation: _destination,
+  Future<void> _updateDestinationFromLatLng(LatLng position) async {
+    final picked = await buildPickedLocation(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      fallbackTitle: 'จุดหมายที่เลือก',
     );
 
-    if (!mounted || selected == null) {
+    if (!mounted) {
       return;
     }
 
     setState(() {
-      _destination = selected;
+      _destination = picked;
+      _destinationSearchController.text = picked.title;
       _locationsConfirmed = false;
     });
+
+    _scheduleDrivingRouteRefresh();
+  }
+
+  void _hidePlaceSuggestions() {
+    if (!_showSuggestions && _placeSuggestions.isEmpty && !_isLoadingSuggestions) {
+      return;
+    }
+    setState(() {
+      _showSuggestions = false;
+      _placeSuggestions = const <PlaceSuggestion>[];
+      _isLoadingSuggestions = false;
+    });
+  }
+
+  void _scheduleSuggestionRefresh() {
+    _suggestionRefreshDebounce?.cancel();
+    _suggestionRefreshDebounce = Timer(const Duration(milliseconds: 300), () {
+      unawaited(_refreshPlaceSuggestions());
+    });
+  }
+
+  Future<void> _refreshPlaceSuggestions() async {
+    final query = _destinationSearchController.text.trim();
+    if (query.length < 2) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _placeSuggestions = const <PlaceSuggestion>[];
+        _showSuggestions = false;
+        _isLoadingSuggestions = false;
+      });
+      return;
+    }
+
+    final requestId = ++_suggestionsRequestId;
+    if (mounted) {
+      setState(() {
+        _isLoadingSuggestions = true;
+        _showSuggestions = true;
+      });
+    }
+
+    final result = await PlacesAutocompleteService.fetchSuggestions(
+      query: query,
+      originLat: _pickup.latitude,
+      originLng: _pickup.longitude,
+    );
+
+    if (!mounted || requestId != _suggestionsRequestId) {
+      return;
+    }
+
+    setState(() {
+      _placeSuggestions = result.suggestions;
+      _isLoadingSuggestions = false;
+      _showSuggestions = result.suggestions.isNotEmpty;
+    });
+  }
+
+  Future<void> _applyResolvedPlace(ResolvedPlace resolved) async {
+    final picked = PickedLocation(
+      latitude: resolved.latitude,
+      longitude: resolved.longitude,
+      title: resolved.title,
+      subtitle: resolved.subtitle.isEmpty ? null : resolved.subtitle,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _destination = picked;
+      _destinationSearchController.text = picked.title;
+      _activePin = _TravelActivePin.destination;
+      _locationsConfirmed = false;
+      _showSuggestions = false;
+      _placeSuggestions = const <PlaceSuggestion>[];
+    });
+
+    await _moveCamera(LatLng(resolved.latitude, resolved.longitude));
+    _scheduleDrivingRouteRefresh();
+  }
+
+  Future<void> _applyPlaceSuggestion(PlaceSuggestion suggestion) async {
+    setState(() => _isSearchingDestination = true);
+
+    try {
+      final resolved = await PlacesAutocompleteService.resolvePlace(
+        suggestion.placeId,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      if (resolved == null) {
+        _showSnackBar('ไม่สามารถโหลดรายละเอียดสถานที่ได้');
+        return;
+      }
+
+      await _applyResolvedPlace(resolved);
+    } finally {
+      if (mounted) {
+        setState(() => _isSearchingDestination = false);
+      }
+    }
+  }
+
+  Future<PlaceSuggestion?> _pickPlaceSuggestionSheet(
+    List<PlaceSuggestion> suggestions,
+  ) {
+    return showModalBottomSheet<PlaceSuggestion>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return _TravelPlaceSuggestionSheet(suggestions: suggestions);
+      },
+    );
+  }
+
+  Future<void> _fallbackSearchDestination(String query) async {
+    final locations = await locationFromAddress(query);
+    if (locations.isEmpty) {
+      _showSnackBar('ไม่พบตำแหน่งที่ค้นหา');
+      return;
+    }
+
+    final first = locations.first;
+    final target = LatLng(first.latitude, first.longitude);
+    final picked = await buildPickedLocationFromSearch(
+      latitude: target.latitude,
+      longitude: target.longitude,
+      searchQuery: query,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _destination = picked;
+      _destinationSearchController.text = picked.title;
+      _activePin = _TravelActivePin.destination;
+      _locationsConfirmed = false;
+      _showSuggestions = false;
+      _placeSuggestions = const <PlaceSuggestion>[];
+    });
+
+    await _moveCamera(target);
+    _scheduleDrivingRouteRefresh();
+  }
+
+  Future<void> _searchDestination() async {
+    final query = _destinationSearchController.text.trim();
+    if (query.isEmpty) {
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _isSearchingDestination = true;
+      _showSuggestions = false;
+    });
+
+    try {
+      final result = await PlacesAutocompleteService.fetchSuggestions(
+        query: query,
+        originLat: _pickup.latitude,
+        originLng: _pickup.longitude,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      final suggestions = result.suggestions;
+      if (suggestions.isEmpty) {
+        if (result.failureMessage != null &&
+            PlacesAutocompleteService.isConfigured) {
+          _showSnackBar(result.failureMessage!);
+        }
+        await _fallbackSearchDestination(query);
+        return;
+      }
+
+      if (suggestions.length == 1) {
+        await _applyPlaceSuggestion(suggestions.first);
+        return;
+      }
+
+      final selected = await _pickPlaceSuggestionSheet(suggestions);
+      if (!mounted || selected == null) {
+        setState(() {
+          _placeSuggestions = suggestions;
+          _showSuggestions = true;
+        });
+        return;
+      }
+
+      await _applyPlaceSuggestion(selected);
+    } catch (error) {
+      if (mounted) {
+        _showSnackBar('ค้นหาสถานที่ไม่สำเร็จ: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSearchingDestination = false);
+      }
+    }
+  }
+
+  void _onMapTap(LatLng position) {
+    _hidePlaceSuggestions();
+    if (_activePin == _TravelActivePin.pickup) {
+      unawaited(_updatePickupFromLatLng(position));
+      return;
+    }
+
+    unawaited(_updateDestinationFromLatLng(position));
   }
 
   Future<void> _confirmLocations() async {
+    if (!_hasDestination) {
+      return;
+    }
+
     FocusScope.of(context).unfocus();
     setState(() => _locationsConfirmed = true);
     await _configureRide();
@@ -210,7 +717,10 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return _TravelRideSetupSheet(initialSelection: _rideSelection);
+        return _TravelRideSetupSheet(
+          distanceKm: _distanceKm!,
+          initialSelection: _rideSelection,
+        );
       },
     );
 
@@ -219,15 +729,16 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
     }
 
     setState(() => _rideSelection = rideSelection);
+    await _submit(rideSelection);
   }
 
   TravelPlannerResult _buildSubmissionResult() {
     final rideSelection = _rideSelection!;
     return TravelPlannerResult(
       pickup: _pickup,
-      destination: _destination,
+      destination: _destination!,
       rideSelection: rideSelection,
-      distanceKm: _distanceKm,
+      distanceKm: _distanceKm!,
     );
   }
 
@@ -247,21 +758,19 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
     Navigator.of(context).pop(_buildSubmissionResult());
   }
 
-  Future<void> _submit() async {
-    final rideSelection = _rideSelection;
+  Future<void> _submit([TravelRideSelection? selection]) async {
+    final rideSelection = selection ?? _rideSelection;
     if (rideSelection == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาเลือกเวลาและประเภทรถก่อน')),
-      );
+      _showSnackBar('กรุณาเลือกเวลาและประเภทรถก่อน');
       return;
     }
 
     await showTravelPaymentFlow(
       context: context,
-      grandTotal: _estimatedFare,
+      grandTotal: rideSelection.estimatedFare,
       pickupLabel: _formatLocationLabel(_pickup),
-      destinationLabel: _formatLocationLabel(_destination),
-      distanceKm: _distanceKm,
+      destinationLabel: _formatLocationLabel(_destination!),
+      distanceKm: _distanceKm!,
       vehicleTypeLabel: rideSelection.vehicleType.label,
       scheduleLabel: rideSelection.scheduleLabel,
       onConfirmCashOnDelivery: widget.onConfirmCashOnDelivery == null
@@ -275,417 +784,481 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFFFFBF6),
-      appBar: AppBar(
-        title: const Text('ตั้งค่าการเดินทาง'),
+  Widget _buildLocationGateOverlay() {
+    return Positioned.fill(
+      child: ColoredBox(
+        color: Colors.black.withValues(alpha: 0.45),
+        child: Center(
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 28),
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Icon(
+                  Icons.location_off_outlined,
+                  size: 48,
+                  color: Color(0xFFF57C00),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'เปิดตำแหน่งเพื่อเริ่มเดินทาง',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'ระบบต้องใช้ตำแหน่งปัจจุบันเป็นจุดรับผู้โดยสาร',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: const Color(0xFF6B7280),
+                      ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _isRequestingLocationGate
+                        ? null
+                        : () => unawaited(
+                              _refreshPickupFromGps(forceGate: true),
+                            ),
+                    icon: _isRequestingLocationGate
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location),
+                    label: const Text('เปิดตำแหน่ง'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+    );
+  }
+
+  Widget _buildSearchCard() {
+    return Material(
+      elevation: 8,
+      shadowColor: const Color(0x33000000),
+      borderRadius: BorderRadius.circular(20),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: const <BoxShadow>[
-                  BoxShadow(
-                    color: Color(0x12000000),
-                    blurRadius: 18,
-                    offset: Offset(0, 8),
-                  ),
-                ],
+            InkWell(
+              onTap: () => setState(() => _activePin = _TravelActivePin.pickup),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: <Widget>[
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: _activePin == _TravelActivePin.pickup
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFF86EFAC),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            'ตำแหน่งของคุณ',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: const Color(0xFF6B7280),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _isLoadingPickup
+                                ? 'กำลังค้นหาตำแหน่ง...'
+                                : _pickupReadout(),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyLarge
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    _locationsConfirmed
-                        ? 'ขั้นตอนที่ 2 เลือกรถและเวลา'
-                        : 'ขั้นตอนที่ 1 ยืนยันจุดรับส่งผู้โดยสาร',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF111827),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Divider(height: 1),
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Container(
+                  margin: const EdgeInsets.only(top: 14),
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: _activePin == _TravelActivePin.destination
+                        ? const Color(0xFFF57C00)
+                        : const Color(0xFFFED7AA),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _destinationSearchController,
+                    focusNode: _destinationFocusNode,
+                    textInputAction: TextInputAction.search,
+                    onChanged: (_) {
+                      setState(() => _activePin = _TravelActivePin.destination);
+                      _scheduleSuggestionRefresh();
+                    },
+                    onSubmitted: (_) => unawaited(_searchDestination()),
+                    onTap: () =>
+                        setState(() => _activePin = _TravelActivePin.destination),
+                    decoration: InputDecoration(
+                      hintText: 'ไปไหน?',
+                      border: InputBorder.none,
+                      suffixIcon: _isSearchingDestination
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.search),
+                              onPressed: () => unawaited(_searchDestination()),
+                            ),
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _locationsConfirmed
-                        ? 'เมื่อยืนยันจุดรับส่งแล้ว ค่อยเลือกเวลาและประเภทรถในขั้นถัดไป'
-                        : 'กำหนดจุดรับและจุดส่งให้เรียบร้อยก่อน แล้วระบบจะแสดงขั้นเลือกรถและเวลา',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: const Color(0xFF6B7280),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlaceSuggestionsList() {
+    return Material(
+      elevation: 8,
+      shadowColor: const Color(0x33000000),
+      borderRadius: BorderRadius.circular(16),
+      color: Colors.white,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.32,
+        ),
+        child: _isLoadingSuggestions
+            ? const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _placeSuggestions.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final suggestion = _placeSuggestions[index];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(
+                      Icons.location_on_outlined,
+                      color: Color(0xFFF57C00),
                     ),
-                  ),
-                ],
+                    title: Text(
+                      suggestion.primaryText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: suggestion.secondaryText.isEmpty
+                        ? null
+                        : Text(
+                            suggestion.secondaryText,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                    onTap: () => unawaited(_applyPlaceSuggestion(suggestion)),
+                  );
+                },
               ),
-            ),
-            const SizedBox(height: 16),
-            _TravelLocationCard(
-              title: 'จุดรับผู้โดยสาร',
-              icon: Icons.my_location_outlined,
-              location: _pickup,
-              actionLabel: 'เลือกจุดรับ',
-              onTap: _pickPickup,
-            ),
-            const SizedBox(height: 12),
-            _TravelLocationCard(
-              title: 'จุดส่งผู้โดยสาร',
-              icon: Icons.location_on_outlined,
-              location: _destination,
-              actionLabel: 'เลือกจุดส่ง',
-              onTap: _pickDestination,
-            ),
-            const SizedBox(height: 16),
-            TravelSummaryCard(
-              pickup: _pickup,
-              destination: _destination,
-              distanceKm: _distanceKm,
-              rideSelection: _locationsConfirmed ? _rideSelection : null,
-            ),
-            const SizedBox(height: 16),
-            if (!_locationsConfirmed) ...<Widget>[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7ED),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFFED7AA)),
-                ),
-                child: Text(
-                  'ยืนยันจุดรับและจุดส่งก่อน ระบบจึงจะแสดงตัวเลือกประเภทรถและเวลาให้ตามลำดับ',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF9A3412),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ] else ...<Widget>[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFA7F3D0)),
-                ),
-                child: Text(
-                  'ขั้นต่อไป เลือกเวลาเดินทางและประเภทรถที่ต้องการ',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF166534),
-                    fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  Widget _buildBottomSheet() {
+    final distanceKm = _distanceKm;
+    final startingFare = _startingFare;
+
+    return Material(
+      elevation: 12,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      color: Colors.white,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD6D3D1),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
+              if (!_hasDestination)
+                Text(
+                  'เลือกจุดหมายบนแผนที่หรือค้นหาด้านบน',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: const Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                )
+              else if (_isLoadingRoute)
+                Text(
+                  'กำลังคำนวณเส้นทางตามถนน...',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: const Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                )
+              else if (distanceKm != null) ...<Widget>[
+                Text(
+                  '${distanceKm.toStringAsFixed(1)} กม.',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF111827),
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'เริ่มต้น ~${startingFare!.round()} บาท',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFF0D6B45),
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ] else
+                Text(
+                  'ไม่สามารถคำนวณเส้นทางตามถนนได้',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: const Color(0xFF9A3412),
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              const SizedBox(height: 16),
               FilledButton.icon(
-                onPressed: _configureRide,
+                onPressed: _hasDestination &&
+                        !_isLoadingRoute &&
+                        distanceKm != null
+                    ? (_locationsConfirmed ? _configureRide : _confirmLocations)
+                    : null,
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFFF57C00),
+                  disabledBackgroundColor: const Color(0xFFE5E7EB),
                   foregroundColor: Colors.white,
+                  disabledForegroundColor: const Color(0xFF9CA3AF),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(18),
                   ),
                 ),
-                icon: const Icon(Icons.tune_rounded),
+                icon: const Icon(Icons.route_rounded),
                 label: Text(
-                  _rideSelection == null
-                      ? 'เลือกเวลาและประเภทรถ'
-                      : 'แก้ไขเวลาและประเภทรถ',
+                  _locationsConfirmed
+                      ? 'เลือกประเภทรถ'
+                      : 'ยืนยันการเดินทาง',
                 ),
               ),
             ],
-          ],
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: FilledButton.icon(
-            onPressed: _locationsConfirmed ? _submit : _confirmLocations,
-            style: FilledButton.styleFrom(
-              backgroundColor: _locationsConfirmed
-                  ? const Color(0xFF0D6B45)
-                  : const Color(0xFFF57C00),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-            ),
-            icon: Icon(
-              _locationsConfirmed ? Icons.check_circle : Icons.route_rounded,
-            ),
-            label: Text(
-              _locationsConfirmed
-                  ? 'ยืนยันการเดินทาง'
-                  : 'ยืนยันจุดรับส่งผู้โดยสาร',
-            ),
           ),
         ),
       ),
     );
   }
-}
-
-class TravelSummaryCard extends StatelessWidget {
-  const TravelSummaryCard({
-    super.key,
-    required this.pickup,
-    required this.destination,
-    required this.distanceKm,
-    required this.rideSelection,
-  });
-
-  final PickedLocation pickup;
-  final PickedLocation destination;
-  final double? distanceKm;
-  final TravelRideSelection? rideSelection;
-
-  Future<void> _openGoogleMapsDirections(BuildContext context) async {
-    final uri = Uri.https('www.google.com', '/maps/dir/', <String, String>{
-      'api': '1',
-      'origin': '${pickup.latitude},${pickup.longitude}',
-      'destination': '${destination.latitude},${destination.longitude}',
-      'travelmode': 'driving',
-    });
-
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ไม่สามารถเปิด Google Maps ได้')),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final distanceText = distanceKm == null
-        ? 'รอการคำนวณระยะทาง'
-        : 'จากตำแหน่งปัจจุบัน ${distanceKm!.toStringAsFixed(1)} กม.';
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 18,
-            offset: Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Scaffold(
+      body: Stack(
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const _TravelHeroPlaceholder(),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      'ปลายทางเริ่มต้น',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: const Color(0xFF6B7280),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      destination.title,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: const Color(0xFF111827),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      distanceText,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: const Color(0xFF0D6B45),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextButton.icon(
-                      onPressed: () => _openGoogleMapsDirections(context),
-                      style: TextButton.styleFrom(
-                        foregroundColor: const Color(0xFFB45309),
-                        padding: EdgeInsets.zero,
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      icon: const Icon(Icons.navigation_outlined, size: 18),
-                      label: const Text('เปิด Google Maps'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          GoogleMap(
+            initialCameraPosition: CameraPosition(
+              target: _mapCenter,
+              zoom: 15,
+            ),
+            onMapCreated: (controller) {
+              _mapController = controller;
+              if (_hasDestination) {
+                unawaited(_fitRouteBounds());
+              }
+            },
+            markers: _markers,
+            polylines: _polylines,
+            myLocationEnabled: _pickupReady,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            onTap: _onMapTap,
           ),
-          if (rideSelection != null) ...<Widget>[
-            const SizedBox(height: 18),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFFED7AA)),
-              ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Text(
-                    'รายละเอียดการเดินทาง',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF9A3412),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _TravelSelectionSummaryRow(
-                    icon: rideSelection!.vehicleType.icon,
-                    label: 'ประเภทรถ',
-                    value: rideSelection!.vehicleType.label,
-                  ),
-                  const SizedBox(height: 8),
-                  _TravelSelectionSummaryRow(
-                    icon: Icons.schedule,
-                    label: 'เวลา',
-                    value: rideSelection!.scheduleLabel,
+                  Row(
+                    children: <Widget>[
+                      Material(
+                        color: Colors.white,
+                        shape: const CircleBorder(),
+                        elevation: 4,
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 8),
-                  _TravelSelectionSummaryRow(
-                    icon: Icons.my_location_outlined,
-                    label: 'จุดรับ',
-                    value: pickup.title,
-                  ),
+                  _buildSearchCard(),
+                  if (_showSuggestions || _isLoadingSuggestions)
+                    _buildPlaceSuggestionsList(),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            TravelVehicleAvailabilityCard(
-              selectedVehicle: rideSelection!.vehicleType,
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TravelHeroPlaceholder extends StatelessWidget {
-  const _TravelHeroPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 72,
-      height: 72,
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: const Icon(
-        Icons.route_rounded,
-        color: Color(0xFFF57C00),
-        size: 34,
-      ),
-    );
-  }
-}
-
-class _TravelLocationCard extends StatelessWidget {
-  const _TravelLocationCard({
-    required this.title,
-    required this.icon,
-    required this.location,
-    required this.actionLabel,
-    required this.onTap,
-  });
-
-  final String title;
-  final IconData icon;
-  final PickedLocation location;
-  final String actionLabel;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 18,
-            offset: Offset(0, 8),
           ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _buildBottomSheet(),
+          ),
+          if (!_pickupReady) _buildLocationGateOverlay(),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(icon, color: const Color(0xFFF57C00)),
-              const SizedBox(width: 10),
-              Expanded(
+    );
+  }
+}
+
+class _TravelPlaceSuggestionSheet extends StatelessWidget {
+  const _TravelPlaceSuggestionSheet({required this.suggestions});
+
+  final List<PlaceSuggestion> suggestions;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFD6D3D1),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
                 child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF111827),
-                  ),
+                  'เลือกสถานที่',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            location.title,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF111827),
             ),
-          ),
-          if (location.subtitle?.trim().isNotEmpty ?? false) ...<Widget>[
-            const SizedBox(height: 6),
-            Text(
-              location.subtitle!.trim(),
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: const Color(0xFF6B7280),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                itemCount: suggestions.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final suggestion = suggestions[index];
+                  return ListTile(
+                    leading: const Icon(
+                      Icons.place_outlined,
+                      color: Color(0xFFF57C00),
+                    ),
+                    title: Text(
+                      suggestion.primaryText,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: suggestion.secondaryText.isEmpty
+                        ? null
+                        : Text(suggestion.secondaryText),
+                    onTap: () => Navigator.of(context).pop(suggestion),
+                  );
+                },
               ),
             ),
           ],
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: onTap,
-            icon: const Icon(Icons.edit_location_alt_outlined),
-            label: Text(actionLabel),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
 class _TravelRideSetupSheet extends StatefulWidget {
-  const _TravelRideSetupSheet({this.initialSelection});
+  const _TravelRideSetupSheet({
+    required this.distanceKm,
+    this.initialSelection,
+  });
 
+  final double distanceKm;
   final TravelRideSelection? initialSelection;
 
   @override
@@ -712,6 +1285,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
   late TravelVehicleType _selectedVehicle;
   late bool _isImmediate;
   DateTime? _scheduledAt;
+  bool _didApplyDefaultVehicle = false;
 
   @override
   void initState() {
@@ -721,6 +1295,69 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
     _scheduledAt = widget.initialSelection?.isImmediate == true
         ? null
         : widget.initialSelection?.scheduledAt;
+  }
+
+  List<TravelFareQuote> get _fareQuotes =>
+      ShippingPricingPolicy.computeTravelFareQuotes(widget.distanceKm);
+
+  TravelFareQuote? _quoteFor(TravelVehicleType vehicleType) {
+    for (final quote in _fareQuotes) {
+      if (quote.vehicleType == vehicleType) {
+        return quote;
+      }
+    }
+    return null;
+  }
+
+  List<TravelVehicleType> _sortedVehicleTypes(Map<TravelVehicleType, int> counts) {
+    final quoteByType = <TravelVehicleType, double>{
+      for (final quote in _fareQuotes) quote.vehicleType: quote.fare,
+    };
+    final types = List<TravelVehicleType>.from(TravelVehicleType.values);
+    types.sort((TravelVehicleType a, TravelVehicleType b) {
+      final aOnline = (counts[a] ?? 0) > 0;
+      final bOnline = (counts[b] ?? 0) > 0;
+      if (aOnline != bOnline) {
+        return aOnline ? -1 : 1;
+      }
+      return (quoteByType[a] ?? 0).compareTo(quoteByType[b] ?? 0);
+    });
+    return types;
+  }
+
+  void _maybeApplyDefaultVehicle(Map<TravelVehicleType, int> counts) {
+    if (_didApplyDefaultVehicle || widget.initialSelection != null) {
+      return;
+    }
+
+    _didApplyDefaultVehicle = true;
+    final sorted = _sortedVehicleTypes(counts);
+    final defaultVehicle = sorted.firstWhere(
+      (vehicle) => (counts[vehicle] ?? 0) > 0,
+      orElse: () => sorted.first,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _selectedVehicle = defaultVehicle);
+      _maybeForceScheduledWhenOffline(counts);
+    });
+  }
+
+  bool _canBookImmediate(Map<TravelVehicleType, int> counts) {
+    return (counts[_selectedVehicle] ?? 0) > 0;
+  }
+
+  void _maybeForceScheduledWhenOffline(Map<TravelVehicleType, int> counts) {
+    if (_canBookImmediate(counts) || !_isImmediate) {
+      return;
+    }
+
+    setState(() {
+      _isImmediate = false;
+      _scheduledAt ??= _defaultScheduledAt();
+    });
   }
 
   DateTime _defaultScheduledAt() {
@@ -827,202 +1464,202 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
       padding: EdgeInsets.fromLTRB(20, 20, 20, bottomInset + 20),
       child: SafeArea(
         top: false,
-        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('riders')
-              .where('passengerReady', isEqualTo: true)
-              .snapshots(includeMetadataChanges: true),
+        child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+          stream: watchTravelAvailableRiders(),
           builder: (context, snapshot) {
-            final vehicleCounts = _countOnlineTravelVehicles(
-              snapshot.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+            final isLoadingRiders =
+                snapshot.connectionState == ConnectionState.waiting &&
+                !snapshot.hasData;
+            final vehicleCounts = countOnlineTravelVehicles(
+              snapshot.data ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
             );
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Center(
-                  child: Container(
-                    width: 48,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFD6D3D1),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  'เลือกเวลาและประเภทรถ',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF111827),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'ลูกค้าสามารถเลือกเวลารถออกและดูสถานะออนไลน์ของแต่ละประเภทได้ทันที',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF6B7280),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'เวลาเดินทาง',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: <Widget>[
-                    ChoiceChip(
-                      label: const Text('ตอนนี้'),
-                      selected: _isImmediate,
-                      onSelected: (_) {
-                        setState(() {
-                          _isImmediate = true;
-                          _scheduledAt = null;
-                        });
-                      },
-                    ),
-                    ChoiceChip(
-                      label: const Text('กำหนดวันและเวลา'),
-                      selected: !_isImmediate,
-                      onSelected: (_) => _enableScheduledMode(),
-                    ),
-                  ],
-                ),
-                if (!_isImmediate) ...<Widget>[
-                  const SizedBox(height: 14),
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: _TravelScheduleFieldCard(
-                          label: 'วันที่เดินทาง',
-                          value: _scheduledAt == null
-                              ? 'เลือกวันที่'
-                              : _formatThaiDate(_scheduledAt!),
-                          icon: Icons.calendar_month_rounded,
-                          onTap: _pickScheduleDate,
-                        ),
+            _maybeApplyDefaultVehicle(vehicleCounts);
+            if (!isLoadingRiders &&
+                !_canBookImmediate(vehicleCounts) &&
+                _isImmediate) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) {
+                  return;
+                }
+                _maybeForceScheduledWhenOffline(vehicleCounts);
+              });
+            }
+            final sortedVehicles = _sortedVehicleTypes(vehicleCounts);
+            final selectedQuote = _quoteFor(_selectedVehicle);
+            final canBookImmediate = _canBookImmediate(vehicleCounts);
+            final canConfirm = selectedQuote != null &&
+                (canBookImmediate && _isImmediate ||
+                    (!_isImmediate && _scheduledAt != null));
+
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Center(
+                    child: Container(
+                      width: 48,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFD6D3D1),
+                        borderRadius: BorderRadius.circular(999),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _TravelScheduleFieldCard(
-                          label: 'เวลาเดินทาง',
-                          value: _scheduledAt == null
-                              ? 'เลือกเวลา'
-                              : _formatThaiTime(_scheduledAt!),
-                          icon: Icons.access_time_rounded,
-                          onTap: _pickScheduleTime,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 18),
                   Text(
-                    _scheduledAt == null
-                        ? 'กรุณาเลือกวันที่และเวลาเดินทาง'
-                        : 'กำหนดเดินทางวันที่ ${_formatThaiDate(_scheduledAt!)} เวลา ${_formatThaiTime(_scheduledAt!)}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    'เลือกประเภทรถ',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF111827),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    isLoadingRiders
+                        ? '${widget.distanceKm.toStringAsFixed(1)} กม. · กำลังค้นหารถใกล้คุณ...'
+                        : '${widget.distanceKm.toStringAsFixed(1)} กม. · พบรถออนไลน์ ${vehicleCounts.values.fold<int>(0, (total, item) => total + item)} คัน',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: const Color(0xFF6B7280),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                ],
-                const SizedBox(height: 20),
-                Text(
-                  'ประเภทรถ',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: TravelVehicleType.values
-                      .map(
-                        (vehicle) => Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              right: vehicle == TravelVehicleType.pickup ? 0 : 10,
-                            ),
-                            child: _TravelVehicleOptionCard(
-                              vehicle: vehicle,
-                              isSelected: vehicle == _selectedVehicle,
-                              onlineCount: vehicleCounts[vehicle] ?? 0,
-                              onTap: () {
-                                setState(() => _selectedVehicle = vehicle);
-                              },
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(growable: false),
-                ),
-                const SizedBox(height: 18),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFFFFF),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Container(
-                        width: 34,
-                        height: 34,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFDCFCE7),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.trip_origin,
-                          size: 16,
-                          color: Color(0xFF16A34A),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'จุดสีเขียวหมายถึงมีรถประเภทนั้นออนไลน์อยู่ตอนนี้ ถ้าไม่พบระบบจะแสดงว่าออฟไลน์',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: const Color(0xFF374151),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).pop(
-                        TravelRideSelection(
-                          vehicleType: _selectedVehicle,
-                          scheduledAt: _scheduledAt ?? DateTime.now(),
-                          isImmediate: _isImmediate,
+                  const SizedBox(height: 16),
+                  ...sortedVehicles.map(
+                    (vehicle) {
+                      final quote = _quoteFor(vehicle);
+                      final onlineCount = vehicleCounts[vehicle] ?? 0;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _TravelVehicleFareRow(
+                          vehicle: vehicle,
+                          isSelected: vehicle == _selectedVehicle,
+                          onlineCount: onlineCount,
+                          displayFare: quote?.displayFare ?? 0,
+                          onTap: () {
+                            setState(() => _selectedVehicle = vehicle);
+                            _maybeForceScheduledWhenOffline(vehicleCounts);
+                          },
                         ),
                       );
                     },
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFFF57C00),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'เวลาเดินทาง',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (!isLoadingRiders && !canBookImmediate)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        'ไม่มีรถ${_selectedVehicle.label}ออนไลน์ — กรุณากำหนดวันและเวลาเดินทาง',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: const Color(0xFF92400E),
+                              fontWeight: FontWeight.w700,
+                            ),
                       ),
                     ),
-                    icon: const Icon(Icons.check_circle),
-                    label: const Text('ยืนยันตัวเลือกนี้'),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: <Widget>[
+                      ChoiceChip(
+                        label: const Text('ตอนนี้'),
+                        selected: _isImmediate,
+                        onSelected: canBookImmediate
+                            ? (_) {
+                                setState(() {
+                                  _isImmediate = true;
+                                  _scheduledAt = null;
+                                });
+                              }
+                            : null,
+                      ),
+                      ChoiceChip(
+                        label: const Text('กำหนดวันและเวลา'),
+                        selected: !_isImmediate,
+                        onSelected: (_) => _enableScheduledMode(),
+                      ),
+                    ],
                   ),
-                ),
-              ],
+                  if (!_isImmediate) ...<Widget>[
+                    const SizedBox(height: 14),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: _TravelScheduleFieldCard(
+                            label: 'วันที่เดินทาง',
+                            value: _scheduledAt == null
+                                ? 'เลือกวันที่'
+                                : _formatThaiDate(_scheduledAt!),
+                            icon: Icons.calendar_month_rounded,
+                            onTap: _pickScheduleDate,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _TravelScheduleFieldCard(
+                            label: 'เวลาเดินทาง',
+                            value: _scheduledAt == null
+                                ? 'เลือกเวลา'
+                                : _formatThaiTime(_scheduledAt!),
+                            icon: Icons.access_time_rounded,
+                            onTap: _pickScheduleTime,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _scheduledAt == null
+                          ? 'กรุณาเลือกวันที่และเวลาเดินทาง'
+                          : 'กำหนดเดินทางวันที่ ${_formatThaiDate(_scheduledAt!)} เวลา ${_formatThaiTime(_scheduledAt!)}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: canConfirm
+                          ? () {
+                              Navigator.of(context).pop(
+                                TravelRideSelection(
+                                  vehicleType: _selectedVehicle,
+                                  scheduledAt: _scheduledAt ?? DateTime.now(),
+                                  isImmediate: _isImmediate,
+                                  estimatedFare: selectedQuote.fare,
+                                ),
+                              );
+                            }
+                          : null,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFF57C00),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                      ),
+                      icon: const Icon(Icons.check_circle),
+                      label: Text(
+                        selectedQuote == null
+                            ? 'ยืนยันตัวเลือกนี้'
+                            : !canConfirm && !_isImmediate
+                                ? 'เลือกวันและเวลาก่อนยืนยัน'
+                                : 'ยืนยัน ~${selectedQuote.displayFare} บาท',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             );
           },
         ),
@@ -1031,17 +1668,19 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
   }
 }
 
-class _TravelVehicleOptionCard extends StatelessWidget {
-  const _TravelVehicleOptionCard({
+class _TravelVehicleFareRow extends StatelessWidget {
+  const _TravelVehicleFareRow({
     required this.vehicle,
     required this.isSelected,
     required this.onlineCount,
+    required this.displayFare,
     required this.onTap,
   });
 
   final TravelVehicleType vehicle;
   final bool isSelected;
   final int onlineCount;
+  final int displayFare;
   final VoidCallback onTap;
 
   @override
@@ -1052,7 +1691,7 @@ class _TravelVehicleOptionCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: isSelected ? const Color(0xFFFFF7ED) : Colors.white,
           borderRadius: BorderRadius.circular(20),
@@ -1068,329 +1707,83 @@ class _TravelVehicleOptionCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: <Widget>[
-            Row(
-              children: <Widget>[
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: vehicle.accentColor.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(vehicle.icon, color: vehicle.accentColor),
-                ),
-                const Spacer(),
-                Container(
-                  width: 12,
-                  height: 12,
-                  decoration: BoxDecoration(
-                    color: isOnline
-                        ? const Color(0xFF16A34A)
-                        : const Color(0xFFD1D5DB),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ],
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: vehicle.accentColor.withValues(alpha: isOnline ? 0.12 : 0.06),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                vehicle.icon,
+                color: vehicle.accentColor.withValues(alpha: isOnline ? 1 : 0.45),
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    vehicle.label,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: isOnline
+                              ? const Color(0xFF111827)
+                              : const Color(0xFF9CA3AF),
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: <Widget>[
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: isOnline
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFFD1D5DB),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        isOnline ? 'ออนไลน์ $onlineCount คัน' : 'ออฟไลน์',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: isOnline
+                                  ? const Color(0xFF166534)
+                                  : const Color(0xFF6B7280),
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
             Text(
-              vehicle.label,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              '~$displayFare บาท',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
-                    color: const Color(0xFF111827),
+                    color: isOnline
+                        ? const Color(0xFF111827)
+                        : const Color(0xFF9CA3AF),
                   ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              isOnline ? 'ออนไลน์ $onlineCount คัน' : 'ออฟไลน์',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: isOnline
-                        ? const Color(0xFF166534)
-                        : const Color(0xFF6B7280),
-                    fontWeight: FontWeight.w600,
-                  ),
+            const SizedBox(width: 10),
+            Icon(
+              isSelected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_off,
+              color: isSelected ? vehicle.accentColor : const Color(0xFFD1D5DB),
             ),
           ],
         ),
       ),
     );
   }
-}
-
-class _TravelSelectionSummaryRow extends StatelessWidget {
-  const _TravelSelectionSummaryRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Icon(icon, size: 18, color: const Color(0xFFB45309)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: RichText(
-            text: TextSpan(
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF374151),
-                  ),
-              children: <InlineSpan>[
-                TextSpan(
-                  text: '$label: ',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                TextSpan(text: value),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class TravelVehicleAvailabilityCard extends StatelessWidget {
-  const TravelVehicleAvailabilityCard({
-    super.key,
-    required this.selectedVehicle,
-  });
-
-  final TravelVehicleType selectedVehicle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('riders')
-          .where('passengerReady', isEqualTo: true)
-            .snapshots(includeMetadataChanges: true),
-        builder: (context, snapshot) {
-          final vehicleCounts = _countOnlineTravelVehicles(
-            snapshot.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
-          );
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                'สถานะรถออนไลน์',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: const Color(0xFF111827),
-                    ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: TravelVehicleType.values
-                    .map(
-                      (vehicle) => Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            right: vehicle == TravelVehicleType.pickup ? 0 : 10,
-                          ),
-                          child: _TravelAvailabilityStatusPill(
-                            vehicle: vehicle,
-                            isSelected: vehicle == selectedVehicle,
-                            onlineCount: vehicleCounts[vehicle] ?? 0,
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _TravelAvailabilityStatusPill extends StatelessWidget {
-  const _TravelAvailabilityStatusPill({
-    required this.vehicle,
-    required this.isSelected,
-    required this.onlineCount,
-  });
-
-  final TravelVehicleType vehicle;
-  final bool isSelected;
-  final int onlineCount;
-
-  @override
-  Widget build(BuildContext context) {
-    final isOnline = onlineCount > 0;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isSelected ? const Color(0xFFFFF7ED) : const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isSelected ? vehicle.accentColor : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Icon(vehicle.icon, color: vehicle.accentColor, size: 22),
-          const SizedBox(height: 8),
-          Text(
-            vehicle.label,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF111827),
-                ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: <Widget>[
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: isOnline
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFFD1D5DB),
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  isOnline ? 'ออนไลน์ $onlineCount' : 'ออฟไลน์',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: isOnline
-                            ? const Color(0xFF166534)
-                            : const Color(0xFF6B7280),
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Map<TravelVehicleType, int> _countOnlineTravelVehicles(
-  Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-) {
-  final counts = <TravelVehicleType, int>{
-    for (final vehicle in TravelVehicleType.values) vehicle: 0,
-  };
-
-  for (final doc in docs) {
-    final data = doc.data();
-    if (!_isTravelRiderOnline(data)) {
-      continue;
-    }
-
-    final vehicleType = _readTravelVehicleType(data);
-    if (vehicleType == null) {
-      continue;
-    }
-
-    counts[vehicleType] = (counts[vehicleType] ?? 0) + 1;
-  }
-
-  return counts;
-}
-
-bool _isTravelRiderOnline(Map<String, dynamic> data) {
-  final locationStatus = (data['locationStatus'] as String?)?.trim().toLowerCase();
-  if (locationStatus == 'offline') {
-    return false;
-  }
-
-  final geo = data['currentLocation'];
-  final latitude = geo is GeoPoint
-      ? geo.latitude
-      : _travelToDouble(data['latitude']) ?? _travelToDouble(data['lat']);
-  final longitude = geo is GeoPoint
-      ? geo.longitude
-      : _travelToDouble(data['longitude']) ?? _travelToDouble(data['lng']);
-  if (latitude == null || longitude == null) {
-    return false;
-  }
-
-  final updatedAtRaw = data['locationUpdatedAt'] ?? data['updatedAt'];
-  final updatedAt = updatedAtRaw is Timestamp ? updatedAtRaw.toDate() : null;
-  if (updatedAt == null) {
-    return true;
-  }
-
-  return DateTime.now().difference(updatedAt).inMinutes <= 10;
-}
-
-double? _travelToDouble(Object? value) {
-  if (value is num) {
-    return value.toDouble();
-  }
-
-  if (value is String) {
-    return double.tryParse(value.trim());
-  }
-
-  return null;
-}
-
-TravelVehicleType? _readTravelVehicleType(Map<String, dynamic> data) {
-  final rawCandidates = <String?>[
-    data['vehicleType']?.toString(),
-    data['vehicle_type']?.toString(),
-    data['vehicle']?.toString(),
-    data['type']?.toString(),
-    data['riderType']?.toString(),
-    data['serviceType']?.toString(),
-    data['vehicleName']?.toString(),
-  ];
-
-  for (final rawValue in rawCandidates) {
-    final normalized = rawValue?.trim().toLowerCase() ?? '';
-    if (normalized.isEmpty) {
-      continue;
-    }
-
-    if (normalized.contains('motor') ||
-        normalized.contains('bike') ||
-        normalized.contains('motorcycle') ||
-        normalized.contains('มอเตอร์')) {
-      return TravelVehicleType.motorcycle;
-    }
-
-    if (normalized.contains('pickup') ||
-        normalized.contains('truck') ||
-        normalized.contains('กระบะ')) {
-      return TravelVehicleType.pickup;
-    }
-
-    if (normalized.contains('sedan') ||
-        normalized.contains('car') ||
-        normalized.contains('เก๋ง')) {
-      return TravelVehicleType.sedan;
-    }
-  }
-
-  return null;
 }
 
 class _TravelScheduleFieldCard extends StatelessWidget {

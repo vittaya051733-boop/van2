@@ -266,7 +266,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'VANTALAD',
+      title: 'แว๊นตลาด',
       debugShowCheckedModeBanner: false,
       navigatorKey: MyApp.navigatorKey,
       locale: LocaleService.instance.locale,

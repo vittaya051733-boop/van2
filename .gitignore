@@ -2,6 +2,16 @@
 functions/.secret.local
 scripts/emulator-local.config.json
 
+# Firebase CLI local cache (never commit)
+.firebase/
+
+# Release binaries (build locally, distribute via Play Console)
+/releases/
+
+# Eclipse / Buildship IDE metadata
+android/.project
+android/.settings/
+
 # Flutter local dev session (machine mode / hot reload)
 .flutter-dev/
 

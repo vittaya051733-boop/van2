@@ -59,8 +59,8 @@ The exact amount in your cart depends on distance, weight, and items — review 
 • หลังระยะขั้นต่ำ ${_fmtKm(config.travelMinBillableKm)} กม.: ${_fmtBaht(config.travelPerKmFee)} ต่อกม.
 
 สั่งหลายร้านในตลาด (รัศมี ${_fmtMeters(config.marketHubRadiusMeters)} ม., อย่างน้อย ${config.marketMultiShopMinShops} ร้าน)
-• ค่ารวบรวมสินค้า: ${_fmtBaht(config.marketMultiShopCollectionFee)} ต่อครั้งชำระ
-• ค่าบริการ: ${_fmtBaht(config.marketServiceFeePerOrder)} ต่อออเดอร์ร้าน
+• ค่ารวบรวมสินค้า: ${_fmtBaht(config.marketMultiShopCollectionFee)} ต่างร้าน
+• ค่าบริการ: ${_fmtBaht(config.marketServiceFeePerOrder)} ต่อบิล
 
 ยอดในตะกร้าคำนวณจากระยะทาง น้ำหนัก และรายการจริง — ตรวจสอบก่อนยืนยันสั่งซื้อ''';
   }

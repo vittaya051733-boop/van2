@@ -3,6 +3,19 @@
 
 $ErrorActionPreference = 'Stop'
 
+$VanDeployLocaleScript = Join-Path $PSScriptRoot 'deploy-locale-th.ps1'
+$script:VanDeployScriptsRoot = $PSScriptRoot
+if (Test-Path $VanDeployLocaleScript) {
+  . $VanDeployLocaleScript
+}
+
+try {
+  $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+  [Console]::OutputEncoding = $utf8NoBom
+  $OutputEncoding = $utf8NoBom
+}
+catch {}
+
 function Import-VanDeployGovernance {
   param([string]$CallingScriptRoot = $PSScriptRoot)
 
@@ -58,7 +71,8 @@ function Get-VanGovernanceConfig {
 
   [ordered]@{
     ProjectId              = 'van-merchant'
-    FinalAcknowledge       = 'YES I UNDERSTAND'
+    FinalAcknowledge       = (Get-VanAckEn)
+    FinalAcknowledgeTh     = (Get-VanAckTh)
     FirestoreDatabaseId    = '(default)'
     FirestoreCanonicalApp  = 'van2'
     FirestoreSharedImpact  = 'SHARED:van1,van2,van3,van4'
@@ -73,12 +87,13 @@ function Get-VanGovernanceConfig {
     }
     FunctionOwnershipVan1  = @(
       'verifyTopUpSlip',
-      'computeRouteMetrics',
       'checkPreparingOrders',
       'onOrderStatusUpdate',
       'calculateDeliveryTime',
       'askGeminiFlash',
       'analyzeProductWithAi',
+      'enqueueProductAiAnalysis',
+      'onProductAiJobQueued',
       'onProductCatalogClassify',
       'replaceImageBackgroundWhite',
       'notifyNewChatMessage',
@@ -95,14 +110,22 @@ function Get-VanGovernanceConfig {
       'signInWithPhonePassword',
       'calculateCartTotals',
       'createCheckoutOrders',
+      'createTravelOrder',
+      'quoteTravelFare',
       'createNationwideParcelOrders',
+      'recordCheckoutDiscounts',
       'verifyOrderPaymentSlip',
       'normalizeVan2SlipOrders',
       'pushAppNotification',
       'sendAnnouncementEmails',
       'callUser',
       'initiateCall',
-      'cancelCallInvite'
+      'cancelCallInvite',
+      'computeRouteMetrics',
+      'placesAutocomplete',
+      'placesResolvePlace',
+      'reverseGeocodeDeliveryLocation',
+      'syncVan2CartStockHold'
     )
     BlockedScriptNames     = @(
       'deploy-van-merchant-rules.ps1'
@@ -176,19 +199,20 @@ function Assert-VanDeployConfirmation {
     [Parameter(Mandatory)][string]$ConfirmDeploy
   )
   $expected = Get-VanDeployConfirmToken -App $App
-  if ($ConfirmDeploy -ne $expected) {
-    throw "Deployment blocked. Re-run with: -ConfirmDeploy '$expected'"
+  $expectedTh = ConvertTo-VanDeployTokenTh $expected
+  if (-not (Test-VanDeployTokenMatch -Provided $ConfirmDeploy -ExpectedEn $expected)) {
+    throw (Get-VanMsg 'blockedConfirmDeploy' @($expectedTh))
   }
-  Write-Host "[guard] Confirmation accepted: $expected" -ForegroundColor Green
+  Write-Host (Get-VanMsg 'confirmDeployAccepted' @($expectedTh)) -ForegroundColor Green
 }
 
 function Assert-VanFinalAcknowledge {
   param([Parameter(Mandatory)][string]$FinalAcknowledge)
   $cfg = Get-VanGovernanceConfig
-  if ($FinalAcknowledge -ne $cfg.FinalAcknowledge) {
-    throw "Deployment blocked. Re-run with: -FinalAcknowledge '$($cfg.FinalAcknowledge)'"
+  if (-not (Test-VanAckMatch -Provided $FinalAcknowledge -ExpectedEn $cfg.FinalAcknowledge)) {
+    throw (Get-VanMsg 'blockedFinalAck' @($cfg.FinalAcknowledgeTh))
   }
-  Write-Host '[guard] Final acknowledgement accepted.' -ForegroundColor Green
+  Write-Host (Get-VanMsg 'confirmFinalAccepted') -ForegroundColor Green
 }
 
 function Assert-VanImpactConfirmation {
@@ -196,10 +220,11 @@ function Assert-VanImpactConfirmation {
     [Parameter(Mandatory)][string]$ConfirmImpact,
     [Parameter(Mandatory)][string]$ExpectedImpact
   )
-  if ($ConfirmImpact -ne $ExpectedImpact) {
-    throw "Deployment blocked. Re-run with: -ConfirmImpact '$ExpectedImpact'"
+  $expectedTh = ConvertTo-VanImpactTokenTh $ExpectedImpact
+  if (-not (Test-VanImpactTokenMatch -Provided $ConfirmImpact -ExpectedEn $ExpectedImpact)) {
+    throw (Get-VanMsg 'blockedConfirmImpact' @($expectedTh))
   }
-  Write-Host "[guard] Impact confirmation accepted: $ExpectedImpact" -ForegroundColor Green
+  Write-Host (Get-VanMsg 'confirmImpactAccepted' @($expectedTh)) -ForegroundColor Green
 }
 
 function Assert-VanFileConfirmation {
@@ -208,9 +233,9 @@ function Assert-VanFileConfirmation {
     [Parameter(Mandatory)][string]$ExpectedFile
   )
   if ($ConfirmFile -ne $ExpectedFile) {
-    throw "Deployment blocked. Re-run with: -ConfirmFile '$ExpectedFile'"
+    throw (Get-VanMsg 'blockedConfirmFile' @($ExpectedFile))
   }
-  Write-Host "[guard] File confirmation accepted: $ExpectedFile" -ForegroundColor Green
+  Write-Host (Get-VanMsg 'confirmFileAccepted' @($ExpectedFile)) -ForegroundColor Green
 }
 
 function Get-VanFirestoreRulesHash {
@@ -233,7 +258,7 @@ function Sync-VanFirestoreRules {
   }
 
   $canonicalHash = Get-VanFirestoreRulesHash -Path $canonical
-  Write-Host "[sync] Canonical ($($cfg.FirestoreCanonicalApp)): $canonicalHash" -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'syncCanonical' @($cfg.FirestoreCanonicalApp, $canonicalHash)) -ForegroundColor Cyan
 
   foreach ($target in $cfg.FirestoreSyncTargets) {
     $targetPath = $target.Path
@@ -243,7 +268,7 @@ function Sync-VanFirestoreRules {
     }
 
     if ($WhatIf) {
-      Write-Host "[sync][what-if] Would copy canonical rules -> $($target.App) ($targetPath)" -ForegroundColor Yellow
+      Write-Host (Get-VanMsg 'syncWhatIf' @($target.App, $targetPath)) -ForegroundColor Yellow
       continue
     }
 
@@ -252,7 +277,7 @@ function Sync-VanFirestoreRules {
     if ($targetHash -ne $canonicalHash) {
       throw "Sync failed for $($target.App): hash mismatch after copy."
     }
-    Write-Host "[sync] $($target.App) synced OK" -ForegroundColor Green
+    Write-Host (Get-VanMsg 'syncOk' @($target.App)) -ForegroundColor Green
   }
 }
 
@@ -268,7 +293,7 @@ function Assert-VanFirestoreRulesSynced {
   $canonicalHash = Get-VanFirestoreRulesHash -Path $canonical
 
   if ($App -eq $cfg.FirestoreCanonicalApp) {
-    Write-Host "[guard] Deploying from canonical owner ($App)." -ForegroundColor Green
+    Write-Host (Get-VanMsg 'guardCanonicalOwner' @($App)) -ForegroundColor Green
     return
   }
 
@@ -283,12 +308,12 @@ function Assert-VanFirestoreRulesSynced {
 
   $localHash = Get-VanFirestoreRulesHash -Path $localRules
   if ($localHash -eq $canonicalHash) {
-    Write-Host "[guard] $App rules match canonical." -ForegroundColor Green
+    Write-Host (Get-VanMsg 'guardRulesMatch' @($App)) -ForegroundColor Green
     return
   }
 
   if ($AutoSync) {
-    Write-Host "[guard] $App rules differ — auto-sync from canonical..." -ForegroundColor Yellow
+    Write-Host (Get-VanMsg 'guardRulesAutoSync' @($App)) -ForegroundColor Yellow
     Sync-VanFirestoreRules
     return
   }
@@ -506,7 +531,7 @@ function Invoke-VanDeployReadiness {
     )
 
     if (-not $Quiet) {
-      $status = if ($Ok) { 'OK' } else { 'FAIL' }
+      $status = if ($Ok) { (Get-VanMsg 'readinessStatusOk') } else { (Get-VanMsg 'readinessStatusFail') }
       $color = if ($Ok) { 'Green' } else { 'Red' }
       $line = '  [' + $status + '] ' + $Label
       Write-Host $line -ForegroundColor $color
@@ -523,8 +548,8 @@ function Invoke-VanDeployReadiness {
 
   if (-not $Quiet) {
     Write-Host ''
-    Write-Host ('=== Deploy Readiness: ' + $App + ' / ' + $Target + ' ===') -ForegroundColor Cyan
-    Write-Host 'Docs: van2\scripts\DEPLOY_GOVERNANCE.md + DEPLOY_RISK_MATRIX.md' -ForegroundColor DarkGray
+    Write-Host (Get-VanMsg 'readinessTitle' @($App, $Target)) -ForegroundColor Cyan
+    Write-Host (Get-VanMsg 'readinessDocs') -ForegroundColor DarkGray
     Write-Host ''
   }
 
@@ -532,50 +557,49 @@ function Invoke-VanDeployReadiness {
     Show-VanDeployImpactSummary -App $App -Target $Target
   }
 
-  Write-ReadinessCheck -Label 'Firebase CLI in PATH' -Ok ([bool](Get-Command firebase -ErrorAction SilentlyContinue)) -Hint 'Install: npm i -g firebase-tools'
-  Write-ReadinessCheck -Label ('App root exists (' + $App + ')') -Ok (Test-Path $cfg.Apps[$App].Root)
+  Write-ReadinessCheck -Label (Get-VanMsg 'readinessFirebaseCli') -Ok ([bool](Get-Command firebase -ErrorAction SilentlyContinue)) -Hint (Get-VanMsg 'readinessFirebaseCliHint')
+  Write-ReadinessCheck -Label (Get-VanMsg 'readinessAppRoot' @($App)) -Ok (Test-Path $cfg.Apps[$App].Root)
 
   $firebaserc = Join-Path $cfg.Apps[$App].Root '.firebaserc'
-  Write-ReadinessCheck -Label '.firebaserc present' -Ok (Test-Path $firebaserc)
+  Write-ReadinessCheck -Label (Get-VanMsg 'readinessFirebaserc') -Ok (Test-Path $firebaserc)
   if (Test-Path $firebaserc) {
     $rc = Get-Content $firebaserc -Raw | ConvertFrom-Json
     $projectOk = $rc.projects.default -eq $cfg.ProjectId
-    $projectHint = 'Expected project ' + $cfg.ProjectId
-    Write-ReadinessCheck -Label 'Project = van-merchant' -Ok $projectOk -Hint $projectHint
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessProject') -Ok $projectOk -Hint (Get-VanMsg 'readinessProjectHint' @($cfg.ProjectId))
   }
 
   if ($Target -eq 'firestore') {
-    Write-ReadinessCheck -Label 'Deploying from van2 (canonical)' -Ok ($App -eq 'van2') -Hint 'Firestore default DB is SHARED - deploy from van2 only'
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessVan2Canonical') -Ok ($App -eq 'van2') -Hint (Get-VanMsg 'readinessVan2CanonicalHint')
     if (Test-Path $paths.CanonicalRules) {
       try {
         Assert-VanFirestoreRulesSynced -App 'van2'
-        Write-ReadinessCheck -Label 'Canonical rules synced to van1/van3' -Ok $true
+        Write-ReadinessCheck -Label (Get-VanMsg 'readinessRulesSynced') -Ok $true
       }
       catch {
-        Write-ReadinessCheck -Label 'Canonical rules synced to van1/van3' -Ok $false -Hint 'Run: van2\scripts\sync-firestore-rules.ps1'
+        Write-ReadinessCheck -Label (Get-VanMsg 'readinessRulesSynced') -Ok $false -Hint (Get-VanMsg 'readinessRulesSyncedHint')
       }
     }
 
     $javaOk = Test-VanJava21Ready
-    Write-ReadinessCheck -Label 'Java 21+ for emulator pre-deploy gate' -Ok $javaOk -Hint 'Install JDK 21+ or set JAVA_HOME to Android Studio JBR'
-    Write-ReadinessCheck -Label 'Node.js in PATH (smoke test)' -Ok ([bool](Get-Command node -ErrorAction SilentlyContinue)) -Hint 'Install Node 20+'
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessJava21') -Ok $javaOk -Hint (Get-VanMsg 'readinessJava21Hint')
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessNode') -Ok ([bool](Get-Command node -ErrorAction SilentlyContinue)) -Hint (Get-VanMsg 'readinessNodeHint')
   }
 
   if ($Target -in @('firestore', 'functions')) {
-    $null = $warnings.Add('SHARED or critical target - run van3 rider smoke test immediately after deploy')
+    $null = $warnings.Add((Get-VanMsg 'readinessWarnShared'))
   }
 
   if ($App -eq 'van3' -and $Target -eq 'firestore') {
-    Write-ReadinessCheck -Label 'van3 blocked from Firestore deploy' -Ok $false -Hint 'Use van2 deploy-self -Target firestore'
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessVan3Blocked') -Ok $false -Hint (Get-VanMsg 'readinessVan3BlockedHint')
   }
 
   if ($App -in @('van3', 'van4') -and $Target -eq 'functions') {
-    Write-ReadinessCheck -Label ($App + ' has no functions codebase') -Ok $false -Hint 'Deploy functions from van1 or van2 only'
+    Write-ReadinessCheck -Label (Get-VanMsg 'readinessNoFunctions' @($App)) -Ok $false -Hint (Get-VanMsg 'readinessNoFunctionsHint')
   }
 
   if (-not $Quiet -and $warnings.Count -gt 0) {
     Write-Host ''
-    Write-Host 'Warnings:' -ForegroundColor Yellow
+    Write-Host (Get-VanMsg 'readinessWarnings') -ForegroundColor Yellow
     foreach ($w in $warnings) {
       Write-Host ('  ! ' + $w) -ForegroundColor Yellow
     }
@@ -583,7 +607,7 @@ function Invoke-VanDeployReadiness {
 
   if (-not $Quiet) {
     Write-Host ''
-    Write-Host 'Allowed targets for this app:' -ForegroundColor DarkCyan
+    Write-Host (Get-VanMsg 'readinessAllowedTargets') -ForegroundColor DarkCyan
     $appCfg = $cfg.Apps[$App]
     $allowed = @()
     if ($appCfg.CanDeployStorage) { $allowed += 'storage' }
@@ -597,14 +621,14 @@ function Invoke-VanDeployReadiness {
 
   if ($failures.Count -gt 0) {
     if (-not $Quiet) {
-      $failMsg = 'READINESS FAILED: ' + $failures.Count + ' issue(s)'
+      $failMsg = Get-VanMsg 'readinessFailed' @($failures.Count)
       Write-Host $failMsg -ForegroundColor Red
     }
     return 1
   }
 
   if (-not $Quiet) {
-    Write-Host 'READINESS OK - use deploy-self.ps1 for isolated deploy' -ForegroundColor Green
+    Write-Host (Get-VanMsg 'readinessOk') -ForegroundColor Green
     Write-Host ''
   }
   return 0
@@ -628,16 +652,17 @@ function Invoke-VanDeployGuardSession {
   Assert-VanImpactConfirmation -ConfirmImpact $ConfirmImpact -ExpectedImpact $ExpectedImpact
 
   if ($InteractiveConfirm) {
-    $interactiveFile = Read-Host "Interactive confirm file scope (expected: $ExpectedFile)"
+    $expectedImpactTh = ConvertTo-VanImpactTokenTh $ExpectedImpact
+    $interactiveFile = Read-Host (Get-VanMsg 'interactiveFilePrompt' @($ExpectedFile))
     if ($interactiveFile -ne $ExpectedFile) {
-      throw 'Interactive confirmation failed for file scope.'
+      throw (Get-VanMsg 'interactiveFileFail')
     }
-    $interactiveImpact = Read-Host "Interactive confirm impact scope (expected: $ExpectedImpact)"
-    if ($interactiveImpact -ne $ExpectedImpact) {
-      throw 'Interactive confirmation failed for impact scope.'
+    $interactiveImpact = Read-Host (Get-VanMsg 'interactiveImpactPrompt' @($expectedImpactTh))
+    if (-not (Test-VanImpactTokenMatch -Provided $interactiveImpact -ExpectedEn $ExpectedImpact)) {
+      throw (Get-VanMsg 'interactiveImpactFail')
     }
-    Write-Host '[interactive] File and impact confirmations accepted.' -ForegroundColor Green
-    $FinalAcknowledge = Read-Host "Type final acknowledgement before deploy (expected: $($cfg.FinalAcknowledge))"
+    Write-Host (Get-VanMsg 'interactiveOk') -ForegroundColor Green
+    $FinalAcknowledge = Read-Host (Get-VanMsg 'interactiveFinalPrompt' @($cfg.FinalAcknowledgeTh))
   }
 
   Assert-VanFinalAcknowledge -FinalAcknowledge $FinalAcknowledge
@@ -698,9 +723,9 @@ function Invoke-VanStorageRulesDeploy {
   } | ConvertTo-Json -Depth 6 | Set-Content -Path $tempConfig -Encoding UTF8
 
   try {
-    Write-Host "Deploying Storage rules to target '$storageTarget' (SELF:$App)" -ForegroundColor Cyan
+    Write-Host (Get-VanMsg 'storageDeploy' @($storageTarget, (Get-VanSelfImpactTh $App))) -ForegroundColor Cyan
     if ($DryRun) {
-      Write-Host "[dry-run] Skipping firebase deploy for storage:$storageTarget" -ForegroundColor Yellow
+      Write-Host (Get-VanMsg 'storageDryRun' @($storageTarget)) -ForegroundColor Yellow
       return
     }
     firebase deploy --project $cfg.ProjectId --only "storage:$storageTarget" --config $tempConfig
@@ -722,42 +747,50 @@ function Get-VanDeployImpactInfo {
     'firestore' {
       return [ordered]@{
         Scope        = 'SHARED'
+        ScopeTh      = (Get-VanMsg 'scopeSharedTh')
         Risk         = 'HIGH'
+        RiskTh       = (Get-VanMsg 'riskHighTh')
         AffectedApps = @('van1', 'van2', 'van3', 'van4')
-        Summary      = 'Firestore rules on default DB (all apps share one database)'
-        RiderRisk    = 'van3 orders/riders listeners fail if rules are wrong'
+        Summary      = (Get-VanMsg 'impactFirestoreSummary')
+        RiderRisk    = (Get-VanMsg 'impactFirestoreRider')
       }
     }
     'functions' {
       $riderNote = if ($App -eq 'van2') {
-        'pushAppNotification affects rider job push'
+        (Get-VanMsg 'impactFunctionsVan2Rider')
       } else {
-        'order/status functions affect shop flow'
+        (Get-VanMsg 'impactFunctionsVan1Rider')
       }
       return [ordered]@{
         Scope        = 'SELF'
+        ScopeTh      = (Get-VanMsg 'scopeSelfTh')
         Risk         = 'MEDIUM'
+        RiskTh       = (Get-VanMsg 'riskMediumTh')
         AffectedApps = @($App)
-        Summary      = "Cloud Functions codebase $App"
+        Summary      = (Get-VanMsg 'impactFunctionsSummary' @($App))
         RiderRisk    = $riderNote
       }
     }
     'firestore-van4' {
       return [ordered]@{
         Scope        = 'SELF'
+        ScopeTh      = (Get-VanMsg 'scopeSelfTh')
         Risk         = 'LOW'
+        RiskTh       = (Get-VanMsg 'riskLowTh')
         AffectedApps = @('van4')
-        Summary      = 'Firestore DB van4 isolated (admin only)'
-        RiderRisk    = 'Does not affect rider app'
+        Summary      = (Get-VanMsg 'impactFirestoreVan4Summary')
+        RiderRisk    = (Get-VanMsg 'impactFirestoreVan4Rider')
       }
     }
     default {
       return [ordered]@{
         Scope        = 'SELF'
+        ScopeTh      = (Get-VanMsg 'scopeSelfTh')
         Risk         = 'LOW'
+        RiskTh       = (Get-VanMsg 'riskLowTh')
         AffectedApps = @($App)
-        Summary      = "$Target target for $App only"
-        RiderRisk    = 'Does not affect rider Firestore listeners'
+        Summary      = (Get-VanMsg 'impactDefaultSummary' @($Target, $App))
+        RiderRisk    = (Get-VanMsg 'impactDefaultRider')
       }
     }
   }
@@ -771,16 +804,29 @@ function Show-VanDeployImpactSummary {
 
   $info = Get-VanDeployImpactInfo -App $App -Target $Target
   Write-Host ''
-  Write-Host '=== Deploy Impact (step 1) ===' -ForegroundColor Cyan
-  Write-Host ("  App/Target : {0} / {1}" -f $App, $Target)
-  Write-Host ("  Scope      : {0}" -f $info.Scope) -ForegroundColor $(if ($info.Scope -eq 'SHARED') { 'Red' } else { 'Green' })
-  Write-Host ("  Risk       : {0}" -f $info.Risk)
-  Write-Host ("  Affects    : {0}" -f ($info.AffectedApps -join ', '))
-  Write-Host ("  Detail     : {0}" -f $info.Summary)
-  Write-Host ("  Rider note : {0}" -f $info.RiderRisk) -ForegroundColor DarkYellow
+  Write-Host (Get-VanMsg 'impactTitle') -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'impactAppTarget' @($App, $Target))
+  Write-Host (Get-VanMsg 'impactScope' @($info.ScopeTh)) -ForegroundColor $(if ($info.Scope -eq 'SHARED') { 'Red' } else { 'Green' })
+  Write-Host (Get-VanMsg 'impactRisk' @($info.RiskTh))
+  Write-Host (Get-VanMsg 'impactApps' @(($info.AffectedApps -join ', ')))
+  Write-Host (Get-VanMsg 'impactDetail' @($info.Summary))
+  Write-Host (Get-VanMsg 'impactRider' @($info.RiderRisk)) -ForegroundColor DarkYellow
   if ($info.Scope -eq 'SHARED') {
-    Write-Host '  >> Auto backup rules before deploy (step 6)' -ForegroundColor Yellow
+    Write-Host (Get-VanMsg 'impactBackupNote') -ForegroundColor Yellow
   }
+  Write-Host ''
+  Write-Host (Get-VanMsg 'impactConfirmHeader') -ForegroundColor DarkCyan
+  Write-Host ("  -ConfirmDeploy `"$(ConvertTo-VanDeployTokenTh (Get-VanDeployConfirmToken -App $App))`"") -ForegroundColor Gray
+  if ($Target -eq 'firestore') {
+    Write-Host ("  -ConfirmImpact `"$(Get-VanSharedImpactTh)`"") -ForegroundColor Gray
+    Write-Host '  -ConfirmFile "firestore.rules"' -ForegroundColor Gray
+  } elseif ($Target -eq 'firestore-van4') {
+    Write-Host ("  -ConfirmImpact `"$(Get-VanSelfImpactTh 'van4')`"") -ForegroundColor Gray
+    Write-Host '  -ConfirmFile "firestore.rules"' -ForegroundColor Gray
+  } else {
+    Write-Host ("  -ConfirmImpact `"$(Get-VanSelfImpactTh $App)`"") -ForegroundColor Gray
+  }
+  Write-Host ("  -FinalAcknowledge `"$(Get-VanAckTh)`"") -ForegroundColor Gray
   Write-Host ''
 }
 
@@ -804,7 +850,7 @@ function Backup-VanFirestoreRules {
   $backupPath = Join-Path $backupDir $backupFileName
 
   if ($DryRun) {
-    Write-Host "(backup) dry-run would save: $backupPath" -ForegroundColor Yellow
+    Write-Host (Get-VanMsg 'backupDryRun' @($backupPath)) -ForegroundColor Yellow
     return $backupPath
   }
 
@@ -820,7 +866,7 @@ function Backup-VanFirestoreRules {
     "source=$SourcePath"
   ) | Set-Content -Path $latestManifest -Encoding UTF8
 
-  Write-Host "(backup) Rules saved step 6: $backupPath" -ForegroundColor Green
+  Write-Host (Get-VanMsg 'backupSaved' @($backupPath)) -ForegroundColor Green
   return $backupPath
 }
 
@@ -833,24 +879,24 @@ function Show-VanPostDeployConnectionGuide {
 
   $info = Get-VanDeployImpactInfo -App $App -Target $Target
   Write-Host ''
-  Write-Host '=== After deploy - connection signals (step 4) ===' -ForegroundColor Cyan
-  Write-Host 'Docs: van2\scripts\DEPLOY_CONNECTION_SIGNALS.md'
+  Write-Host (Get-VanMsg 'postDeployTitle') -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'postDeployDocs')
   Write-Host ''
 
   if ($info.Scope -eq 'SHARED' -or $Target -eq 'functions') {
-    Write-Host 'Automated smoke test (step 3) runs after deploy via deploy-smoke-test.ps1'
-    Write-Host 'Manual checks (optional):' -ForegroundColor Yellow
-    Write-Host '  [ ] van3: Rider jobs page loads (no permission-denied)'
-    Write-Host '  [ ] van3: online toggle updates riders doc'
-    Write-Host '  [ ] van2: cart/order status loads'
-    Write-Host '  [ ] van1: shop orders load'
+    Write-Host (Get-VanMsg 'postDeploySmokeAuto')
+    Write-Host (Get-VanMsg 'postDeployManual') -ForegroundColor Yellow
+    Write-Host (Get-VanMsg 'postDeployCheckVan3Jobs')
+    Write-Host (Get-VanMsg 'postDeployCheckVan3Online')
+    Write-Host (Get-VanMsg 'postDeployCheckVan2Cart')
+    Write-Host (Get-VanMsg 'postDeployCheckVan1Orders')
     Write-Host ''
   }
 
-  Write-Host 'Connection loss signals:' -ForegroundColor DarkYellow
-  Write-Host '  permission-denied  -> Firestore rules issue / rollback'
-  Write-Host '  endless spinner    -> listener error or network'
-  Write-Host '  stale data         -> realtime listener dropped'
+  Write-Host (Get-VanMsg 'postDeploySignals') -ForegroundColor DarkYellow
+  Write-Host (Get-VanMsg 'postDeploySignalDenied')
+  Write-Host (Get-VanMsg 'postDeploySignalSpinner')
+  Write-Host (Get-VanMsg 'postDeploySignalStale')
   Write-Host ''
 
   if ($BackupPath) {
@@ -864,30 +910,30 @@ function Show-VanDeployGovernanceHelp {
   $paths = Get-VanGovernanceRoot
 
   Write-Host ''
-  Write-Host '=== Van Ecosystem Safe Deploy ===' -ForegroundColor Cyan
-  Write-Host "Project: $($cfg.ProjectId)"
-  Write-Host "Firestore canonical: $($paths.CanonicalRules)"
+  Write-Host (Get-VanMsg 'helpTitle') -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'helpProject' @($cfg.ProjectId))
+  Write-Host (Get-VanMsg 'helpCanonicalRules' @($paths.CanonicalRules))
   Write-Host ''
-  Write-Host 'RULE 1 — Firestore rules: edit van2 only, sync, deploy from van2' -ForegroundColor Yellow
-  Write-Host '  sync:  van2\scripts\sync-firestore-rules.ps1'
-  Write-Host '  deploy: van2\scripts\deploy-firestore-isolated.ps1 -ConfirmDeploy APPROVE:van2:van-merchant ...'
+  Write-Host (Get-VanMsg 'helpRule1') -ForegroundColor Yellow
+  Write-Host (Get-VanMsg 'helpRule1Sync')
+  Write-Host (Get-VanMsg 'helpRule1Deploy')
   Write-Host ''
-  Write-Host 'RULE 2 — Functions: one codebase per function, never cross-deploy' -ForegroundColor Yellow
+  Write-Host (Get-VanMsg 'helpRule2') -ForegroundColor Yellow
   Write-Host ("  van1: {0}" -f ($cfg.FunctionOwnershipVan1 -join ', '))
   Write-Host ("  van2: {0}" -f ($cfg.FunctionOwnershipVan2 -join ', '))
   Write-Host ''
-  Write-Host 'RULE 3 — Never use deploy-van-merchant-rules.ps1 or raw firebase deploy for shared resources' -ForegroundColor Yellow
+  Write-Host (Get-VanMsg 'helpRule3') -ForegroundColor Yellow
   Write-Host ''
-  Write-Host 'RULE 4 — Always pass ConfirmDeploy, ConfirmFile, ConfirmImpact, FinalAcknowledge' -ForegroundColor Yellow
+  Write-Host (Get-VanMsg 'helpRule4') -ForegroundColor Yellow
   Write-Host ''
-  Write-Host 'Per-app entry (from any repo):' -ForegroundColor Green
-  Write-Host '  ALL APPS: van2\scripts\deploy-readiness.ps1 then deploy-self.ps1 -App <vanN> -Target <one>'
-  Write-Host '  van1: deploy-self -App van1 -Target storage|hosting|functions'
-  Write-Host '  van2: deploy-self -App van2 -Target firestore|storage|hosting|functions'
-  Write-Host '  van3: deploy-self -App van3 -Target storage|hosting ONLY'
-  Write-Host '  van4: deploy-self -App van4 -Target storage|hosting|firestore-van4'
+  Write-Host (Get-VanMsg 'helpEntryPoints') -ForegroundColor Green
+  Write-Host (Get-VanMsg 'helpAllApps')
+  Write-Host (Get-VanMsg 'helpVan1')
+  Write-Host (Get-VanMsg 'helpVan2')
+  Write-Host (Get-VanMsg 'helpVan3')
+  Write-Host (Get-VanMsg 'helpVan4')
   Write-Host ''
-  Write-Host 'Risk matrix: van2\scripts\DEPLOY_RISK_MATRIX.md' -ForegroundColor Yellow
-  Write-Host 'Global help: van2\scripts\deploy-safe.ps1 -Action help' -ForegroundColor Green
+  Write-Host (Get-VanMsg 'helpRiskMatrix') -ForegroundColor Yellow
+  Write-Host (Get-VanMsg 'helpSafeHelp') -ForegroundColor Green
   Write-Host ''
 }

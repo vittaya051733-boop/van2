@@ -8,6 +8,89 @@ import '../models/product_comment.dart';
 import '../services/product_comment_service.dart';
 import 'cached_app_image.dart';
 
+Future<void> showProductCommentsSheet({
+  required BuildContext context,
+  required String productId,
+  required String shopId,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (sheetContext) {
+      return DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.45,
+        maxChildSize: 0.92,
+        builder: (context, scrollController) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(top: 8, bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD1D5DB),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        'ความคิดเห็น',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF111827),
+                            ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.of(sheetContext).pop();
+                        showProductCommentComposerSheet(
+                          context: context,
+                          productId: productId,
+                          shopId: shopId,
+                        );
+                      },
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text(
+                        'เขียนความคิดเห็น',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: Color(0xFFE5E7EB)),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  children: <Widget>[
+                    ProductCommentList(productId: productId),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
 Future<void> showProductCommentComposerSheet({
   required BuildContext context,
   required String productId,

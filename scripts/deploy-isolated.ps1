@@ -149,7 +149,10 @@ if ($targets -contains "hosting:$hostingTarget") {
     exit 1
   }
   if ($BuildWeb) {
-    flutter build web
+    & (Join-Path $PSScriptRoot 'build-web.ps1')
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
   }
 }
 

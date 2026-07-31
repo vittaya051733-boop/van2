@@ -1,20 +1,22 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
-import 'cart_screen.dart';
+import 'models/omise_payment_channel.dart';
 import 'map_picker_screen.dart';
 import 'shipping_pricing_policy.dart';
 import 'travel_payment_flow.dart';
+import 'travel_tracking_screen.dart';
 import 'travel_vehicle_type.dart';
 import 'utils/customer_location.dart';
 import 'utils/customer_location_gate.dart';
 import 'utils/driving_route_service.dart';
 import 'utils/places_autocomplete_service.dart';
+import 'widgets/online_rider_slider.dart';
 
 enum _TravelActivePin { pickup, destination }
 
@@ -24,12 +26,14 @@ class TravelPlannerResult {
     required this.destination,
     required this.rideSelection,
     required this.distanceKm,
+    required this.idempotencyKey,
   });
 
   final PickedLocation pickup;
   final PickedLocation destination;
   final TravelRideSelection rideSelection;
   final double distanceKm;
+  final String idempotencyKey;
 }
 
 class TravelRideSelection {
@@ -66,7 +70,7 @@ class TravelPlannerScreen extends StatefulWidget {
     this.initialDestination,
     this.initialRideSelection,
     this.onConfirmCashOnDelivery,
-    this.onSubmitPromptPaySlip,
+    this.onSubmitOmisePayment,
     this.onOpenOrderRoadmap,
   });
 
@@ -74,11 +78,14 @@ class TravelPlannerScreen extends StatefulWidget {
   final PickedLocation? initialDestination;
   final TravelRideSelection? initialRideSelection;
   final Future<List<String>> Function(TravelPlannerResult request)? onConfirmCashOnDelivery;
-  final Future<PaymentSlipSubmissionResult> Function(
+  final Future<List<String>> Function(
     TravelPlannerResult request,
-    PaymentSlipSubmissionRequest slipRequest,
-  )? onSubmitPromptPaySlip;
-  final Future<void> Function(List<String> orderIds)? onOpenOrderRoadmap;
+    OmisePaymentChannel channel,
+  )? onSubmitOmisePayment;
+  final Future<void> Function(
+    List<String> orderIds, {
+    bool showTravelTracking,
+  })? onOpenOrderRoadmap;
 
   @override
   State<TravelPlannerScreen> createState() => _TravelPlannerScreenState();
@@ -112,6 +119,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   bool _showSuggestions = false;
   Timer? _suggestionRefreshDebounce;
   int _suggestionsRequestId = 0;
+  bool _isSubmittingOrder = false;
+  String? _activeIdempotencyKey;
 
   @override
   void initState() {
@@ -533,8 +542,59 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     setState(() {
       _placeSuggestions = result.suggestions;
       _isLoadingSuggestions = false;
-      _showSuggestions = result.suggestions.isNotEmpty;
+      _showSuggestions =
+          result.suggestions.isNotEmpty || result.failureMessage != null;
     });
+
+    if (result.failureMessage != null && result.suggestions.isEmpty) {
+      if (_isPlacesBackendKeyError(result.failureMessage)) {
+        final fallback = await _geocodeFallbackSuggestions(query);
+        if (!mounted || requestId != _suggestionsRequestId) {
+          return;
+        }
+        if (fallback.isNotEmpty) {
+          setState(() {
+            _placeSuggestions = fallback;
+            _isLoadingSuggestions = false;
+            _showSuggestions = true;
+          });
+          return;
+        }
+      }
+      _showSnackBar(result.failureMessage!);
+    }
+  }
+
+  static bool _isPlacesBackendKeyError(String? message) {
+    if (message == null || message.isEmpty) {
+      return false;
+    }
+    final lower = message.toLowerCase();
+    return lower.contains('not authorized') ||
+        lower.contains('referer restrictions') ||
+        lower.contains('request_denied');
+  }
+
+  Future<List<PlaceSuggestion>> _geocodeFallbackSuggestions(String query) async {
+    try {
+      final locations = await locationFromAddress(query);
+      if (locations.isEmpty) {
+        return const <PlaceSuggestion>[];
+      }
+
+      final first = locations.first;
+      final placeId = 'geocode:${first.latitude},${first.longitude}';
+      return <PlaceSuggestion>[
+        PlaceSuggestion(
+          placeId: placeId,
+          primaryText: query,
+          secondaryText: 'ค้นหาด้วย Geocoding (fallback)',
+          description: query,
+        ),
+      ];
+    } catch (_) {
+      return const <PlaceSuggestion>[];
+    }
   }
 
   Future<void> _applyResolvedPlace(ResolvedPlace resolved) async {
@@ -567,6 +627,30 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     setState(() => _isSearchingDestination = true);
 
     try {
+      final geocodeMatch = RegExp(r'^geocode:(-?\d+\.?\d*),(-?\d+\.?\d*)$')
+          .firstMatch(suggestion.placeId.trim());
+      if (geocodeMatch != null) {
+        final latitude = double.tryParse(geocodeMatch.group(1)!);
+        final longitude = double.tryParse(geocodeMatch.group(2)!);
+        if (latitude != null && longitude != null) {
+          final picked = await buildPickedLocationFromSearch(
+            latitude: latitude,
+            longitude: longitude,
+            searchQuery: suggestion.primaryText,
+          );
+          await _applyResolvedPlace(
+            ResolvedPlace(
+              placeId: suggestion.placeId,
+              title: picked.title,
+              subtitle: picked.subtitle ?? '',
+              latitude: latitude,
+              longitude: longitude,
+            ),
+          );
+          return;
+        }
+      }
+
       final resolved = await PlacesAutocompleteService.resolvePlace(
         suggestion.placeId,
       );
@@ -720,6 +804,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         return _TravelRideSetupSheet(
           distanceKm: _distanceKm!,
           initialSelection: _rideSelection,
+          pickupLatitude: _pickup.latitude,
+          pickupLongitude: _pickup.longitude,
         );
       },
     );
@@ -734,12 +820,28 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
 
   TravelPlannerResult _buildSubmissionResult() {
     final rideSelection = _rideSelection!;
+    final idempotencyKey = _activeIdempotencyKey ??
+        'travel_${DateTime.now().microsecondsSinceEpoch}';
     return TravelPlannerResult(
       pickup: _pickup,
       destination: _destination!,
       rideSelection: rideSelection,
       distanceKm: _distanceKm!,
+      idempotencyKey: idempotencyKey,
     );
+  }
+
+  Future<void> _completeOrderAndReleaseLock(List<String> orderIds) async {
+    try {
+      await _completeOrder(orderIds);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmittingOrder = false;
+          _activeIdempotencyKey = null;
+        });
+      }
+    }
   }
 
   Future<void> _completeOrder(List<String> orderIds) async {
@@ -747,23 +849,53 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       return;
     }
 
+    final orderId = orderIds.first.trim();
+    if (orderId.isEmpty) {
+      return;
+    }
+
     if (widget.onOpenOrderRoadmap != null) {
-      await widget.onOpenOrderRoadmap!(orderIds);
+      await widget.onOpenOrderRoadmap!(
+        orderIds,
+        showTravelTracking: false,
+      );
     }
 
     if (!mounted) {
       return;
     }
 
-    Navigator.of(context).pop(_buildSubmissionResult());
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    await navigator.pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => TravelTrackingScreen(orderId: orderId),
+      ),
+    );
   }
 
   Future<void> _submit([TravelRideSelection? selection]) async {
+    if (_isSubmittingOrder) {
+      return;
+    }
+
     final rideSelection = selection ?? _rideSelection;
     if (rideSelection == null) {
       _showSnackBar('กรุณาเลือกเวลาและประเภทรถก่อน');
       return;
     }
+
+    setState(() {
+      _isSubmittingOrder = true;
+      _activeIdempotencyKey = 'travel_${DateTime.now().microsecondsSinceEpoch}';
+    });
 
     await showTravelPaymentFlow(
       context: context,
@@ -776,12 +908,27 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       onConfirmCashOnDelivery: widget.onConfirmCashOnDelivery == null
           ? null
           : () => widget.onConfirmCashOnDelivery!(_buildSubmissionResult()),
-      onSubmitPromptPaySlip: widget.onSubmitPromptPaySlip == null
+      onSubmitOmisePayment: widget.onSubmitOmisePayment == null
           ? null
-          : (slipRequest) =>
-              widget.onSubmitPromptPaySlip!(_buildSubmissionResult(), slipRequest),
-      onOrderCompleted: _completeOrder,
+          : (channel) =>
+              widget.onSubmitOmisePayment!(_buildSubmissionResult(), channel),
+      onOrderCompleted: _completeOrderAndReleaseLock,
     );
+
+    if (mounted && _isSubmittingOrder) {
+      setState(() {
+        _isSubmittingOrder = false;
+        _activeIdempotencyKey = null;
+      });
+    }
+  }
+
+  void _skipLocationGate() {
+    setState(() {
+      _pickupReady = true;
+      _retryPickupOnResume = false;
+    });
+    _showSnackBar('เลือกจุดรับโดยแตะแผนที่หรือลากหมุดสีเขียว');
   }
 
   Widget _buildLocationGateOverlay() {
@@ -814,12 +961,25 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'ระบบต้องใช้ตำแหน่งปัจจุบันเป็นจุดรับผู้โดยสาร',
+                  kIsWeb
+                      ? 'เว็บต้องได้รับอนุญาตจากเบราว์เซอร์ก่อน ระบบจึงจะใช้ตำแหน่งปัจจุบันเป็นจุดรับ'
+                      : 'ระบบต้องใช้ตำแหน่งปัจจุบันเป็นจุดรับผู้โดยสาร',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: const Color(0xFF6B7280),
                       ),
                 ),
+                if (kIsWeb) ...<Widget>[
+                  const SizedBox(height: 12),
+                  Text(
+                    'ถ้าเคยกด "Block": คลิกไอคอน 🔒 หรือ ⓘ ข้าง van2.web.app → Location → Allow แล้วรีเฟรชหน้า',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF9A3412),
+                          height: 1.4,
+                        ),
+                  ),
+                ],
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
@@ -837,6 +997,15 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                           )
                         : const Icon(Icons.my_location),
                     label: const Text('เปิดตำแหน่ง'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed:
+                        _isRequestingLocationGate ? null : _skipLocationGate,
+                    child: const Text('เลือกจุดรับบนแผนที่แทน'),
                   ),
                 ),
               ],
@@ -1255,10 +1424,14 @@ class _TravelPlaceSuggestionSheet extends StatelessWidget {
 class _TravelRideSetupSheet extends StatefulWidget {
   const _TravelRideSetupSheet({
     required this.distanceKm,
+    required this.pickupLatitude,
+    required this.pickupLongitude,
     this.initialSelection,
   });
 
   final double distanceKm;
+  final double pickupLatitude;
+  final double pickupLongitude;
   final TravelRideSelection? initialSelection;
 
   @override
@@ -1464,15 +1637,17 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
       padding: EdgeInsets.fromLTRB(20, 20, 20, bottomInset + 20),
       child: SafeArea(
         top: false,
-        child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-          stream: watchTravelAvailableRiders(),
+        child: StreamBuilder<Map<TravelVehicleType, int>>(
+          stream: watchTravelVehicleCounts(),
+          initialData: peekTravelVehicleCounts(),
           builder: (context, snapshot) {
             final isLoadingRiders =
                 snapshot.connectionState == ConnectionState.waiting &&
                 !snapshot.hasData;
-            final vehicleCounts = countOnlineTravelVehicles(
-              snapshot.data ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
-            );
+            final vehicleCounts = snapshot.data ??
+                <TravelVehicleType, int>{
+                  for (final vehicle in TravelVehicleType.values) vehicle: 0,
+                };
             _maybeApplyDefaultVehicle(vehicleCounts);
             if (!isLoadingRiders &&
                 !_canBookImmediate(vehicleCounts) &&
@@ -1523,6 +1698,13 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                       color: const Color(0xFF6B7280),
                       fontWeight: FontWeight.w600,
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  OnlineRiderSlider(
+                    mode: OnlineRiderSliderMode.travel,
+                    vehicleType: _selectedVehicle,
+                    referenceLatitude: widget.pickupLatitude,
+                    referenceLongitude: widget.pickupLongitude,
                   ),
                   const SizedBox(height: 16),
                   ...sortedVehicles.map(

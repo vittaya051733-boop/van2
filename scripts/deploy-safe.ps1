@@ -11,7 +11,7 @@ param(
   [string]$ConfirmDeploy,
   [string]$ConfirmFile,
   [string]$ConfirmImpact,
-  [string]$FinalAcknowledge = 'YES I UNDERSTAND',
+  [string]$FinalAcknowledge,
   [switch]$InteractiveConfirm,
   [switch]$DryRun
 )
@@ -19,6 +19,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
 . (Join-Path $scriptRoot 'deploy-governance.ps1')
+
+if ([string]::IsNullOrWhiteSpace($FinalAcknowledge)) {
+  $FinalAcknowledge = Get-VanAckTh
+}
 
 $cfg = Get-VanGovernanceConfig
 $paths = Get-VanGovernanceRoot
@@ -36,7 +40,7 @@ switch ($Action) {
       default { 'storage' }
     }
     Invoke-VanDeployPreflight -App $App -Target $target
-    Write-Host "[safe] Preflight OK for $App / $target" -ForegroundColor Green
+    Write-Host (Get-VanMsg 'safePreflightOk' @($App, $target)) -ForegroundColor Green
     exit 0
   }
 

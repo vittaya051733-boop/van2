@@ -31,7 +31,144 @@
   <link rel="icon" type="image/png" href="favicon.png"/>
 
   <title>VANTALAD</title>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB6Q5DE_VkpqO3qTn3bqPBawQjxzGEngxY"></script>
+  <script>
+    // Called by Maps JS when the API key / referrer is rejected (RefererNotAllowedMapError, etc.)
+    window.gm_authFailure = function () {
+      showPersistentWebError(
+        'google-maps-auth-error',
+        'Google Maps ใช้งานไม่ได้: ตรวจ API key และเพิ่ม https://van2.web.app/* ใน HTTP referrers (Google Cloud Console → Credentials)'
+      );
+    };
+
+    function showPersistentWebError(id, text) {
+      if (document.getElementById(id)) {
+        document.getElementById(id).textContent = text;
+        return;
+      }
+      const error = document.createElement('p');
+      error.id = id;
+      error.textContent = text;
+      error.style.cssText =
+        'position:fixed;left:16px;right:16px;bottom:24px;margin:0;padding:12px 16px;border-radius:12px;background:#ffebee;color:#b71c1c;font:14px/1.45 sans-serif;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:99999;max-width:640px;margin-left:auto;margin-right:auto;';
+      document.body.appendChild(error);
+    }
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB6Q5DE_VkpqO3qTn3bqPBawQjxzGEngxY&libraries=places"></script>
+  <script>
+    (function () {
+      var placesService = null;
+
+      function ensurePlacesReady() {
+        if (!window.google || !google.maps || !google.maps.places) {
+          throw new Error('Places library not loaded');
+        }
+        if (!placesService) {
+          var host = document.getElementById('van-places-host');
+          if (!host) {
+            host = document.createElement('div');
+            host.id = 'van-places-host';
+            host.style.display = 'none';
+            document.body.appendChild(host);
+          }
+          placesService = new google.maps.places.PlacesService(host);
+        }
+      }
+
+      window.vanPlacesFetchSuggestions = function (input, lat, lng) {
+        return new Promise(function (resolve, reject) {
+          try {
+            ensurePlacesReady();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          var service = new google.maps.places.AutocompleteService();
+          var request = {
+            input: input,
+            language: 'th',
+            componentRestrictions: { country: 'th' },
+          };
+
+          if (lat != null && lng != null) {
+            request.location = new google.maps.LatLng(lat, lng);
+            request.radius = 50000;
+          }
+
+          service.getPlacePredictions(request, function (predictions, status) {
+            if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+              resolve([]);
+              return;
+            }
+            if (status !== google.maps.places.PlacesServiceStatus.OK) {
+              reject(new Error(status));
+              return;
+            }
+
+            resolve(
+              (predictions || []).map(function (prediction) {
+                return {
+                  placeId: prediction.place_id,
+                  primaryText:
+                    (prediction.structured_formatting &&
+                      prediction.structured_formatting.main_text) ||
+                    prediction.description ||
+                    '',
+                  secondaryText:
+                    (prediction.structured_formatting &&
+                      prediction.structured_formatting.secondary_text) ||
+                    '',
+                  description: prediction.description || '',
+                };
+              })
+            );
+          });
+        });
+      };
+
+      window.vanPlacesResolvePlace = function (placeId) {
+        return new Promise(function (resolve, reject) {
+          try {
+            ensurePlacesReady();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          placesService.getDetails(
+            {
+              placeId: placeId,
+              fields: ['place_id', 'name', 'formatted_address', 'geometry'],
+              language: 'th',
+            },
+            function (result, status) {
+              if (status !== google.maps.places.PlacesServiceStatus.OK || !result) {
+                reject(new Error(status));
+                return;
+              }
+
+              var location =
+                result.geometry && result.geometry.location
+                  ? result.geometry.location
+                  : null;
+              if (!location) {
+                reject(new Error('Missing geometry'));
+                return;
+              }
+
+              resolve({
+                placeId: result.place_id || placeId,
+                title: result.name || '',
+                subtitle: result.formatted_address || '',
+                latitude: location.lat(),
+                longitude: location.lng(),
+              });
+            }
+          );
+        });
+      };
+    })();
+  </script>
   <link rel="manifest" href="manifest.json">
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
 
@@ -56,6 +193,7 @@
     function removeSplashFromWeb() {
       document.getElementById("flutter-loading")?.remove();
       window.clearTimeout(window._flutterLoaderTimeout);
+      // Keep transient loader errors removable; persistent map/auth errors stay visible.
       document.getElementById("flutter-load-error")?.remove();
     }
 

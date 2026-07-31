@@ -179,8 +179,10 @@ class PaymentQrService {
         type: PaymentChannelType.bankTransfer,
         title: '4. โอนเข้าบัญชีแล้วแนบสลิป',
         description: 'ใช้เลขบัญชีธนาคารโดยตรง และส่งสลิปให้ระบบตรวจภายหลัง',
-        isConfigured: true,
-        destinationLabel: '${config.bankName} ${config.bankAccountNumber}',
+        isConfigured: config.isConfigured,
+        destinationLabel: config.isConfigured
+            ? '${config.bankName} ${config.bankAccountNumber}'
+            : 'กำลังโหลดข้อมูลบัญชีรับเงิน',
       ),
     ];
 

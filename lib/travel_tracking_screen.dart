@@ -14,10 +14,13 @@ import 'models/rider_vehicle_profile.dart';
 import 'models/user_profile.dart';
 import 'services/chat_warmup.dart';
 import 'services/notification_service.dart';
+import 'travel_vehicle_type.dart';
 import 'utils/delivery_eta_policy.dart';
 import 'utils/driving_route_service.dart';
 import 'utils/order_no_rider_policy.dart';
+import 'utils/travel_vehicle_map_marker.dart';
 import 'widgets/no_rider_customer_actions_banner.dart';
+import 'widgets/travel_driver_profile_card.dart';
 
 void showTravelTrackingScreen({
   required BuildContext context,
@@ -28,6 +31,28 @@ void showTravelTrackingScreen({
       builder: (_) => TravelTrackingScreen(orderId: orderId),
     ),
   );
+}
+
+bool isActiveTravelTrackingOrder(Map<String, dynamic> data) {
+  final orderType = (data['orderType'] as String?)?.trim();
+  final serviceType = (data['serviceType'] as String?)?.trim();
+  final isTravel = orderType == 'travel_passenger' ||
+      serviceType == 'travel_passenger';
+  if (!isTravel) {
+    return false;
+  }
+
+  final status = (data['status'] as String?)?.trim().toLowerCase() ?? '';
+  if (status == 'delivered' ||
+      status == 'completed' ||
+      status == 'cancelled' ||
+      status == 'canceled' ||
+      status == 'refund' ||
+      status == 'refunded') {
+    return false;
+  }
+
+  return true;
 }
 
 class TravelTrackingScreen extends StatefulWidget {
@@ -41,65 +66,127 @@ class TravelTrackingScreen extends StatefulWidget {
 
 class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
   GoogleMapController? _mapController;
-  Timer? _locationTimer;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _riderSubscription;
   RiderVehicleProfile? _riderProfile;
   List<LatLng> _routePoints = const <LatLng>[];
+  List<LatLng> _legRoutePoints = const <LatLng>[];
   int? _etaMinutes;
   bool _isLoadingRoute = false;
   int _routeRequestId = 0;
-  String? _trackedDriverId;
+  int _legRouteRequestId = 0;
+  String? _boundDriverId;
+  Map<String, dynamic> _orderData = const <String, dynamic>{};
+  DateTime? _lastRouteFetchAt;
+  DateTime? _lastLegRouteFetchAt;
+  LatLng? _lastRouteOrigin;
+  _TravelTrackingStatus? _lastRouteStatus;
+  BitmapDescriptor? _riderMarkerIcon;
+  TravelVehicleType? _riderMarkerVehicleType;
 
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_refreshRiderLocation());
-    _locationTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) => unawaited(_refreshRiderLocation()),
-    );
-  }
+  static const Duration _routeRefreshMinInterval = Duration(minutes: 1);
+  static const double _routeRefreshMinMoveMeters = 120;
+  static const Color _routeLineColor = Color(0xFFDC2626);
 
   @override
   void dispose() {
-    _locationTimer?.cancel();
+    _riderSubscription?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
 
-  Future<void> _refreshRiderLocation() async {
-    final orderSnap = await FirebaseFirestore.instance
-        .collection('orders')
-        .doc(widget.orderId)
-        .get();
-    final orderData = orderSnap.data();
-    if (!mounted || orderData == null) {
-      return;
-    }
+  void _syncOrderSnapshot(Map<String, dynamic> orderData) {
+    final previousStatus =
+        _orderData.isEmpty ? null : _resolveStatus(_orderData);
+    _orderData = orderData;
+    final status = _resolveStatus(orderData);
+    final statusChanged =
+        previousStatus != null && previousStatus != status;
 
     final driverId = (orderData['driverId'] as String?)?.trim();
     if (driverId == null || driverId.isEmpty) {
+      _stopRiderListener();
+      if (statusChanged || previousStatus == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(_fitMapBounds(orderData));
+        });
+      }
       return;
     }
 
-    final riderSnap =
-        await FirebaseFirestore.instance.collection('riders').doc(driverId).get();
-    if (!mounted) {
+    if (driverId != _boundDriverId) {
+      _boundDriverId = driverId;
+      _lastRouteFetchAt = null;
+      _lastRouteOrigin = null;
+      _lastRouteStatus = null;
+      _routePoints = const <LatLng>[];
+      _legRoutePoints = const <LatLng>[];
+      _lastLegRouteFetchAt = null;
+      unawaited(_ensureRiderMarkerIcon(orderData));
+      _startRiderListener(driverId);
       return;
     }
 
-    final profile = RiderVehicleProfile.fromFirestore(
-      driverId,
-      riderSnap.data(),
+    unawaited(_ensureRiderMarkerIcon(orderData));
+
+    if (statusChanged) {
+      _maybeRefreshRouteForCurrentRider(forceStatusChange: true);
+      _maybeRefreshLegRoute(force: true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_fitMapBounds(orderData));
+      });
+    } else if (_riderProfile?.hasCoordinates == true) {
+      _maybeRefreshRouteForCurrentRider();
+      _maybeRefreshLegRoute();
+    }
+  }
+
+  void _stopRiderListener() {
+    _riderSubscription?.cancel();
+    _riderSubscription = null;
+    _boundDriverId = null;
+    if (_riderProfile != null) {
+      setState(() => _riderProfile = null);
+    }
+  }
+
+  void _startRiderListener(String driverId) {
+    _riderSubscription?.cancel();
+    _riderSubscription = FirebaseFirestore.instance
+        .collection('riders')
+        .doc(driverId)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) {
+          return;
+        }
+        final profile = RiderVehicleProfile.fromFirestore(
+          driverId,
+          snapshot.data(),
+        );
+        setState(() => _riderProfile = profile);
+        unawaited(_ensureRiderMarkerIcon(_orderData));
+        _onRiderLocationUpdated(profile);
+      },
+      onError: (_) {
+        // Ignore transient listener errors; order stream will retry bind.
+      },
     );
-    setState(() => _riderProfile = profile);
+  }
 
-    final pickup = _readPickupLatLng(orderData);
-    if (profile.hasCoordinates && pickup != null) {
+  void _onRiderLocationUpdated(RiderVehicleProfile profile) {
+    if (!profile.hasCoordinates || _orderData.isEmpty) {
+      return;
+    }
+
+    final status = _resolveStatus(_orderData);
+    final target = _routeTargetForStatus(_orderData, status);
+    if (target != null) {
       final distanceKm = Geolocator.distanceBetween(
             profile.latitude!,
             profile.longitude!,
-            pickup.latitude,
-            pickup.longitude,
+            target.latitude,
+            target.longitude,
           ) /
           1000;
       setState(() {
@@ -108,13 +195,73 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
           distanceKm,
         );
       });
-      await _refreshRoute(
-        originLat: profile.latitude!,
-        originLng: profile.longitude!,
-        destinationLat: pickup.latitude,
-        destinationLng: pickup.longitude,
-      );
     }
+
+    _maybeRefreshRouteForCurrentRider(profile: profile);
+    _maybeRefreshLegRoute();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_fitMapBounds(_orderData));
+    });
+  }
+
+  void _maybeRefreshRouteForCurrentRider({
+    RiderVehicleProfile? profile,
+    bool forceStatusChange = false,
+  }) {
+    final rider = profile ?? _riderProfile;
+    if (rider == null || !rider.hasCoordinates || _orderData.isEmpty) {
+      return;
+    }
+
+    final status = _resolveStatus(_orderData);
+    final statusChanged = forceStatusChange && _lastRouteStatus != status;
+    _lastRouteStatus = status;
+
+    final origin = LatLng(rider.latitude!, rider.longitude!);
+    if (!_shouldRefreshRoute(origin, statusChanged: statusChanged)) {
+      return;
+    }
+
+    final target = _routeTargetForStatus(_orderData, status);
+    if (target == null) {
+      return;
+    }
+
+    _lastRouteFetchAt = DateTime.now();
+    _lastRouteOrigin = origin;
+    unawaited(
+      _refreshRoute(
+        originLat: origin.latitude,
+        originLng: origin.longitude,
+        destinationLat: target.latitude,
+        destinationLng: target.longitude,
+        orderData: _orderData,
+      ),
+    );
+  }
+
+  bool _shouldRefreshRoute(LatLng origin, {required bool statusChanged}) {
+    if (statusChanged) {
+      return true;
+    }
+    final lastFetch = _lastRouteFetchAt;
+    if (lastFetch == null) {
+      return true;
+    }
+    if (DateTime.now().difference(lastFetch) >= _routeRefreshMinInterval) {
+      return true;
+    }
+    final previousOrigin = _lastRouteOrigin;
+    if (previousOrigin == null) {
+      return true;
+    }
+    final movedMeters = Geolocator.distanceBetween(
+      previousOrigin.latitude,
+      previousOrigin.longitude,
+      origin.latitude,
+      origin.longitude,
+    );
+    return movedMeters >= _routeRefreshMinMoveMeters;
   }
 
   Future<void> _refreshRoute({
@@ -122,6 +269,7 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
     required double originLng,
     required double destinationLat,
     required double destinationLng,
+    required Map<String, dynamic> orderData,
   }) async {
     final requestId = ++_routeRequestId;
     setState(() => _isLoadingRoute = true);
@@ -145,16 +293,186 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
         _etaMinutes = (durationSeconds / 60).ceil().clamp(1, 240);
       }
     });
-    await _fitMapBounds();
+    await _fitMapBounds(orderData);
+  }
+
+  void _maybeRefreshLegRoute({bool force = false}) {
+    if (_orderData.isEmpty) {
+      return;
+    }
+
+    final status = _resolveStatus(_orderData);
+    if (status != _TravelTrackingStatus.pickedUp) {
+      if (_legRoutePoints.isNotEmpty) {
+        setState(() => _legRoutePoints = const <LatLng>[]);
+      }
+      return;
+    }
+
+    final pickup = _readPickupLatLng(_orderData);
+    final destination = _readDestinationLatLng(_orderData);
+    if (pickup == null || destination == null) {
+      return;
+    }
+
+    final lastFetch = _lastLegRouteFetchAt;
+    if (!force &&
+        lastFetch != null &&
+        DateTime.now().difference(lastFetch) < _routeRefreshMinInterval) {
+      return;
+    }
+
+    _lastLegRouteFetchAt = DateTime.now();
+    unawaited(_fetchLegRoute(pickup: pickup, destination: destination));
+  }
+
+  Future<void> _fetchLegRoute({
+    required LatLng pickup,
+    required LatLng destination,
+  }) async {
+    final requestId = ++_legRouteRequestId;
+    final result = await DrivingRouteService.fetchDrivingRoute(
+      originLat: pickup.latitude,
+      originLng: pickup.longitude,
+      destinationLat: destination.latitude,
+      destinationLng: destination.longitude,
+    );
+    if (!mounted || requestId != _legRouteRequestId) {
+      return;
+    }
+
+    setState(() {
+      _legRoutePoints = result.route?.points ??
+          <LatLng>[pickup, destination];
+    });
+    await _fitMapBounds(_orderData);
   }
 
   LatLng? _readPickupLatLng(Map<String, dynamic> orderData) {
+    final travelRequest = orderData['travelRequest'];
+    if (travelRequest is Map) {
+      final pickup = travelRequest['pickup'];
+      if (pickup is Map) {
+        final lat = _toDouble(pickup['latitude']);
+        final lng = _toDouble(pickup['longitude']);
+        if (lat != null && lng != null) {
+          return LatLng(lat, lng);
+        }
+      }
+    }
+
     final lat = _toDouble(orderData['shopLatitude']);
     final lng = _toDouble(orderData['shopLongitude']);
     if (lat == null || lng == null) {
       return null;
     }
     return LatLng(lat, lng);
+  }
+
+  LatLng? _readDestinationLatLng(Map<String, dynamic> orderData) {
+    final travelRequest = orderData['travelRequest'];
+    if (travelRequest is Map) {
+      final destination = travelRequest['destination'];
+      if (destination is Map) {
+        final lat = _toDouble(destination['latitude']);
+        final lng = _toDouble(destination['longitude']);
+        if (lat != null && lng != null) {
+          return LatLng(lat, lng);
+        }
+      }
+    }
+
+    for (final key in <String>['customerLocation', 'deliverySnapshot']) {
+      final location = orderData[key];
+      if (location is Map) {
+        final lat = _toDouble(location['latitude']);
+        final lng = _toDouble(location['longitude']);
+        if (lat != null && lng != null) {
+          return LatLng(lat, lng);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  String? _readDestinationLabel(Map<String, dynamic> orderData) {
+    final travelRequest = orderData['travelRequest'];
+    if (travelRequest is Map) {
+      final destination = travelRequest['destination'];
+      if (destination is Map) {
+        final title = destination['title']?.toString().trim();
+        if (title != null && title.isNotEmpty) {
+          return title;
+        }
+        final subtitle = destination['subtitle']?.toString().trim();
+        if (subtitle != null && subtitle.isNotEmpty) {
+          return subtitle;
+        }
+      }
+    }
+
+    final customerLocation = orderData['customerLocation'];
+    if (customerLocation is Map) {
+      final label = customerLocation['label']?.toString().trim();
+      if (label != null && label.isNotEmpty) {
+        return label;
+      }
+    }
+
+    final deliverySnapshot = orderData['deliverySnapshot'];
+    if (deliverySnapshot is Map) {
+      final label = deliverySnapshot['locationLabel']?.toString().trim();
+      if (label != null && label.isNotEmpty) {
+        return label;
+      }
+    }
+
+    return null;
+  }
+
+  LatLng? _routeTargetForStatus(
+    Map<String, dynamic> orderData,
+    _TravelTrackingStatus status,
+  ) {
+    final pickup = _readPickupLatLng(orderData);
+    final destination = _readDestinationLatLng(orderData);
+    switch (status) {
+      case _TravelTrackingStatus.pickedUp:
+      case _TravelTrackingStatus.arrived:
+        return destination ?? pickup;
+      case _TravelTrackingStatus.searching:
+      case _TravelTrackingStatus.driverAssigned:
+      case _TravelTrackingStatus.driverComing:
+        return pickup ?? destination;
+    }
+  }
+
+  TravelVehicleType _resolveVehicleType(Map<String, dynamic> orderData) {
+    return _riderProfile?.vehicleType ??
+        readTravelOrderVehicleType(orderData) ??
+        TravelVehicleType.motorcycle;
+  }
+
+  Future<void> _ensureRiderMarkerIcon(Map<String, dynamic> orderData) async {
+    if (orderData.isEmpty) {
+      return;
+    }
+
+    final vehicleType = _resolveVehicleType(orderData);
+    if (vehicleType == _riderMarkerVehicleType && _riderMarkerIcon != null) {
+      return;
+    }
+
+    final icon = await travelVehicleMapMarker(vehicleType);
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _riderMarkerVehicleType = vehicleType;
+      _riderMarkerIcon = icon;
+    });
   }
 
   double? _toDouble(Object? value) {
@@ -164,22 +482,21 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
     return double.tryParse(value?.toString() ?? '');
   }
 
-  Future<void> _fitMapBounds() async {
+  Future<void> _fitMapBounds(Map<String, dynamic> orderData) async {
     final controller = _mapController;
     if (controller == null) {
       return;
     }
 
-    final orderSnap = await FirebaseFirestore.instance
-        .collection('orders')
-        .doc(widget.orderId)
-        .get();
-    final pickup = _readPickupLatLng(orderSnap.data() ?? const {});
+    final pickup = _readPickupLatLng(orderData);
+    final destination = _readDestinationLatLng(orderData);
     final rider = _riderProfile;
     final points = <LatLng>[
       if (pickup != null) pickup,
+      if (destination != null) destination,
       if (rider?.hasCoordinates == true)
         LatLng(rider!.latitude!, rider.longitude!),
+      ..._legRoutePoints,
       ..._routePoints,
     ];
     if (points.isEmpty) {
@@ -209,7 +526,7 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
           southwest: LatLng(minLat, minLng),
           northeast: LatLng(maxLat, maxLng),
         ),
-        72,
+        110,
       ),
     );
   }
@@ -218,6 +535,12 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
     final markers = <Marker>{};
     final pickup = _readPickupLatLng(orderData);
     if (pickup != null) {
+      final pickupLabel = (orderData['travelRequest'] is Map
+              ? ((orderData['travelRequest'] as Map)['pickup']?['title']
+                  ?.toString())
+              : null) ??
+          (orderData['shopName'] as String?) ??
+          'จุดรับ';
       markers.add(
         Marker(
           markerId: const MarkerId('pickup'),
@@ -225,7 +548,22 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           infoWindow: InfoWindow(
             title: 'จุดรับ',
-            snippet: (orderData['shopAddress'] as String?) ?? '',
+            snippet: pickupLabel,
+          ),
+        ),
+      );
+    }
+
+    final destination = _readDestinationLatLng(orderData);
+    if (destination != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('destination'),
+          position: destination,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: InfoWindow(
+            title: 'ปลายทาง',
+            snippet: _readDestinationLabel(orderData) ?? '',
           ),
         ),
       );
@@ -233,28 +571,74 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
 
     final rider = _riderProfile;
     if (rider?.hasCoordinates == true) {
+      final vehicleType = _resolveVehicleType(orderData);
       markers.add(
         Marker(
           markerId: const MarkerId('rider'),
           position: LatLng(rider!.latitude!, rider.longitude!),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-          infoWindow: InfoWindow(title: rider.displayName),
+          icon: _riderMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          anchor: const Offset(0.5, 1.0),
+          infoWindow: InfoWindow(
+            title: rider.displayName,
+            snippet: vehicleType.label,
+          ),
         ),
       );
     }
     return markers;
   }
 
-  Set<Polyline> _buildPolylines() {
-    if (_routePoints.length < 2) {
+  List<LatLng> _resolveRouteDisplayPoints(Map<String, dynamic> orderData) {
+    final status = _resolveStatus(orderData);
+    if (status == _TravelTrackingStatus.pickedUp &&
+        _legRoutePoints.length >= 2) {
+      return _legRoutePoints;
+    }
+
+    if (_routePoints.length >= 2) {
+      return _routePoints;
+    }
+
+    final rider = _riderProfile;
+    final target = _routeTargetForStatus(orderData, status);
+    if (rider?.hasCoordinates != true || target == null) {
+      return const <LatLng>[];
+    }
+
+    return <LatLng>[
+      LatLng(rider!.latitude!, rider.longitude!),
+      target,
+    ];
+  }
+
+  Set<Polyline> _buildPolylines(Map<String, dynamic> orderData) {
+    final status = _resolveStatus(orderData);
+    final points = _resolveRouteDisplayPoints(orderData);
+    if (points.length < 2) {
       return const <Polyline>{};
     }
+
+    final isPreview = status != _TravelTrackingStatus.pickedUp &&
+        _routePoints.length < 2;
+
     return <Polyline>{
       Polyline(
+        polylineId: const PolylineId('rider_route_outline'),
+        points: points,
+        color: Colors.white,
+        width: isPreview ? 9 : 12,
+        geodesic: true,
+      ),
+      Polyline(
         polylineId: const PolylineId('rider_route'),
-        points: _routePoints,
-        color: const Color(0xFF16A34A),
-        width: 5,
+        points: points,
+        color: _routeLineColor,
+        width: isPreview ? 5 : 7,
+        geodesic: true,
+        patterns: isPreview
+            ? <PatternItem>[PatternItem.dash(18), PatternItem.gap(10)]
+            : <PatternItem>[],
       ),
     };
   }
@@ -264,8 +648,13 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
     if (status == 'completed' || status == 'delivered') {
       return _TravelTrackingStatus.arrived;
     }
-    if (data['scannedAt'] != null || status.contains('picked')) {
+    if (status == 'delivering' ||
+        data['scannedAt'] != null ||
+        status.contains('picked')) {
       return _TravelTrackingStatus.pickedUp;
+    }
+    if (status == 'ready' || data['pickupArrivedAt'] != null) {
+      return _TravelTrackingStatus.driverComing;
     }
     if (data['acceptedAt'] != null ||
         status == 'accepted' ||
@@ -380,20 +769,22 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
           .snapshots(),
       builder: (context, snapshot) {
         final orderData = snapshot.data?.data() ?? const <String, dynamic>{};
-        final driverId = (orderData['driverId'] as String?)?.trim();
-        if (driverId != null &&
-            driverId.isNotEmpty &&
-            driverId != _trackedDriverId) {
-          _trackedDriverId = driverId;
+        if (orderData.isNotEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            unawaited(_refreshRiderLocation());
+            if (!mounted) {
+              return;
+            }
+            _syncOrderSnapshot(orderData);
           });
         }
+
         final status = _resolveStatus(orderData);
         final pickup = _readPickupLatLng(orderData);
+        final destination = _readDestinationLatLng(orderData);
         final rider = _riderProfile;
         final hasRider = rider != null;
         final initialTarget = pickup ??
+            destination ??
             (rider?.hasCoordinates == true
                 ? LatLng(rider!.latitude!, rider.longitude!)
                 : const LatLng(13.7563, 100.5018));
@@ -408,10 +799,10 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
                 ),
                 onMapCreated: (controller) {
                   _mapController = controller;
-                  unawaited(_fitMapBounds());
+                  unawaited(_fitMapBounds(orderData));
                 },
                 markers: _buildMarkers(orderData),
-                polylines: _buildPolylines(),
+                polylines: _buildPolylines(orderData),
                 myLocationEnabled: true,
                 myLocationButtonEnabled: false,
                 zoomControlsEnabled: false,
@@ -522,16 +913,29 @@ class _TravelTrackingSheet extends StatelessWidget {
   final VoidCallback? onChat;
   final VoidCallback? onCall;
 
+  bool get _shouldShowEtaInCard {
+    if (etaMinutes == null) {
+      return false;
+    }
+    return status == _TravelTrackingStatus.driverAssigned ||
+        status == _TravelTrackingStatus.driverComing ||
+        status == _TravelTrackingStatus.pickedUp;
+  }
+
+  String get _etaTargetLabel {
+    return status == _TravelTrackingStatus.pickedUp ? 'ปลายทาง' : 'จุดรับ';
+  }
+
   String get _statusTitle {
     switch (status) {
       case _TravelTrackingStatus.searching:
         return 'กำลังหาไรเดอร์';
       case _TravelTrackingStatus.driverAssigned:
-        return 'ไรเดอร์รับงานแล้ว';
+        return 'รอไรเดอร์รับงาน';
       case _TravelTrackingStatus.driverComing:
         return 'คนขับกำลังมา';
       case _TravelTrackingStatus.pickedUp:
-        return 'ไรเดอร์ถึงจุดรับแล้ว';
+        return 'กำลังเดินทางไปปลายทาง';
       case _TravelTrackingStatus.arrived:
         return 'ถึงจุดหมายแล้ว';
     }
@@ -550,11 +954,11 @@ class _TravelTrackingSheet extends StatelessWidget {
         }
         return 'ระบบกำลังจับคู่ไรเดอร์ที่ใกล้ที่สุด';
       case _TravelTrackingStatus.driverAssigned:
-        return 'ไรเดอร์กำลังเตรียมออกเดินทางมาหาคุณ';
+        return 'ระบบจับคู่ไรเดอร์แล้ว รอไรเดอร์ยืนยันรับงาน';
       case _TravelTrackingStatus.driverComing:
         return 'ขึ้นรถทันที คนขับไม่สามารถจอดรอได้';
       case _TravelTrackingStatus.pickedUp:
-        return 'กรุณาเดินไปที่จุดรับ $pickupLabel';
+        return 'ติดตามเส้นทางจากจุดรับไปปลายทาง (อัปเดตทุก ~1 นาที)';
       case _TravelTrackingStatus.arrived:
         return 'ขอให้เดินทางปลอดภัย';
     }
@@ -564,6 +968,7 @@ class _TravelTrackingSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final riderProfile = rider;
     final rating = riderProfile?.rating ?? 5.0;
+    final showEta = _shouldShowEtaInCard;
 
     return Container(
       decoration: const BoxDecoration(
@@ -621,8 +1026,7 @@ class _TravelTrackingSheet extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (etaMinutes != null &&
-                      status == _TravelTrackingStatus.driverComing)
+                  if (showEta)
                     Text(
                       '$etaMinutes นาที',
                       style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -639,109 +1043,12 @@ class _TravelTrackingSheet extends StatelessWidget {
               ),
               if (riderProfile != null) ...<Widget>[
                 const SizedBox(height: 16),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Stack(
-                      clipBehavior: Clip.none,
-                      children: <Widget>[
-                        CircleAvatar(
-                          radius: 28,
-                          backgroundColor: const Color(0xFFE5E7EB),
-                          backgroundImage: riderProfile.profilePhotoUrl != null
-                              ? NetworkImage(riderProfile.profilePhotoUrl!)
-                              : null,
-                          child: riderProfile.profilePhotoUrl == null
-                              ? Text(
-                                  riderProfile.displayName
-                                              .trim()
-                                              .isNotEmpty
-                                      ? riderProfile.displayName
-                                          .trim()
-                                          .substring(0, 1)
-                                          .toUpperCase()
-                                      : '?',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 22,
-                                  ),
-                                )
-                              : null,
-                        ),
-                        if (riderProfile.isElectricVehicle)
-                          Positioned(
-                            right: -2,
-                            bottom: -2,
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFDCFCE7),
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2),
-                              ),
-                              child: const Icon(
-                                Icons.bolt,
-                                size: 14,
-                                color: Color(0xFF16A34A),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          if (riderProfile.licensePlate?.isNotEmpty == true)
-                            Text(
-                              riderProfile.licensePlate!,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .headlineSmall
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.5,
-                                  ),
-                            ),
-                          Text(
-                            riderProfile.vehicleSummary,
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: const Color(0xFF4B5563),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: <Widget>[
-                              Text(
-                                riderProfile.displayName,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleSmall
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                              const SizedBox(width: 8),
-                              const Icon(
-                                Icons.star,
-                                size: 16,
-                                color: Color(0xFFF59E0B),
-                              ),
-                              const SizedBox(width: 2),
-                              Text(
-                                rating.toStringAsFixed(1),
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleSmall
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                TravelDriverProfileCard(
+                  rider: riderProfile,
+                  rating: rating,
+                  showSectionLabel: false,
+                  etaMinutes: _shouldShowEtaInCard ? etaMinutes : null,
+                  etaTargetLabel: _etaTargetLabel,
                 ),
               ],
               const SizedBox(height: 16),

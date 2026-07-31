@@ -30,11 +30,6 @@ class HelpPricingSummary {
       return '''
 Current rates set by platform admin (updated automatically)
 
-Product markup
-• Taxable items: ${_fmtPercent(config.taxableMarkupRate)}
-• Non-taxable items: ${_fmtPercent(config.nonTaxableMarkupRate)}
-• Toppings: ${_fmtPercent(config.toppingMarkupRate)}
-
 Local delivery
 • Base fee: ${_fmtBaht(config.shippingBaseFee)}
 • After ${_fmtKm(config.shippingMinBillableKm)} km: ${_fmtBaht(config.shippingPerKmFee)} per km
@@ -53,11 +48,6 @@ The exact amount in your cart depends on distance, weight, and items — review 
 
     return '''
 อัตราปัจจุบันที่แอดมินกำหนด (อัปเดตอัตโนมัติ)
-
-ราคาสินค้า
-• บวกเพิ่มสินค้าเสียภาษี: ${_fmtPercent(config.taxableMarkupRate)}
-• บวกเพิ่มสินค้าไม่เสียภาษี: ${_fmtPercent(config.nonTaxableMarkupRate)}
-• บวกเพิ่มท็อปปิ้ง: ${_fmtPercent(config.toppingMarkupRate)}
 
 ค่าส่งท้องถิ่น
 • ค่าส่งฐาน: ${_fmtBaht(config.shippingBaseFee)}
@@ -98,14 +88,6 @@ Enter the recipient address in the nationwide category. The cart shows the estim
   }
 
   static String _fmtBaht(double value) => '฿${TaxPricingPolicy.formatPrice(value)}';
-
-  static String _fmtPercent(double rate) {
-    final percent = rate * 100;
-    final text = percent % 1 == 0
-        ? percent.toInt().toString()
-        : percent.toStringAsFixed(1);
-    return '$text%';
-  }
 
   static String _fmtKm(double km) {
     return km % 1 == 0 ? km.toInt().toString() : km.toStringAsFixed(1);

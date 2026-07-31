@@ -143,6 +143,7 @@ class HomeProductDiscoveryService {
     final snapshot = await FirebaseFirestore.instance
         .collection('orders')
         .where('customerId', isEqualTo: customerId)
+        .limit(50)
         .get();
 
     final scores = <String, double>{};

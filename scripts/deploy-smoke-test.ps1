@@ -112,16 +112,16 @@ function Test-Java21OrNewer {
 
 function Invoke-RulesCompileSmokeTest {
   if (-not $Quiet) {
-    Write-Host 'Running rules compile check (dry-run)...' -ForegroundColor DarkCyan
+    Write-Host (Get-VanMsg 'smokeCompileRun') -ForegroundColor DarkCyan
   }
   Push-Location $paths.Van2Root
   try {
     firebase deploy --project $cfg.ProjectId --only firestore --dry-run 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) {
-      throw 'Firestore rules compile dry-run failed.'
+      throw (Get-VanMsg 'smokeCompileFail')
     }
     if (-not $Quiet) {
-      Write-Host 'PASS compile: firestore.rules compiles on project' -ForegroundColor Green
+      Write-Host (Get-VanMsg 'smokeCompileOk') -ForegroundColor Green
     }
   }
   finally {
@@ -135,7 +135,7 @@ function Invoke-RulesEmulatorSmokeTest {
   }
   if (-not (Test-Path (Join-Path $smokeDir 'node_modules'))) {
     if (-not $Quiet) {
-      Write-Host 'Installing smoke-test dependencies (first run)...' -ForegroundColor DarkGray
+      Write-Host (Get-VanMsg 'smokeInstallDeps') -ForegroundColor DarkGray
     }
     Push-Location $smokeDir
     try {
@@ -153,7 +153,7 @@ function Invoke-RulesEmulatorSmokeTest {
   try {
     firebase emulators:exec --project van-smoke-rules-test --only firestore "node rules-emulator-test.js"
     if ($LASTEXITCODE -ne 0) {
-      throw 'Rules emulator smoke test failed.'
+      throw (Get-VanMsg 'smokeEmulatorFail')
     }
   }
   finally {
@@ -193,19 +193,19 @@ if (-not (Get-Command firebase -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-$phaseLabel = if ($Phase -eq 'PreDeploy') { 'Pre-Deploy Gate' } else { 'Post-Deploy Verification' }
+$phaseTitle = if ($Phase -eq 'PreDeploy') { (Get-VanMsg 'smokeTitlePre') } else { (Get-VanMsg 'smokeTitlePost') }
 
 if (-not $Quiet) {
   Write-Host ''
-  Write-Host "=== Firestore Smoke Test ($phaseLabel) ===" -ForegroundColor Cyan
-  Write-Host "Phase: $Phase | Target: $AfterTarget"
+  Write-Host $phaseTitle -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'smokePhaseLine' @($Phase, $AfterTarget))
   Write-Host ''
 }
 
 $needsSmoke = $AfterTarget -in @('firestore', 'functions', 'firestore-van4', 'any')
 if (-not $needsSmoke) {
   if (-not $Quiet) {
-    Write-Host "SKIP smoke test: target '$AfterTarget' is SELF/low risk." -ForegroundColor DarkYellow
+    Write-Host (Get-VanMsg 'smokeSkipLowRisk' @($AfterTarget)) -ForegroundColor DarkYellow
   }
   exit 0
 }
@@ -232,12 +232,12 @@ catch {
 if (-not $compileFailed -and -not $SkipEmulator -and $AfterTarget -in @('firestore', 'any')) {
   if (Test-Java21OrNewer) {
     if (-not $Quiet) {
-      Write-Host 'Running rules emulator smoke test (Java 21+)...' -ForegroundColor DarkCyan
+      Write-Host (Get-VanMsg 'smokeEmulatorRun') -ForegroundColor DarkCyan
     }
     try {
       Invoke-RulesEmulatorSmokeTest
       if (-not $Quiet) {
-        Write-Host 'PASS emulator: van1/van2/van3/van4 critical paths' -ForegroundColor Green
+        Write-Host (Get-VanMsg 'smokeEmulatorOk') -ForegroundColor Green
       }
     }
     catch {
@@ -248,13 +248,13 @@ if (-not $compileFailed -and -not $SkipEmulator -and $AfterTarget -in @('firesto
   elseif ($AllowSkipEmulator) {
     $emulatorSkipped = $true
     if (-not $Quiet) {
-      Write-Host 'WARN: emulator skipped (-AllowSkipEmulator). Not recommended for production deploy.' -ForegroundColor Yellow
+      Write-Host (Get-VanMsg 'smokeEmulatorSkipped') -ForegroundColor Yellow
     }
   }
   else {
     $emulatorFailed = $true
-    Write-Host 'BLOCKED: Java 21+ required for emulator smoke test (mandatory gate).' -ForegroundColor Red
-    Write-Host '  Install JDK 21+ or set JAVA_HOME to Android Studio JBR, e.g.:' -ForegroundColor DarkYellow
+    Write-Host (Get-VanMsg 'smokeJavaBlocked') -ForegroundColor Red
+    Write-Host (Get-VanMsg 'smokeJavaHint') -ForegroundColor DarkYellow
     Write-Host '  $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"' -ForegroundColor DarkGray
   }
 }
@@ -262,24 +262,24 @@ if (-not $compileFailed -and -not $SkipEmulator -and $AfterTarget -in @('firesto
 if (-not $SkipLive -and $Phase -eq 'PostDeploy' -and -not $compileFailed -and -not $emulatorFailed) {
   if (Test-Path $configLocal) {
     if (-not $Quiet) {
-      Write-Host 'Running live Firestore smoke test (production, non-blocking)...' -ForegroundColor DarkCyan
+      Write-Host (Get-VanMsg 'smokeLiveRun') -ForegroundColor DarkCyan
     }
     try {
       Invoke-LiveFirestoreSmokeTest
       if (-not $Quiet) {
-        Write-Host 'PASS live-firestore: production checks' -ForegroundColor Green
+        Write-Host (Get-VanMsg 'smokeLiveOk') -ForegroundColor Green
       }
     }
     catch {
       $liveFailed = $true
       Write-Host $_.Exception.Message -ForegroundColor Yellow
-      Write-Host 'ADVISORY: Live smoke failed — NOT treated as rules regression (check ADC / smoke-test-config.local.json).' -ForegroundColor Yellow
+      Write-Host (Get-VanMsg 'smokeLiveAdvisory') -ForegroundColor Yellow
     }
   }
   elseif (-not $Quiet) {
-    Write-Host 'Live test skipped — optional production UID checks:' -ForegroundColor DarkGray
+    Write-Host (Get-VanMsg 'smokeLiveSkip') -ForegroundColor DarkGray
     Write-Host "  copy `"$configExample`" `"$configLocal`""
-    Write-Host '  Set riderUid. Auth: gcloud auth application-default login'
+    Write-Host (Get-VanMsg 'smokeLiveSkipHint') -ForegroundColor DarkGray
   }
 }
 
@@ -288,10 +288,10 @@ $blockingFailed = $compileFailed -or $emulatorFailed
 if ($blockingFailed) {
   Write-Host ''
   if ($Phase -eq 'PreDeploy') {
-    Write-Host 'PRE-DEPLOY GATE FAILED — deploy blocked. Fix rules or emulator before continuing.' -ForegroundColor Red
+    Write-Host (Get-VanMsg 'smokePreFail') -ForegroundColor Red
   }
   else {
-    Write-Host 'POST-DEPLOY SMOKE FAILED — consider rollback (see DEPLOY_CONNECTION_SIGNALS.md).' -ForegroundColor Red
+    Write-Host (Get-VanMsg 'smokePostFail') -ForegroundColor Red
   }
   Write-Host ''
   exit 1
@@ -300,12 +300,12 @@ if ($blockingFailed) {
 if (-not $Quiet) {
   Write-Host ''
   if ($Phase -eq 'PreDeploy') {
-    Write-Host 'PRE-DEPLOY GATE PASSED — safe to deploy Firestore rules.' -ForegroundColor Green
+    Write-Host (Get-VanMsg 'smokePrePass') -ForegroundColor Green
   }
   else {
-    Write-Host 'POST-DEPLOY SMOKE PASSED (emulator authoritative)' -ForegroundColor Green
+    Write-Host (Get-VanMsg 'smokePostPass') -ForegroundColor Green
     if ($liveFailed) {
-      Write-Host '  (live test advisory only — no rollback required for ADC/config issues)' -ForegroundColor DarkYellow
+      Write-Host (Get-VanMsg 'smokeLiveAdvisoryShort') -ForegroundColor DarkYellow
     }
   }
   Write-Host ''

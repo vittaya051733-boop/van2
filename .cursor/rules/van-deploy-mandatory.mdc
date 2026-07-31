@@ -24,7 +24,7 @@ alwaysApply: true
 ```powershell
 # แนะนำ: dry-run ก่อน แล้วค่อย Execute
 scripts\deploy-plan.ps1 -App van2 -Target firestore -DryRunOnly
-scripts\deploy-plan.ps1 -App van2 -Target firestore -Execute ...
+scripts\deploy-self.ps1 -App van2 -Target firestore -ConfirmDeploy "อนุมัติ:van2:van-merchant" -ConfirmImpact "ร่วมกัน:van1,van2,van3,van4" -ConfirmFile "firestore.rules" -FinalAcknowledge "ฉันเข้าใจแล้ว"
 ```
 
 Backup rules อัตโนมัติก่อน firestore deploy → `scripts/deploy-backups/`

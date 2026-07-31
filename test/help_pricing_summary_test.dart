@@ -33,12 +33,12 @@ void main() {
 
     final thai = HelpPricingSummary.bodyForArticle(article, config, false);
     expect(thai, contains('฿30'));
-    expect(thai, contains('8%'));
+    expect(thai, isNot(contains('8%')));
     expect(thai, contains('3 ร้าน'));
 
     final english = HelpPricingSummary.bodyForArticle(article, config, true);
     expect(english, contains('฿30'));
-    expect(english, contains('8%'));
+    expect(english, isNot(contains('8%')));
     expect(english, contains('at least 3 shops'));
   });
 }

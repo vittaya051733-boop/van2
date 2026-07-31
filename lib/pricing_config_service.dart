@@ -305,6 +305,8 @@ class PricingConfigService extends ChangeNotifier {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subscription;
+  bool _resubscribeScheduled = false;
+  static const Duration _resubscribeDelay = Duration(seconds: 3);
 
   GlobalPricingConfig _current = GlobalPricingConfig.defaults;
   GlobalPricingConfig get current => _current;
@@ -326,15 +328,38 @@ class PricingConfigService extends ChangeNotifier {
   }
 
   void startRealtimeSync() {
-    _subscription ??= _firestore
+    if (_subscription != null) {
+      return;
+    }
+    _attachPricingListener();
+  }
+
+  void _attachPricingListener() {
+    _subscription?.cancel();
+    _subscription = _firestore
         .collection(collectionPath)
         .doc(documentId)
         .snapshots()
         .listen(
           (snapshot) =>
               _apply(GlobalPricingConfig.fromFirestore(snapshot.data())),
-          onError: (_) {},
+          onError: (_, __) => _schedulePricingResubscribe(),
+          onDone: () {
+            _subscription = null;
+            _schedulePricingResubscribe();
+          },
         );
+  }
+
+  void _schedulePricingResubscribe() {
+    if (_resubscribeScheduled) {
+      return;
+    }
+    _resubscribeScheduled = true;
+    Future<void>.delayed(_resubscribeDelay, () {
+      _resubscribeScheduled = false;
+      _attachPricingListener();
+    });
   }
 
   @override

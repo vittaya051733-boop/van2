@@ -12,6 +12,7 @@ import 'category_catalog_screen.dart';
 import 'phone_login_helper.dart';
 import 'services/notification_service.dart';
 import 'services/privacy_consent_service.dart';
+import 'utils/app_check_guard.dart';
 import 'web_google_auth.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -105,6 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
     String? phoneNumber,
   }) async {
     try {
+      await AppCheckGuard.ensureAuthReady();
       final callable = _functions.httpsCallable('lookupLoginIdentifier');
       final response = await callable.call(<String, dynamic>{
         if (email != null && email.trim().isNotEmpty) 'email': email.trim(),
@@ -194,6 +196,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isSigningIn = true);
     try {
+      await AppCheckGuard.ensureAuthReady();
       final callable = _functions.httpsCallable('sendEmailOtp');
       await callable.call(<String, dynamic>{'email': email});
     } on FirebaseFunctionsException catch (error) {

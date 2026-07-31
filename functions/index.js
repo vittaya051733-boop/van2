@@ -7,7 +7,7 @@ const functions = require('firebase-functions/v1');
 const logger = require('firebase-functions/logger');
 const nodemailer = require('nodemailer');
 const { defineSecret } = require('firebase-functions/params');
-const { HttpsError, onCall } = require('firebase-functions/v2/https');
+const { HttpsError, onCall, onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const {
   onDocumentCreated,
@@ -20,6 +20,19 @@ const {
   createCheckoutOrdersHandler,
   createNationwideParcelOrdersHandler,
 } = require('./checkout_orders');
+const {
+  createTravelOrderHandler,
+  quoteTravelFareHandler,
+  assertNonAnonymous,
+} = require('./travel_orders');
+const { fetchGoogleDrivingDirectionsRoute } = require('./google_directions');
+const { createRiderAvailabilityHandlers } = require('./rider_availability');
+const { createSlipVerificationQueueHandlers } = require('./slip_verification_queue');
+const { createOmisePaymentsHandlers } = require('./omise_payments');
+const { createOmisePayoutHandlers } = require('./omise_payouts');
+const { createPlatformFloatHandlers } = require('./platform_float');
+const { verifyStandaloneSlipCore } = require('./slipok_standalone');
+const { readClientIp, assertCallableRateLimit } = require('./callable_rate_limit');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -303,8 +316,61 @@ async function getPaymentCollectionSettings() {
 function normalizeMaskedDigits(value) {
   return String(value || '')
     .trim()
+    .replace(/\*/g, 'X')
     .replace(/[^0-9xX]/g, '')
     .toUpperCase();
+}
+
+function buildDigitMaskPattern(value) {
+  let pattern = '';
+  for (const char of String(value || '')) {
+    if (/[0-9]/.test(char)) {
+      pattern += char;
+    } else if (char === '*' || char === 'X' || char === 'x') {
+      pattern += '?';
+    }
+  }
+  return pattern;
+}
+
+function digitMaskPatternMatches(pattern, expectedDigits) {
+  if (!pattern || !expectedDigits || pattern.length !== expectedDigits.length) {
+    return false;
+  }
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const patternChar = pattern[index];
+    if (patternChar !== '?' && patternChar !== expectedDigits[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function promptPayFormattedIdMatches(actualValue, expectedValue) {
+  const expectedDigits = normalizeDigits(expectedValue);
+  if (expectedDigits.length !== 13) {
+    return false;
+  }
+
+  const pattern = buildDigitMaskPattern(actualValue);
+  if (digitMaskPatternMatches(pattern, expectedDigits)) {
+    return true;
+  }
+
+  const masked = normalizeMaskedDigits(actualValue);
+  if (masked.length === expectedDigits.length) {
+    for (let index = 0; index < expectedDigits.length; index += 1) {
+      const maskedChar = masked[index];
+      if (maskedChar !== 'X' && maskedChar !== expectedDigits[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function normalizeDigits(value) {
@@ -346,7 +412,20 @@ function namePartiallyMatches(actualValue, expectedValue) {
     return false;
   }
 
-  return actual.includes(expected) || expected.includes(actual);
+  if (actual.includes(expected) || expected.includes(actual)) {
+    return true;
+  }
+
+  const minPrefix = Math.min(actual.length, expected.length, 6);
+  if (minPrefix >= 4) {
+    const actualPrefix = actual.slice(0, minPrefix);
+    const expectedPrefix = expected.slice(0, minPrefix);
+    if (actual.includes(expectedPrefix) || expected.includes(actualPrefix)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function buildExpectedReceiverTargets(settings) {
@@ -387,7 +466,10 @@ function validateSlipReceiver(providerPayload, settings) {
   const accountMatched =
     actualTargets.length > 0 &&
     expectedTargets.some((expectedTarget) =>
-      actualTargets.some((actualTarget) => maskedDigitsMatch(actualTarget, expectedTarget)),
+      actualTargets.some((actualTarget) =>
+        maskedDigitsMatch(actualTarget, expectedTarget) ||
+        promptPayFormattedIdMatches(actualTarget, expectedTarget),
+      ),
     );
 
   const nameMatched = actualNames.some((actualName) =>
@@ -1089,6 +1171,7 @@ function buildTransport() {
 exports.sendEmailOtp = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
     secrets: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM],
   },
   async (request) => {
@@ -1096,6 +1179,19 @@ exports.sendEmailOtp = onCall(
     if (!email || !email.includes('@')) {
       throw new HttpsError('invalid-argument', 'รูปแบบอีเมลไม่ถูกต้อง');
     }
+
+    const clientIp = readClientIp(request);
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `send_email_otp:${email}`,
+      maxAttempts: 5,
+      windowMs: 15 * 60 * 1000,
+      message: 'ขอ OTP บ่อยเกินไป กรุณารอ 15 นาที',
+    });
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `send_email_otp_ip:${clientIp}`,
+      maxAttempts: 20,
+      windowMs: 15 * 60 * 1000,
+    });
 
     const docRef = db.collection('email_otps').doc(otpDocId(email));
     const existingDoc = await docRef.get();
@@ -1161,8 +1257,16 @@ exports.sendEmailOtp = onCall(
 exports.lookupLoginIdentifier = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
+    const clientIp = readClientIp(request);
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `lookup_login_ip:${clientIp}`,
+      maxAttempts: 30,
+      windowMs: 15 * 60 * 1000,
+    });
+
     const email = normalizeEmail(request.data?.email);
     const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
 
@@ -1217,9 +1321,56 @@ exports.lookupLoginIdentifier = onCall(
   },
 );
 
+exports.resolveRiderLoginEmail = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+  },
+  async (request) => {
+    const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
+
+    if (!phoneNumber || !phoneNumber.startsWith('+')) {
+      throw new HttpsError('invalid-argument', 'รูปแบบเบอร์โทรไม่ถูกต้อง');
+    }
+
+    const digits = phoneNumber.replace(/\D/g, '');
+    const pseudoEmail = `${digits}@phone.vanmerchant.app`;
+
+    const snapshot = await db
+      .collection('riders')
+      .where('phoneNumber', '==', phoneNumber)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return {
+        success: true,
+        found: false,
+        loginEmail: null,
+        useEmailLogin: false,
+      };
+    }
+
+    const data = snapshot.docs[0].data() || {};
+    const storedLoginEmail = String(data.loginEmail || data.email || '').trim();
+    const loginEmail =
+      storedLoginEmail && storedLoginEmail.toLowerCase() === pseudoEmail.toLowerCase()
+        ? storedLoginEmail
+        : null;
+
+    return {
+      success: true,
+      found: true,
+      loginEmail,
+      useEmailLogin: Boolean(storedLoginEmail && !loginEmail),
+    };
+  },
+);
+
 exports.verifyEmailOtp = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     const email = normalizeEmail(request.data?.email);
@@ -1455,6 +1606,19 @@ exports.sendMerchantPhoneOtp = onCall(
     if (!phoneNumber || !phoneNumber.startsWith('+')) {
       throw new HttpsError('invalid-argument', 'เบอร์โทรไม่ถูกต้อง');
     }
+
+    const clientIp = readClientIp(request);
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `send_phone_otp:${phoneNumber}`,
+      maxAttempts: 5,
+      windowMs: 15 * 60 * 1000,
+      message: 'ขอ OTP บ่อยเกินไป กรุณารอ 15 นาที',
+    });
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `send_phone_otp_ip:${clientIp}`,
+      maxAttempts: 20,
+      windowMs: 15 * 60 * 1000,
+    });
 
     const docRef = db.collection('phone_otp_sessions').doc(phoneNumber);
     const existingDoc = await docRef.get();
@@ -2192,12 +2356,14 @@ exports.createPrivacyRequest = onCall(
 exports.recordCheckoutDiscounts = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     if (!request.auth?.uid) {
       throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
     }
 
+    const checkoutQuoteId = String(request.data?.checkoutQuoteId || '').trim();
     const orderIds = Array.isArray(request.data?.orderIds)
       ? request.data.orderIds.map((id) => String(id).trim()).filter(Boolean)
       : [];
@@ -2206,11 +2372,56 @@ exports.recordCheckoutDiscounts = onCall(
       : [];
     const discountTotal = Math.max(0, parseNumber(request.data?.discountTotal));
 
+    if (!checkoutQuoteId) {
+      throw new HttpsError('invalid-argument', 'ต้องมี checkoutQuoteId');
+    }
     if (orderIds.length === 0 || discountTotal <= 0 || discountLines.length === 0) {
       return { recorded: false, reason: 'no_discount' };
     }
 
     const userId = request.auth.uid;
+    const quoteRef = db.collection('checkout_quotes').doc(checkoutQuoteId);
+    const quoteSnap = await quoteRef.get();
+    if (!quoteSnap.exists) {
+      throw new HttpsError('not-found', 'ไม่พบ checkout quote');
+    }
+    const quote = quoteSnap.data() || {};
+    if (String(quote.customerId || '') !== userId) {
+      throw new HttpsError('permission-denied', 'checkout quote ไม่ตรงกับผู้ใช้');
+    }
+    if (quote.consumed !== true) {
+      throw new HttpsError('failed-precondition', 'checkout quote ยังไม่ถูกใช้กับออเดอร์');
+    }
+
+    const quotedDiscountTotal = parseNumber(quote.discountTotal);
+    if (Math.abs(quotedDiscountTotal - discountTotal) > 0.02) {
+      throw new HttpsError('invalid-argument', 'ยอดส่วนลดไม่ตรงกับ quote');
+    }
+
+    let lineSum = 0;
+    for (const line of discountLines) {
+      lineSum += Math.max(0, parseNumber(line?.amount));
+    }
+    if (Math.abs(lineSum - discountTotal) > 0.02) {
+      throw new HttpsError('invalid-argument', 'รายการส่วนลดไม่ตรงกับยอดรวม');
+    }
+
+    const orderSnapshots = await Promise.all(
+      orderIds.map((orderId) => db.collection('orders').doc(orderId).get()),
+    );
+    for (const snapshot of orderSnapshots) {
+      if (!snapshot.exists) {
+        throw new HttpsError('not-found', 'ไม่พบออเดอร์สำหรับบันทึกส่วนลด');
+      }
+      const order = snapshot.data() || {};
+      if (String(order.customerId || '') !== userId) {
+        throw new HttpsError('permission-denied', 'ไม่มีสิทธิ์บันทึกส่วนลดให้ออเดอร์นี้');
+      }
+      if (String(order.checkoutQuoteId || '') !== checkoutQuoteId) {
+        throw new HttpsError('failed-precondition', 'ออเดอร์ไม่ตรงกับ checkout quote');
+      }
+    }
+
     const batch = db.batch();
     const now = FieldValue.serverTimestamp();
 
@@ -2230,6 +2441,7 @@ exports.recordCheckoutDiscounts = onCall(
       batch.set(redemptionRef, {
         userId,
         orderIds,
+        checkoutQuoteId,
         discountAmount: amount,
         redeemedAt: now,
         ...(kind === 'coupon'
@@ -2254,7 +2466,7 @@ exports.recordCheckoutDiscounts = onCall(
     }
 
     await batch.commit();
-    return { recorded: true, orderIds };
+    return { recorded: true, orderIds, checkoutQuoteId };
   },
 );
 
@@ -2278,12 +2490,44 @@ function buildCheckoutDeps() {
     normalizeCouponCode,
     toFiniteOrNull,
     isShopNearMarketHub,
+    fetchDrivingRouteKm: async (
+      originLatitude,
+      originLongitude,
+      destinationLatitude,
+      destinationLongitude,
+    ) => {
+      try {
+        const apiKey = readRequiredConfiguredSecret(
+          GOOGLE_GEOCODING_API_KEY_SECRET,
+          'GOOGLE_GEOCODING_API_KEY',
+          'Google Directions',
+        );
+        const route = await fetchGoogleDrivingDirectionsRoute({
+          apiKey,
+          originLatitude,
+          originLongitude,
+          destinationLatitude,
+          destinationLongitude,
+          logger,
+        });
+        if (!route.ok) {
+          return null;
+        }
+        return route.distanceMeters / 1000;
+      } catch (error) {
+        logger.warn('fetchDrivingRouteKm failed for travel order', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    },
   };
 }
 
 exports.calculateCartTotals = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     if (!request.auth?.uid) {
@@ -2361,13 +2605,31 @@ exports.calculateCartTotals = onCall(
 exports.createCheckoutOrders = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => createCheckoutOrdersHandler(request, buildCheckoutDeps()),
+);
+
+exports.createTravelOrder = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+  },
+  async (request) => createTravelOrderHandler(request, buildCheckoutDeps()),
+);
+
+exports.quoteTravelFare = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+  },
+  async (request) => quoteTravelFareHandler(request, buildCheckoutDeps()),
 );
 
 exports.createNationwideParcelOrders = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => createNationwideParcelOrdersHandler(request, buildCheckoutDeps()),
 );
@@ -2375,6 +2637,7 @@ exports.createNationwideParcelOrders = onCall(
 exports.reverseGeocodeDeliveryLocation = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
     secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
   },
   async (request) => {
@@ -2473,29 +2736,143 @@ exports.reverseGeocodeDeliveryLocation = onCall(
   },
 );
 
-async function fetchGoogleDrivingDirectionsRoute({
+function parseGooglePlacesAutocompletePrediction(prediction) {
+  if (!prediction || typeof prediction !== 'object') {
+    return null;
+  }
+
+  const placeId = String(prediction.place_id || '').trim();
+  if (!placeId) {
+    return null;
+  }
+
+  const structured = prediction.structured_formatting || {};
+  const mainText = String(structured.main_text || '').trim();
+  const secondaryText = String(structured.secondary_text || '').trim();
+  const description = String(prediction.description || '').trim();
+  const primaryText = mainText || description;
+
+  if (!primaryText) {
+    return null;
+  }
+
+  return {
+    placeId,
+    primaryText,
+    secondaryText,
+    description: description || primaryText,
+  };
+}
+
+function parseGooglePlacesDetailsResult(result, fallbackPlaceId) {
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+
+  const latitude = Number(result?.geometry?.location?.lat);
+  const longitude = Number(result?.geometry?.location?.lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  const title = String(result.name || '').trim();
+  if (!title) {
+    return null;
+  }
+
+  const formattedAddress = String(result.formatted_address || '').trim();
+  const placeId = String(result.place_id || fallbackPlaceId || '').trim();
+
+  return {
+    placeId,
+    title,
+    subtitle:
+      formattedAddress && formattedAddress !== title ? formattedAddress : '',
+    latitude,
+    longitude,
+  };
+}
+
+async function fetchGooglePlacesAutocomplete({
   apiKey,
-  originLatitude,
-  originLongitude,
-  destinationLatitude,
-  destinationLongitude,
+  input,
+  originLat,
+  originLng,
 }) {
-  const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
-  url.searchParams.set('origin', `${originLatitude},${originLongitude}`);
-  url.searchParams.set(
-    'destination',
-    `${destinationLatitude},${destinationLongitude}`,
-  );
-  url.searchParams.set('mode', 'driving');
+  const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
+  url.searchParams.set('input', input);
+  url.searchParams.set('key', apiKey);
   url.searchParams.set('language', 'th');
-  url.searchParams.set('region', 'th');
+  url.searchParams.set('components', 'country:th');
+
+  if (
+    Number.isFinite(originLat) &&
+    Number.isFinite(originLng) &&
+    originLat >= -90 &&
+    originLat <= 90 &&
+    originLng >= -180 &&
+    originLng <= 180
+  ) {
+    url.searchParams.set('location', `${originLat},${originLng}`);
+    url.searchParams.set('radius', '50000');
+  }
+
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (error) {
+    logger.error('fetchGooglePlacesAutocomplete network failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      ok: false,
+      status: 'NETWORK_ERROR',
+      errorMessage: 'network failed',
+    };
+  }
+
+  const payload = await response.json().catch(() => null);
+  const status = String(payload?.status || '').trim();
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: status || String(response.status),
+      errorMessage: String(payload?.error_message || '').trim(),
+    };
+  }
+
+  if (status === 'ZERO_RESULTS') {
+    return { ok: true, suggestions: [] };
+  }
+
+  if (status !== 'OK') {
+    return {
+      ok: false,
+      status: status || 'ERROR',
+      errorMessage: String(payload?.error_message || '').trim(),
+    };
+  }
+
+  const predictions = Array.isArray(payload?.predictions) ? payload.predictions : [];
+  const suggestions = predictions
+    .map(parseGooglePlacesAutocompletePrediction)
+    .filter(Boolean);
+
+  return { ok: true, suggestions };
+}
+
+async function fetchGooglePlaceDetails({ apiKey, placeId }) {
+  const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+  url.searchParams.set('place_id', placeId);
+  url.searchParams.set('fields', 'place_id,name,formatted_address,geometry');
+  url.searchParams.set('language', 'th');
   url.searchParams.set('key', apiKey);
 
   let response;
   try {
     response = await fetch(url);
   } catch (error) {
-    logger.error('fetchGoogleDrivingDirectionsRoute network failed', {
+    logger.error('fetchGooglePlaceDetails network failed', {
       message: error instanceof Error ? error.message : String(error),
     });
     return {
@@ -2508,11 +2885,6 @@ async function fetchGoogleDrivingDirectionsRoute({
   const payload = await response.json().catch(() => null);
   const status = String(payload?.status || '').trim();
   if (!response.ok || status !== 'OK') {
-    logger.warn('fetchGoogleDrivingDirectionsRoute google response not OK', {
-      httpStatus: response.status,
-      googleStatus: status,
-      errorMessage: payload?.error_message,
-    });
     return {
       ok: false,
       status: status || String(response.status),
@@ -2520,32 +2892,113 @@ async function fetchGoogleDrivingDirectionsRoute({
     };
   }
 
-  const route = Array.isArray(payload?.routes) ? payload.routes[0] : null;
-  const leg = Array.isArray(route?.legs) ? route.legs[0] : null;
-  const encodedPolyline = String(route?.overview_polyline?.points || '').trim();
-  const distanceMeters = Number(leg?.distance?.value || 0);
-  const durationSeconds = Number(leg?.duration?.value || 0);
-
-  if (!encodedPolyline || !Number.isFinite(distanceMeters) || distanceMeters <= 0) {
+  const parsed = parseGooglePlacesDetailsResult(payload?.result, placeId);
+  if (!parsed) {
     return {
       ok: false,
-      status: 'NO_ROUTE',
-      errorMessage: 'missing route geometry',
+      status: 'INVALID_RESPONSE',
+      errorMessage: 'missing place details',
     };
   }
 
-  return {
-    ok: true,
-    distanceMeters: Math.round(distanceMeters),
-    durationSeconds: Math.max(0, Math.round(durationSeconds)),
-    encodedPolyline,
-    provider: 'google_directions',
-  };
+  return { ok: true, place: parsed };
 }
+
+exports.placesAutocomplete = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+    secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนค้นหาสถานที่');
+    }
+
+    const input = String(request.data?.input || request.data?.query || '').trim();
+    if (input.length < 2) {
+      return { suggestions: [] };
+    }
+
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `places_autocomplete:${request.auth.uid}`,
+      maxAttempts: 60,
+      windowMs: 60 * 1000,
+      message: 'ค้นหาบ่อยเกินไป กรุณารอสักครู่',
+    });
+
+    const originLat = parseNumber(request.data?.originLat ?? request.data?.originLatitude);
+    const originLng = parseNumber(request.data?.originLng ?? request.data?.originLongitude);
+
+    const apiKey = readRequiredConfiguredSecret(
+      GOOGLE_GEOCODING_API_KEY_SECRET,
+      'GOOGLE_GEOCODING_API_KEY',
+      'Places Autocomplete',
+    );
+
+    const result = await fetchGooglePlacesAutocomplete({
+      apiKey,
+      input,
+      originLat,
+      originLng,
+    });
+
+    if (!result.ok) {
+      throw new HttpsError(
+        'unavailable',
+        result.errorMessage || 'ค้นหาสถานที่จาก Google ไม่สำเร็จ',
+      );
+    }
+
+    return { suggestions: result.suggestions };
+  },
+);
+
+exports.placesResolvePlace = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+    secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนเลือกสถานที่');
+    }
+
+    const placeId = String(request.data?.placeId || '').trim();
+    if (!placeId) {
+      throw new HttpsError('invalid-argument', 'ไม่พบ placeId');
+    }
+
+    await assertCallableRateLimit(db, admin, HttpsError, {
+      key: `places_resolve:${request.auth.uid}`,
+      maxAttempts: 60,
+      windowMs: 60 * 1000,
+      message: 'เลือกสถานที่บ่อยเกินไป กรุณารอสักครู่',
+    });
+
+    const apiKey = readRequiredConfiguredSecret(
+      GOOGLE_GEOCODING_API_KEY_SECRET,
+      'GOOGLE_GEOCODING_API_KEY',
+      'Place Details',
+    );
+
+    const result = await fetchGooglePlaceDetails({ apiKey, placeId });
+    if (!result.ok) {
+      throw new HttpsError(
+        'unavailable',
+        result.errorMessage || 'ดึงรายละเอียดสถานที่จาก Google ไม่สำเร็จ',
+      );
+    }
+
+    return result.place;
+  },
+);
 
 exports.computeRouteMetrics = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
     secrets: [GOOGLE_GEOCODING_API_KEY_SECRET],
   },
   async (request) => {
@@ -2587,6 +3040,7 @@ exports.computeRouteMetrics = onCall(
       originLongitude,
       destinationLatitude,
       destinationLongitude,
+      logger,
     });
 
     if (!route.ok) {
@@ -2642,6 +3096,18 @@ exports.verifyOrderPaymentSlip = onCall(
       const data = snapshot.data() || {};
       if (String(data.customerId || '').trim() !== request.auth.uid) {
         throw new HttpsError('permission-denied', 'คุณไม่มีสิทธิ์ส่งสลิปให้ออเดอร์นี้');
+      }
+
+      const expiresAt = data.paymentExpiresAt?.toMillis?.() || 0;
+      if (expiresAt > 0 && Date.now() > expiresAt) {
+        throw new HttpsError(
+          'deadline-exceeded',
+          'หมดเวลาชำระเงินแล้ว กรุณาสั่งซื้อใหม่',
+        );
+      }
+
+      if (data.paymentStatus === 'verified' || data.paymentStatus === 'cash_on_delivery') {
+        throw new HttpsError('failed-precondition', 'ออเดอร์นี้ชำระเงินแล้ว');
       }
     }
 
@@ -2928,187 +3394,6 @@ exports.verifyOrderPaymentSlip = onCall(
       message: verificationMessage,
       expectedCombinedAmount,
       orderIds,
-    };
-  },
-);
-
-exports.verifyStandalonePaymentSlip = onCall(
-  {
-    region: DEFAULT_REGION,
-    secrets: [SLIPOK_API_KEY_SECRET],
-  },
-  async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนส่งสลิป');
-    }
-
-    const storagePath = String(request.data?.storagePath || '').trim();
-    const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
-    const fileName = String(request.data?.fileName || 'slip.jpg').trim() || 'slip.jpg';
-    const contentType = String(request.data?.contentType || 'image/jpeg').trim() || 'image/jpeg';
-    const expectedCombinedAmount = parseNumber(request.data?.expectedAmount);
-
-    if (!storagePath) {
-      throw new HttpsError('invalid-argument', 'กรุณาระบุ storagePath');
-    }
-    if (!Number.isFinite(expectedCombinedAmount) || expectedCombinedAmount <= 0) {
-      throw new HttpsError('invalid-argument', 'กรุณาระบุยอดที่ต้องตรวจสลิป');
-    }
-
-    const paymentCollectionSettings = await getPaymentCollectionSettings();
-    const bucket = admin.storage().bucket();
-    const file = bucket.file(storagePath);
-    const [exists] = await file.exists();
-    if (!exists) {
-      throw new HttpsError('not-found', 'ไม่พบไฟล์สลิปใน Firebase Storage');
-    }
-
-    let verificationStatus = 'error';
-    let verificationMessage = 'ส่งสลิปไปตรวจไม่สำเร็จ';
-    let responseCode = 0;
-    let providerPayload = null;
-    let verifiedSlipAmount = null;
-    let providerRawText = '';
-
-    try {
-      const [buffer] = await file.download();
-      const apiKey = readRequiredConfiguredSecret(
-        SLIPOK_API_KEY_SECRET,
-        'SLIPOK_API_KEY',
-        'ระบบตรวจสลิป Slip OK',
-      );
-
-      const formData = new FormData();
-      formData.append('files', new Blob([buffer], { type: contentType }), fileName);
-      formData.append('log', 'true');
-      formData.append('amount', expectedCombinedAmount.toString());
-
-      const slipResponse = await fetch(SLIPOK_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'x-authorization': apiKey,
-        },
-        body: formData,
-      });
-
-      responseCode = slipResponse.status;
-      providerRawText = await slipResponse.text();
-      try {
-        providerPayload = providerRawText ? JSON.parse(providerRawText) : null;
-      } catch (_) {
-        providerPayload = { raw: providerRawText };
-      }
-
-      const requestSucceeded = providerPayload?.success === true;
-      const dataSucceeded = providerPayload?.data?.success === true;
-      verifiedSlipAmount = parseNumber(providerPayload?.data?.amount);
-      const hasMatchingAmount = amountsMatch(verifiedSlipAmount, expectedCombinedAmount);
-      const receiverValidation = validateSlipReceiver(providerPayload, paymentCollectionSettings);
-      const hasMatchingReceiver = receiverValidation.matched;
-
-      if (
-        slipResponse.ok &&
-        requestSucceeded &&
-        dataSucceeded &&
-        hasMatchingAmount &&
-        hasMatchingReceiver
-      ) {
-        verificationStatus = 'verified';
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          'ตรวจสอบสลิปสำเร็จ',
-        );
-      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingAmount) {
-        verificationStatus = 'failed';
-        providerPayload = {
-          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
-          code: Number(providerPayload?.code) || 1013,
-          data: {
-            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
-            amount: Number.isFinite(verifiedSlipAmount) ? verifiedSlipAmount : providerPayload?.data?.amount,
-            expectedAmount: expectedCombinedAmount,
-            message:
-              providerPayload?.data?.message || 'ยอดที่ส่งมาไม่ตรงกับยอดสลิป',
-          },
-          message: providerPayload?.message || 'ยอดที่ส่งมาไม่ตรงกับยอดสลิป',
-        };
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          'ยอดเงินในสลิปไม่ตรงกับยอดที่ต้องชำระ',
-        );
-      } else if (slipResponse.ok && requestSucceeded && dataSucceeded && !hasMatchingReceiver) {
-        verificationStatus = 'failed';
-        providerPayload = {
-          ...(providerPayload && typeof providerPayload === 'object' ? providerPayload : {}),
-          code: Number(providerPayload?.code) || 1014,
-          data: {
-            ...(providerPayload?.data && typeof providerPayload.data === 'object' ? providerPayload.data : {}),
-            receiverValidation,
-            expectedRecipientDisplayName: paymentCollectionSettings.recipientDisplayName,
-            expectedReceiverTargets: buildExpectedReceiverTargets(paymentCollectionSettings),
-            message:
-              providerPayload?.data?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-          },
-          message: providerPayload?.message || 'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-        };
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          'บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน',
-        );
-      } else {
-        verificationStatus = 'failed';
-        verificationMessage = buildSlipVerificationMessage(
-          verificationStatus,
-          providerPayload,
-          `Slip OK responded with status ${slipResponse.status}`,
-        );
-      }
-    } catch (error) {
-      verificationStatus = 'error';
-      providerPayload = {
-        message: error instanceof Error ? error.message : String(error),
-      };
-      verificationMessage = buildSlipVerificationMessage(
-        verificationStatus,
-        providerPayload,
-        'ส่งสลิปไปตรวจสอบไม่สำเร็จ',
-      );
-      logger.error('verifyStandalonePaymentSlip failed', {
-        paymentGroupId,
-        storagePath,
-        message: verificationMessage,
-      });
-    }
-
-    const slipOkFeedbackId = await writeSlipOkFeedbackLog({
-      feedbackId: paymentGroupId,
-      customerUid: request.auth.uid,
-      orderIds: [],
-      paymentGroupId,
-      storagePath,
-      fileName,
-      contentType,
-      expectedCombinedAmount,
-      verifiedSlipAmount,
-      verificationStatus,
-      verificationMessage,
-      responseCode,
-      providerPayload,
-      providerRawText,
-    });
-
-    return {
-      success: verificationStatus === 'verified',
-      status: verificationStatus,
-      message: verificationMessage,
-      expectedCombinedAmount,
-      verifiedSlipAmount,
-      feedbackId: slipOkFeedbackId,
-      paymentGroupId,
-      storagePath,
     };
   },
 );
@@ -4241,8 +4526,14 @@ exports.sendAnnouncementEmails = onDocumentCreated(
 exports.callUser = functions
   .region(DEFAULT_REGION)
   .runWith({ secrets: [AGORA_APP_ID_SECRET, AGORA_APP_CERT_SECRET, AGORA_TTL_SECRET] })
-  .https.onCall(async (data) => {
+  .https.onCall(async (data, context) => {
+    if (!context.auth?.uid) {
+      throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนโทร');
+    }
     const callerId = String(data?.callerId || '').trim();
+    if (!callerId || callerId !== context.auth.uid) {
+      throw new HttpsError('permission-denied', 'callerId ไม่ตรงกับผู้ใช้');
+    }
     const callerName = String(data?.callerName || '').trim();
     const callerPhotoUrl = String(data?.callerPhotoUrl || '').trim();
     const calleeFCMToken = String(data?.calleeFCMToken || '').trim();
@@ -4295,19 +4586,26 @@ exports.callUser = functions
 exports.initiateCall = functions
   .region(DEFAULT_REGION)
   .runWith({ secrets: [AGORA_APP_ID_SECRET, AGORA_APP_CERT_SECRET, AGORA_TTL_SECRET] })
-  .https.onCall(async (data) => {
+  .https.onCall(async (data, context) => {
+    if (!context.auth?.uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
+    }
+
     const calleeId = String(data?.calleeId || '').trim();
     const callerId = String(data?.callerId || data?.callerData?.uid || '').trim();
+    if (callerId !== context.auth.uid) {
+      throw new functions.https.HttpsError('permission-denied', 'callerId ไม่ตรงกับบัญชีที่เข้าสู่ระบบ');
+    }
     const callerName = String(data?.callerName || data?.callerData?.displayName || '').trim();
     const callerPhotoUrl = String(data?.callerPhotoUrl || data?.callerData?.photoUrl || '').trim();
     const isVideo = data?.isVideo === true || String(data?.callType || '').trim() === 'video';
     const callType = String(data?.callType || (isVideo ? 'video' : 'voice')).trim() || 'voice';
 
     if (!calleeId) {
-      throw new HttpsError('invalid-argument', 'calleeId is required');
+      throw new functions.https.HttpsError('invalid-argument', 'calleeId is required');
     }
     if (!callerId) {
-      throw new HttpsError('invalid-argument', 'callerId is required');
+      throw new functions.https.HttpsError('invalid-argument', 'callerId is required');
     }
 
     let calleeProfile = await getOrCreateUserProfile(calleeId);
@@ -4386,10 +4684,17 @@ exports.initiateCall = functions
 
 exports.cancelCallInvite = functions
   .region(DEFAULT_REGION)
-  .https.onCall(async (data) => {
+  .https.onCall(async (data, context) => {
+    if (!context.auth?.uid) {
+      throw new functions.https.HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
+    }
+
     const channelId = String(data?.channelId || '').trim();
     const calleeId = String(data?.calleeId || '').trim();
     const callerId = String(data?.callerId || '').trim();
+    if (callerId && callerId !== context.auth.uid) {
+      throw new functions.https.HttpsError('permission-denied', 'callerId ไม่ตรงกับบัญชีที่เข้าสู่ระบบ');
+    }
 
     if (!channelId || !calleeId) {
       throw new HttpsError('invalid-argument', 'channelId and calleeId are required');
@@ -4570,7 +4875,7 @@ async function syncVan2CartStockHoldTransaction(transaction, sessionRef, items) 
 }
 
 exports.syncVan2CartStockHold = onCall(
-  { region: DEFAULT_REGION },
+  { region: DEFAULT_REGION, enforceAppCheck: true },
   async (request) => {
     const uid = String(request.auth?.uid || '').trim();
     if (!uid) {
@@ -4681,6 +4986,96 @@ Object.assign(exports, require('./social'));
 const riderOrders = require('./rider_orders');
 riderOrders.init({ db, DEFAULT_REGION });
 Object.assign(exports, riderOrders.registerHandlers());
+
+const riderWallet = require('./rider_wallet');
+riderWallet.init({ db, FieldValue, DEFAULT_REGION });
+Object.assign(exports, riderWallet.registerHandlers());
+
+const riderOrderOps = require('./rider_order_ops');
+riderOrderOps.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
+Object.assign(exports, riderOrderOps.registerHandlers());
+
+const slipVerificationDeps = {
+  readRequiredConfiguredSecret,
+  getPaymentCollectionSettings,
+  buildSlipVerificationMessage,
+  amountsMatch,
+  validateSlipReceiver,
+  buildExpectedReceiverTargets,
+  writeSlipOkFeedbackLog,
+  parseNumber,
+  SLIPOK_ENDPOINT,
+};
+
+Object.assign(
+  exports,
+  createSlipVerificationQueueHandlers({
+    admin,
+    db,
+    FieldValue,
+    logger,
+    HttpsError,
+    onCall,
+    onDocumentCreated,
+    DEFAULT_REGION,
+    SLIPOK_API_KEY_SECRET,
+    verifyStandaloneSlipCore,
+    deps: slipVerificationDeps,
+  }),
+);
+
+Object.assign(
+  exports,
+  createRiderAvailabilityHandlers({
+    db,
+    FieldValue,
+    logger,
+    onSchedule,
+    onDocumentWritten,
+    DEFAULT_REGION,
+  }),
+);
+
+const omisePayoutHandlers = createOmisePayoutHandlers({
+  db,
+  FieldValue,
+  HttpsError,
+  onCall,
+  defineSecret,
+  logger,
+  DEFAULT_REGION,
+});
+Object.assign(exports, {
+  getWithdrawableBalance: omisePayoutHandlers.getWithdrawableBalance,
+  requestOmiseWithdraw: omisePayoutHandlers.requestOmiseWithdraw,
+});
+
+Object.assign(
+  exports,
+  createOmisePaymentsHandlers({
+    db,
+    FieldValue,
+    HttpsError,
+    onCall,
+    onRequest,
+    defineSecret,
+    logger,
+    DEFAULT_REGION,
+    handleTransferWebhook: omisePayoutHandlers.handleTransferWebhook,
+  }),
+);
+
+Object.assign(
+  exports,
+  createPlatformFloatHandlers({
+    db,
+    FieldValue,
+    onDocumentUpdated,
+    onSchedule,
+    logger,
+    DEFAULT_REGION,
+  }),
+);
 
 // =============================================================================
 // Security roadmap (Phase 2 / Phase 3 hooks)

@@ -22,39 +22,51 @@ import 'home_product_discovery_service.dart';
 import 'home_product_shelf.dart';
 import 'public_catalog_local_cache.dart';
 import 'services/home_catalog_bootstrap.dart';
+import 'services/rider_availability_service.dart';
 import 'services/home_product_image_prefetch.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
 import 'nationwide_cart_screen.dart';
 import 'notification_screen.dart';
 import 'order_roadmap_screen.dart';
+import 'services/order_reorder_service.dart';
 import 'privacy_launch_gate.dart';
+import 'models/omise_payment_channel.dart';
 import 'models/promotion_models.dart';
+import 'services/omise_payment_service.dart';
 import 'pricing_config_service.dart';
 import 'services/locale_service.dart';
 import 'services/promotion_catalog_service.dart';
 import 'services/promotion_display_config_service.dart';
 import 'widgets/home_promo_carousel.dart';
-import 'shipping_pricing_policy.dart';
 import 'public_catalog_service.dart';
 import 'services/cart_session_service.dart';
 import 'services/favorites_service.dart';
 import 'services/notification_service.dart';
 import 'services/observability_service.dart';
 import 'services/privacy_consent_service.dart';
+import 'services/travel_fare_quote_service.dart';
 import 'widgets/rider_unavailable_dialog.dart';
 import 'settings_screen.dart';
 import 'shop_map_screen.dart';
 import 'shop_qr_scanner_screen.dart';
-import 'storage_helper.dart';
 import 'travel_planner_screen.dart';
 import 'travel_tracking_screen.dart';
 import 'travel_vehicle_type.dart';
+import 'utils/app_check_guard.dart' show AppCheckGuard, kAppCheckRecaptchaSiteKey;
 import 'utils/customer_location.dart';
 
 const bool kAppCheckForceDebug = bool.fromEnvironment(
   'APP_CHECK_DEBUG',
   defaultValue: false,
+);
+
+/// Debug-only App Check token pinned for van2 dev/emulator builds.
+/// Register this exact token once in Firebase Console → App Check → van2 → Debug tokens.
+/// Override at build time with --dart-define=VAN2_APP_CHECK_DEBUG_TOKEN=...
+const String kVan2AppCheckDebugToken = String.fromEnvironment(
+  'VAN2_APP_CHECK_DEBUG_TOKEN',
+  defaultValue: 'c8e4a1f2-6b3d-4e9a-8f7c-2d5e6a9b0c41',
 );
 
 const bool kDebugMapPicker = bool.fromEnvironment(
@@ -78,40 +90,63 @@ Future<void> main() async {
     }
   }
 
+  try {
+    await ObservabilityService.instance.initialize(appName: 'van2_customer');
+  } catch (_) {}
+
   final useDebugAppCheck = !kReleaseMode || kAppCheckForceDebug;
   try {
-    await FirebaseAppCheck.instance
-        .activate(
-          providerAndroid: useDebugAppCheck
-              ? const AndroidDebugProvider()
-              : const AndroidPlayIntegrityProvider(),
-          providerApple: useDebugAppCheck
-              ? const AppleDebugProvider()
-              : const AppleDeviceCheckProvider(),
-        )
-        .timeout(const Duration(seconds: 5));
-    await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
-
-    if (useDebugAppCheck) {
-      FirebaseAppCheck.instance.onTokenChange.listen((token) {
-        debugPrint('App Check token: $token');
-      });
-    }
-
-    try {
+    if (kIsWeb) {
+      if (kAppCheckRecaptchaSiteKey.isNotEmpty) {
+        await FirebaseAppCheck.instance
+            .activate(
+              providerWeb: ReCaptchaV3Provider(kAppCheckRecaptchaSiteKey),
+            )
+            .timeout(const Duration(seconds: 5));
+        await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+      }
+    } else {
       await FirebaseAppCheck.instance
-          .getToken(true)
+          .activate(
+            providerAndroid: useDebugAppCheck
+                ? AndroidDebugProvider(debugToken: kVan2AppCheckDebugToken)
+                : const AndroidPlayIntegrityProvider(),
+            providerApple: useDebugAppCheck
+                ? const AppleDebugProvider()
+                : const AppleDeviceCheckProvider(),
+          )
           .timeout(const Duration(seconds: 5));
-    } catch (error) {
+      await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+
       if (useDebugAppCheck) {
-        debugPrint('Could not get App Check token on startup: $error');
+        debugPrint(
+          'App Check debug token (register once in Firebase Console): '
+          '$kVan2AppCheckDebugToken',
+        );
+      }
+
+      try {
+        await FirebaseAppCheck.instance
+            .getToken(true)
+            .timeout(const Duration(seconds: 5));
+      } catch (error, stack) {
+        if (useDebugAppCheck) {
+          debugPrint('Could not get App Check token on startup: $error');
+        } else {
+          unawaited(
+            ObservabilityService.instance.recordError(error, stack),
+          );
+        }
       }
     }
-  } catch (error) {
+  } catch (error, stack) {
     if (useDebugAppCheck) {
       debugPrint('App Check activate failed: $error');
+    } else {
+      unawaited(
+        ObservabilityService.instance.recordError(error, stack),
+      );
     }
-    // Keep app booting in environments where App Check is not configured yet.
   }
 
   // Catalog/product reads require a signed-in user in Firestore rules.
@@ -123,10 +158,6 @@ Future<void> main() async {
   } catch (_) {
     // If anonymous auth is disabled, app can still proceed and surface errors in UI.
   }
-
-  try {
-    await ObservabilityService.instance.initialize(appName: 'van2_customer');
-  } catch (_) {}
 
   if (!kIsWeb) {
     try {
@@ -153,6 +184,7 @@ Future<void> main() async {
   }
 
   unawaited(HomeCatalogBootstrap.warmForHome());
+  unawaited(RiderAvailabilityService.instance.warmUp());
   runApp(const MyApp());
 }
 
@@ -177,19 +209,25 @@ class _VerifiedSlipCheckout {
     required this.sizeBytes,
     required this.verificationFeedbackId,
     required this.verificationMessage,
-    this.contentType,
-    this.verifiedSlipAmount,
   });
 
   final String paymentGroupId;
   final String storagePath;
   final String downloadUrl;
   final String fileName;
-  final String? contentType;
   final int sizeBytes;
   final String verificationFeedbackId;
-  final double? verifiedSlipAmount;
   final String verificationMessage;
+}
+
+class _OmiseVerifiedCheckout {
+  const _OmiseVerifiedCheckout({
+    required this.paymentSessionId,
+    this.omiseChargeId,
+  });
+
+  final String paymentSessionId;
+  final String? omiseChargeId;
 }
 
 class MyApp extends StatefulWidget {
@@ -308,58 +346,53 @@ class _SplashScreenState extends State<SplashScreen> {
         .toDouble();
     final logoPadding = (logoBoxSize * 18 / 220).clamp(18.0, 54.0).toDouble();
 
-    return Scaffold(
-      body: Container(
-        width: double.infinity,
-        color: Colors.white,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Container(
-              width: logoBoxSize,
-              height: logoBoxSize,
-              padding: EdgeInsets.all(logoPadding),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(logoBoxSize * 32 / 220),
-                boxShadow: const <BoxShadow>[
-                  BoxShadow(
-                    color: Color(0x1F000000),
-                    blurRadius: 28,
-                    offset: Offset(0, 14),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.white,
+        systemNavigationBarColor: Colors.white,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: ColoredBox(
+          color: Colors.white,
+          child: SizedBox(
+            width: double.infinity,
+            height: double.infinity,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                SizedBox(
+                  width: logoBoxSize,
+                  height: logoBoxSize,
+                  child: Padding(
+                    padding: EdgeInsets.all(logoPadding),
+                    child: Image.asset(
+                      'assets/app_logo.png',
+                      fit: BoxFit.contain,
+                    ),
                   ),
-                ],
-              ),
-              child: Image.asset(
-                'assets/app_logo.png',
-                fit: BoxFit.contain,
-              ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'ตลาดโนนสูง ออนไลน์ เดลิเวอรี่',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF9A3412),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF57C00)),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 24),
-            Text(
-              'แว๊นตลาด',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFF9A3412),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Delivery starts here',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(color: const Color(0xFFB45309)),
-            ),
-            const SizedBox(height: 32),
-            const SizedBox(
-              width: 28,
-              height: 28,
-              child: CircularProgressIndicator(
-                strokeWidth: 3,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF57C00)),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1173,6 +1206,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _unreadNotificationSubscription = FirebaseFirestore.instance
         .collection('app_notifications')
         .where('recipientUid', isEqualTo: user.uid)
+        .limit(50)
         .snapshots()
         .listen((snapshot) {
           var totalUnread = 0;
@@ -1218,6 +1252,95 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _showSnackBar('อัปเดตพิกัดปลายทางเรียบร้อยแล้ว');
   }
 
+  Future<void> _startTravelPlannerFresh() async {
+    final result = await Navigator.of(context).push<TravelPlannerResult>(
+      MaterialPageRoute<TravelPlannerResult>(
+        builder: (context) => TravelPlannerScreen(
+          initialPickup: _userLocation,
+          initialDestination: null,
+          initialRideSelection: null,
+          onConfirmCashOnDelivery: _confirmTravelCashOnDeliveryOrder,
+          onSubmitOmisePayment: _submitOmiseTravelOrder,
+          onOpenOrderRoadmap: _openOrderRoadmap,
+        ),
+      ),
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    setState(() {
+      _userLocation = result.pickup;
+      _destinationLocation = result.destination;
+      _travelRideSelection = result.rideSelection;
+    });
+
+    _showSnackBar('ตั้งค่าจุดรับ จุดส่ง เวลา และประเภทรถเรียบร้อยแล้ว');
+  }
+
+  Future<void> _reorderProductsFromHistory(
+    Map<String, dynamic> orderData,
+  ) async {
+    final allowed = await _ensureLoggedIn();
+    if (!allowed || !mounted) {
+      return;
+    }
+
+    final result = await OrderReorderService.buildSelectionsFromOrder(orderData);
+    if (!mounted) {
+      return;
+    }
+
+    if (!result.hasSelections) {
+      _showSnackBar(
+        result.messages.isNotEmpty
+            ? result.messages.first
+            : 'ไม่พบสินค้าที่สั่งซ้ำได้',
+      );
+      return;
+    }
+
+    setState(() {
+      for (final selection in result.selections) {
+        _cartItems.add(
+          CartLineItem(
+            productId: selection.productId,
+            shopId: selection.shopId,
+            shopName: selection.shopName,
+            shopLatitude: selection.shopLatitude,
+            shopLongitude: selection.shopLongitude,
+            productName: selection.productName,
+            unitPrice: selection.unitPrice,
+            merchantBasePrice: selection.merchantBasePrice,
+            discountPercent: selection.discountPercent,
+            merchantUnitPayout: selection.merchantUnitPayout,
+            imageUrl: selection.imageUrl,
+            selectedToppings: selection.selectedToppings,
+            quantity: selection.quantity,
+            availableStock: selection.availableStock,
+            preparationTimeMinutes: selection.preparationTimeMinutes,
+            parcelWeightGrams: selection.parcelWeightGrams,
+            parcelLengthCm: selection.parcelLengthCm,
+            parcelWidthCm: selection.parcelWidthCm,
+            parcelHeightCm: selection.parcelHeightCm,
+          ),
+        );
+      }
+    });
+    _scheduleCartSessionSync();
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
+    _openCartTab();
+
+    if (result.messages.isNotEmpty) {
+      _showSnackBar(result.messages.first);
+    } else {
+      _showSnackBar('เพิ่มสินค้าในตะกร้าแล้ว — ตรวจสอบราคาปัจจุบันก่อนชำระเงิน');
+    }
+  }
+
   Future<void> _startTravelPlanner() async {
     final result = await Navigator.of(context).push<TravelPlannerResult>(
       MaterialPageRoute<TravelPlannerResult>(
@@ -1226,7 +1349,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           initialDestination: _destinationLocation,
           initialRideSelection: _travelRideSelection,
           onConfirmCashOnDelivery: _confirmTravelCashOnDeliveryOrder,
-          onSubmitPromptPaySlip: _submitTravelPromptPaySlipOrder,
+          onSubmitOmisePayment: _submitOmiseTravelOrder,
           onOpenOrderRoadmap: _openOrderRoadmap,
         ),
       ),
@@ -1887,8 +2010,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<User> _requireCheckoutUser() async {
     final allowed = await _ensureLoggedIn();
-    if (!allowed) {
+    if (!allowed || !mounted) {
       throw Exception('กรุณาเข้าสู่ระบบก่อนยืนยันคำสั่งซื้อ');
+    }
+
+    await AppCheckGuard.ensureCheckoutReady();
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
     }
 
     final user = FirebaseAuth.instance.currentUser;
@@ -1909,6 +2037,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     CartCheckoutContext checkoutContext,
   ) async {
     final user = await _requireCheckoutUser();
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
     final result = await _createCheckoutOrders(
       user: user,
       paymentMethod: 'cash_on_delivery',
@@ -1928,6 +2059,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     TravelPlannerResult request,
   ) async {
     final user = await _requireCheckoutUser();
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
     final result = await _createTravelOrder(
       user: user,
       request: request,
@@ -1943,73 +2077,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return result.orderIds;
   }
 
-  Future<PaymentSlipSubmissionResult> _submitPromptPaySlipOrder(
-    PaymentSlipSubmissionRequest request,
+  Future<List<String>> _submitOmiseCheckoutOrder(
+    OmisePaymentChannel channel,
+    CartCheckoutContext checkoutContext,
+    double grandTotal,
   ) async {
     final user = await _requireCheckoutUser();
-    if (request.bytes.isEmpty) {
-      throw Exception('ไฟล์สลิปว่างเปล่า');
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
+    final checkoutQuoteId = checkoutContext.checkoutQuoteId?.trim();
+    if (checkoutQuoteId == null || checkoutQuoteId.isEmpty) {
+      throw Exception('ยังไม่มี checkout quote กรุณารอระบบคำนวณยอดสักครู่');
     }
 
-    final paymentGroupId = 'PAY-${DateTime.now().millisecondsSinceEpoch}';
-    final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
-    final storagePath =
-        'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
-
-    final uploadTask = await StorageHelper.instance
-        .ref(storagePath)
-        .putData(
-          request.bytes,
-          SettableMetadata(
-            contentType: request.contentType ?? 'image/jpeg',
-            customMetadata: <String, String>{
-              'uploadedBy': user.uid,
-              'paymentGroupId': paymentGroupId,
-              'checkoutType': 'local_cart',
-            },
-          ),
-        );
-    final downloadUrl = await uploadTask.ref.getDownloadURL();
-
-    final verification = await _verifyStandalonePaymentSlip(
-      storagePath: storagePath,
-      paymentGroupId: paymentGroupId,
-      fileName: sanitizedFileName,
-      expectedAmount: request.grandTotal,
-      contentType: request.contentType,
+    final session = await OmisePaymentService().startCheckout(
+      context: context,
+      channel: channel,
+      amount: grandTotal,
+      checkoutQuoteId: checkoutQuoteId,
     );
-
-    if (verification.status != 'verified') {
-      return PaymentSlipSubmissionResult(
-        orderIds: const <String>[],
-        verificationStatus: verification.status,
-        message: verification.message.isEmpty
-            ? 'สลิปยังไม่ผ่านการตรวจสอบ กรุณาตรวจสอบยอดและบัญชีผู้รับแล้วลองใหม่อีกครั้ง'
-            : verification.message,
-      );
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
     }
 
     final creation = await _createCheckoutOrders(
       user: user,
-      paymentMethod: 'promptpay_qr',
-      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
+      paymentMethod: channel.methodId,
+      paymentMethodLabel: channel.paymentMethodLabel,
       paymentStatus: 'verified',
       paymentStatusLabel: 'ชำระเงินแล้ว',
-      auditSource: 'promptpay_slip_dialog',
+      auditSource: 'omise_payment_sheet',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าชำระเงินและสร้างออเดอร์แล้ว',
-      checkoutContext: request.checkoutContext,
-      verifiedSlip: _VerifiedSlipCheckout(
-        paymentGroupId: paymentGroupId,
-        storagePath: storagePath,
-        downloadUrl: downloadUrl,
-        fileName: sanitizedFileName,
-        contentType: request.contentType,
-        sizeBytes: request.sizeBytes,
-        verificationFeedbackId: verification.feedbackId,
-        verifiedSlipAmount: verification.verifiedSlipAmount,
-        verificationMessage: verification.message,
+      createdEventLabel: 'ลูกค้าชำระเงินผ่าน Omise และสร้างออเดอร์แล้ว',
+      checkoutContext: checkoutContext,
+      omisePayment: _OmiseVerifiedCheckout(
+        paymentSessionId: session.sessionId,
+        omiseChargeId: session.omiseChargeId,
       ),
     );
 
@@ -2017,84 +2122,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       throw Exception('ไม่สามารถสร้างออเดอร์ได้');
     }
 
-    return PaymentSlipSubmissionResult(
-      orderIds: creation.orderIds,
-      verificationStatus: 'verified',
-      message: verification.message.isEmpty
-          ? 'ตรวจสลิปผ่านและสร้างออเดอร์แล้ว'
-          : '${verification.message}\nสร้างออเดอร์แล้ว ${creation.orderIds.length} รายการ',
-    );
+    return creation.orderIds;
   }
 
-  Future<PaymentSlipSubmissionResult> _submitTravelPromptPaySlipOrder(
-    TravelPlannerResult travel,
-    PaymentSlipSubmissionRequest request,
+  Future<List<String>> _submitOmiseTravelOrder(
+    TravelPlannerResult request,
+    OmisePaymentChannel channel,
   ) async {
     final user = await _requireCheckoutUser();
-    if (request.bytes.isEmpty) {
-      throw Exception('ไฟล์สลิปว่างเปล่า');
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
+    final quote = await TravelFareQuoteService.fetchQuote(request);
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
     }
 
-    final paymentGroupId =
-        'TRAVEL-PAY-${DateTime.now().millisecondsSinceEpoch}';
-    final sanitizedFileName = _sanitizeSlipFileName(request.fileName);
-    final storagePath =
-        'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
-
-    final uploadTask = await StorageHelper.instance
-        .ref(storagePath)
-        .putData(
-          request.bytes,
-          SettableMetadata(
-            contentType: request.contentType ?? 'image/jpeg',
-            customMetadata: <String, String>{
-              'uploadedBy': user.uid,
-              'paymentGroupId': paymentGroupId,
-              'orderType': 'travel_passenger',
-            },
-          ),
-        );
-    final downloadUrl = await uploadTask.ref.getDownloadURL();
-
-    final verification = await _verifyStandalonePaymentSlip(
-      storagePath: storagePath,
-      paymentGroupId: paymentGroupId,
-      fileName: sanitizedFileName,
-      expectedAmount: request.grandTotal,
-      contentType: request.contentType,
+    final paidSession = await OmisePaymentService().startCheckout(
+      context: context,
+      channel: channel,
+      amount: quote.fare,
+      checkoutQuoteId: '',
+      purpose: 'travel',
     );
-
-    if (verification.status != 'verified') {
-      return PaymentSlipSubmissionResult(
-        orderIds: const <String>[],
-        verificationStatus: verification.status,
-        message: verification.message.isEmpty
-            ? 'สลิปยังไม่ผ่านการตรวจสอบ กรุณาตรวจสอบยอดและบัญชีผู้รับแล้วลองใหม่อีกครั้ง'
-            : verification.message,
-      );
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
     }
 
     final creation = await _createTravelOrder(
       user: user,
-      request: travel,
-      paymentMethod: 'promptpay_qr',
-      paymentMethodLabel: 'จ่ายด้วยทรูมันนี่',
+      request: request,
+      paymentMethod: channel.methodId,
+      paymentMethodLabel: channel.paymentMethodLabel,
       paymentStatus: 'verified',
       paymentStatusLabel: 'ชำระเงินแล้ว',
-      auditSource: 'travel_promptpay_slip_dialog',
+      auditSource: 'travel_omise_payment_sheet',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าชำระเงินและสร้างคำขอเดินทางแล้ว',
-      verifiedSlip: _VerifiedSlipCheckout(
-        paymentGroupId: paymentGroupId,
-        storagePath: storagePath,
-        downloadUrl: downloadUrl,
-        fileName: sanitizedFileName,
-        contentType: request.contentType,
-        sizeBytes: request.sizeBytes,
-        verificationFeedbackId: verification.feedbackId,
-        verifiedSlipAmount: verification.verifiedSlipAmount,
-        verificationMessage: verification.message,
+      createdEventLabel: 'ลูกค้าชำระเงินผ่าน Omise และสร้างคำขอเดินทางแล้ว',
+      omisePayment: _OmiseVerifiedCheckout(
+        paymentSessionId: paidSession.sessionId,
+        omiseChargeId: paidSession.omiseChargeId,
       ),
     );
 
@@ -2102,80 +2170,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
     }
 
-    return PaymentSlipSubmissionResult(
-      orderIds: creation.orderIds,
-      verificationStatus: 'verified',
-      message: verification.message.isEmpty
-          ? 'ตรวจสลิปผ่านและสร้างคำขอเดินทางแล้ว'
-          : verification.message,
-    );
-  }
-
-  Future<({
-    String status,
-    String message,
-    String feedbackId,
-    double? verifiedSlipAmount,
-  })> _verifyStandalonePaymentSlip({
-    required String storagePath,
-    required String paymentGroupId,
-    required String fileName,
-    required double expectedAmount,
-    required String? contentType,
-  }) async {
-    final callable = FirebaseFunctions.instanceFor(
-      region: 'asia-southeast1',
-    ).httpsCallable('verifyStandalonePaymentSlip');
-    final response = await callable.call(<String, dynamic>{
-      'storagePath': storagePath,
-      'paymentGroupId': paymentGroupId,
-      'fileName': fileName,
-      'expectedAmount': expectedAmount,
-      if (contentType != null) 'contentType': contentType,
-    });
-
-    final payload = response.data;
-    final data = payload is Map
-        ? Map<String, dynamic>.from(payload)
-        : const <String, dynamic>{};
-    return (
-      status: (data['status'] as String?)?.trim() ?? 'error',
-      message: (data['message'] as String?)?.trim() ?? '',
-      feedbackId: (data['feedbackId'] as String?)?.trim() ?? paymentGroupId,
-      verifiedSlipAmount: (data['verifiedSlipAmount'] as num?)?.toDouble(),
-    );
-  }
-
-  String _sanitizeSlipFileName(String fileName) {
-    final trimmed = fileName.trim();
-    final safe = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    if (safe.isEmpty) {
-      return 'slip_${DateTime.now().millisecondsSinceEpoch}.jpg';
-    }
-    return safe;
+    return creation.orderIds;
   }
 
   Future<void> _recordCheckoutDiscounts({
     required List<String> orderIds,
     required CartDiscountSnapshot discounts,
+    required String checkoutQuoteId,
   }) async {
     if (orderIds.isEmpty || discounts.discountTotal <= 0) {
       return;
     }
-    try {
-      final functions = FirebaseFunctions.instanceFor(
-        region: 'asia-southeast1',
-      );
-      await functions.httpsCallable('recordCheckoutDiscounts').call(
-        <String, dynamic>{
-          'orderIds': orderIds,
-          'discountTotal': discounts.discountTotal,
-          'discountLines': discounts.discountLines
-              .map((line) => line.toPayload())
-              .toList(growable: false),
-        },
-      );
-    } catch (_) {}
+
+    Object? lastError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        await AppCheckGuard.ensureCheckoutReady();
+        final functions = FirebaseFunctions.instanceFor(
+          region: 'asia-southeast1',
+        );
+        await functions.httpsCallable('recordCheckoutDiscounts').call(
+          <String, dynamic>{
+            'checkoutQuoteId': checkoutQuoteId,
+            'orderIds': orderIds,
+            'discountTotal': discounts.discountTotal,
+            'discountLines': discounts.discountLines
+                .map((line) => line.toPayload())
+                .toList(growable: false),
+          },
+        );
+        return;
+      } catch (error, stack) {
+        lastError = error;
+        unawaited(
+          ObservabilityService.instance.recordError(error, stack),
+        );
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          lastError is FirebaseFunctionsException
+              ? (lastError.message ??
+                    'บันทึกการใช้ส่วนลดไม่สำเร็จ กรุณาติดต่อผู้ดูแลระบบ')
+              : 'บันทึกการใช้ส่วนลดไม่สำเร็จ กรุณาติดต่อผู้ดูแลระบบ',
+        ),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   Future<({List<String> orderIds, double combinedGrandTotal})>
@@ -2191,6 +2237,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required String createdEventLabel,
     CartCheckoutContext? checkoutContext,
     _VerifiedSlipCheckout? verifiedSlip,
+    _OmiseVerifiedCheckout? omisePayment,
   }) async {
     if (_cartItems.isEmpty) {
       throw Exception('ไม่มีสินค้าในตะกร้า');
@@ -2247,12 +2294,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'slipStoragePath': verifiedSlip.storagePath,
           'slipDownloadUrl': verifiedSlip.downloadUrl,
           'slipFileName': verifiedSlip.fileName,
-          if (verifiedSlip.contentType != null)
-            'slipContentType': verifiedSlip.contentType,
           'slipSizeBytes': verifiedSlip.sizeBytes,
-          if (verifiedSlip.verifiedSlipAmount != null)
-            'verifiedSlipAmount': verifiedSlip.verifiedSlipAmount,
           'verificationMessage': verifiedSlip.verificationMessage,
+        },
+        if (omisePayment != null) ...<String, dynamic>{
+          'paymentSessionId': omisePayment.paymentSessionId,
+          'paymentGroupId': omisePayment.paymentSessionId,
+          'verificationFeedbackId': omisePayment.paymentSessionId,
+          if (omisePayment.omiseChargeId != null)
+            'omiseChargeId': omisePayment.omiseChargeId,
         },
       });
 
@@ -2291,6 +2341,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await _recordCheckoutDiscounts(
         orderIds: orderIds,
         discounts: discounts,
+        checkoutQuoteId: checkoutQuoteId,
       );
 
       return (
@@ -2315,129 +2366,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required bool notifyRider,
     required String createdEventLabel,
     _VerifiedSlipCheckout? verifiedSlip,
+    _OmiseVerifiedCheckout? omisePayment,
   }) async {
-    final fare = ShippingPricingPolicy.computeTravelFareForVehicle(
-      request.distanceKm,
-      request.rideSelection.vehicleType,
-    );
-    final riderSearch = await _findNearestPassengerRider(
-      pickupLatitude: request.pickup.latitude,
-      pickupLongitude: request.pickup.longitude,
-      vehicleType: request.rideSelection.vehicleType,
-    );
-    final assignedRider = riderSearch.rider;
-    final orderRef = FirebaseFirestore.instance.collection('orders').doc();
-    final now = DateTime.now();
-    final orderCode =
-        'TRV-${now.year.toString().padLeft(4, '0')}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${orderRef.id.substring(0, 6).toUpperCase()}';
-    final hasAssignedRider = assignedRider != null;
-    final isVerifiedPayment = paymentStatus == 'verified';
-    final initialOrderStatus = isVerifiedPayment
-        ? (hasAssignedRider ? 'pending' : 'awaiting_rider')
-        : hasAssignedRider
-            ? (notifyRider ? 'pending' : 'awaiting_payment_slip_review')
-            : (notifyRider ? 'awaiting_rider' : 'awaiting_payment_slip_review');
-    final initialStatusLabel = isVerifiedPayment
-        ? (hasAssignedRider
-            ? 'pending_customer_confirmation'
-            : 'awaiting_nearest_rider')
-        : hasAssignedRider
-            ? (notifyRider
-                ? 'pending_customer_confirmation'
-                : 'awaiting_payment_slip_review')
-            : (notifyRider
-                ? 'awaiting_nearest_rider'
-                : 'awaiting_payment_slip_review');
-    final shouldAssignRiderImmediately = notifyRider && assignedRider != null;
+    if (verifiedSlip != null) {
+      throw Exception('การชำระด้วยสลิปสำหรับเดินทางยังไม่รองรับ');
+    }
 
-    await orderRef.set(<String, dynamic>{
-      'orderId': orderRef.id,
-      'orderCode': orderCode,
-      'orderType': 'travel_passenger',
-      'serviceType': 'travel_passenger',
-      'status': initialOrderStatus,
-      'statusLabel': initialStatusLabel,
-      'customerConfirmed': true,
-      'customerConfirmedAt': FieldValue.serverTimestamp(),
-      'riderNotifyReady': isVerifiedPayment ? hasAssignedRider : riderNotifyReady,
-      'paymentMethod': paymentMethod,
-      'paymentMethodLabel': paymentMethodLabel,
-      'paymentStatus': paymentStatus,
-      'paymentStatusLabel': paymentStatusLabel,
-      if (verifiedSlip != null) ...<String, dynamic>{
-        'paymentGroupId': verifiedSlip.paymentGroupId,
-        'paymentSubmittedAt': FieldValue.serverTimestamp(),
-        'paymentSlip': <String, dynamic>{
-          'storagePath': verifiedSlip.storagePath,
-          'downloadUrl': verifiedSlip.downloadUrl,
-          'fileName': verifiedSlip.fileName,
-          'contentType': verifiedSlip.contentType,
-          'sizeBytes': verifiedSlip.sizeBytes,
-          'uploadedBy': user.uid,
-          'uploadedAt': FieldValue.serverTimestamp(),
-        },
-        'paymentVerification': <String, dynamic>{
-          'provider': 'slipok',
-          'providerLabel': 'Slip OK',
-          'feedbackId': verifiedSlip.verificationFeedbackId,
-          'paymentGroupId': verifiedSlip.paymentGroupId,
-          'expectedCombinedAmount': fare,
-          if (verifiedSlip.verifiedSlipAmount != null)
-            'verifiedSlipAmount': verifiedSlip.verifiedSlipAmount,
-          'status': 'verified',
-          'statusLabel': 'ตรวจสอบสลิปผ่าน',
-          'message': verifiedSlip.verificationMessage,
-          'checkedAt': FieldValue.serverTimestamp(),
-        },
-      },
-      'sourceApp': 'van2_customer',
-      'customerId': user.uid,
-      'customerEmail': user.email,
-      'customerPhone': user.phoneNumber,
-      'customerSnapshot': <String, dynamic>{
-        'uid': user.uid,
-        'email': user.email,
-        'phoneNumber': user.phoneNumber,
-      },
-      'shopOwnerId': 'travel_service',
-      'shopId': 'travel_service',
-      'shopName': request.pickup.title,
-      'shopAddress': request.pickup.subtitle,
-      'shopLatitude': request.pickup.latitude,
-      'shopLongitude': request.pickup.longitude,
-      'driverId': shouldAssignRiderImmediately ? assignedRider.riderId : null,
-      'driverName': null,
-      'driverPhone': null,
-      'assignedRiderAt': shouldAssignRiderImmediately
-          ? FieldValue.serverTimestamp()
-          : null,
-      'customerLocation': <String, dynamic>{
-        'latitude': request.destination.latitude,
-        'longitude': request.destination.longitude,
-        'label': request.destination.title,
-      },
-      'deliverySnapshot': <String, dynamic>{
-        'latitude': request.destination.latitude,
-        'longitude': request.destination.longitude,
-        'locationLabel': request.destination.title,
-      },
-      'itemCount': 1,
-      'totalQuantity': 1,
-      'products': <Map<String, dynamic>>[
-        <String, dynamic>{
-          'productId': 'travel_passenger_service',
-          'name': 'บริการรับส่งผู้โดยสาร',
-          'quantity': 1,
-          'unitPrice': fare,
-          'lineTotal': fare,
-          'note': 'จาก ${request.pickup.title} ไป ${request.destination.title}',
-        },
-      ],
-      'totalPrice': fare,
-      'subtotal': fare,
-      'shippingFee': 0,
-      'grandTotal': fare,
-      'travelRequest': <String, dynamic>{
+    final idempotencyKey = request.idempotencyKey.trim().isNotEmpty
+        ? request.idempotencyKey.trim()
+        : '${user.uid}_${DateTime.now().microsecondsSinceEpoch}';
+
+    try {
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('createTravelOrder');
+      final response = await callable.call(<String, dynamic>{
         'pickup': <String, dynamic>{
           'latitude': request.pickup.latitude,
           'longitude': request.pickup.longitude,
@@ -2453,98 +2396,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'distanceKm': request.distanceKm,
         'vehicleType': request.rideSelection.vehicleType.name,
         'vehicleTypeLabel': request.rideSelection.vehicleType.label,
-        'scheduledAt': Timestamp.fromDate(request.rideSelection.scheduledAt),
+        'scheduledAt': request.rideSelection.scheduledAt.toIso8601String(),
         'scheduleLabel': request.rideSelection.scheduleLabel,
         'isImmediate': request.rideSelection.isImmediate,
-        'fare': fare,
-      },
-      'riderSearch': <String, dynamic>{
-        'stepKm': 2,
-        'maxRadiusKm': 10,
-        'searchedRadiusKm': riderSearch.searchedRadiusKm,
-        'onlineRiderCount': riderSearch.onlineRiderCount,
-        'eligibleRiderCount': riderSearch.eligibleRiderCount,
-        'matched': assignedRider != null,
-        'matchedRiderId': assignedRider?.riderId,
-        'matchedDistanceKm': assignedRider?.distanceKm,
-        if (riderSearch.excludedRiderCount > 0)
-          'excludedRiderCount': riderSearch.excludedRiderCount,
-        if (riderSearch.excludedBreakdown.isNotEmpty)
-          'excludedBreakdown': riderSearch.excludedBreakdown,
-        if (riderSearch.reason != null) 'reason': riderSearch.reason,
-      },
-      'audit': <String, dynamic>{
-        'createdBy': user.uid,
-        'createdByRole': 'customer',
-        'createdSource': auditSource,
-      },
-      'timestamp': FieldValue.serverTimestamp(),
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+        'paymentMethod': paymentMethod,
+        'paymentMethodLabel': paymentMethodLabel,
+        'paymentStatus': paymentStatus,
+        'paymentStatusLabel': paymentStatusLabel,
+        'auditSource': auditSource,
+        'notifyRider': notifyRider,
+        'riderNotifyReady': riderNotifyReady,
+        'createdEventLabel': createdEventLabel,
+        'idempotencyKey': idempotencyKey,
+        if (omisePayment != null) 'paymentSessionId': omisePayment.paymentSessionId,
+      });
 
-    // Fire-and-forget: timeline ไม่บล็อก user flow
-    unawaited(
-      orderRef
-          .collection('timeline')
-          .add(<String, dynamic>{
-            'event': 'order_created',
-            'eventLabel': createdEventLabel,
-            'actorId': user.uid,
-            'actorRole': 'customer',
-            'orderId': orderRef.id,
-            'orderCode': orderCode,
-            'status': initialOrderStatus,
-            'timestamp': FieldValue.serverTimestamp(),
-          })
-          .catchError((_) => orderRef.collection('timeline').doc()),
-    );
+      final payload = response.data is Map
+          ? Map<String, dynamic>.from(response.data as Map)
+          : const <String, dynamic>{};
+      final orderIds =
+          (payload['orderIds'] as List?)
+              ?.map((id) => id.toString())
+              .toList(growable: false) ??
+          const <String>[];
+      final combinedGrandTotal =
+          (payload['combinedGrandTotal'] as num?)?.toDouble() ?? 0.0;
+      final hasAssignedRider = payload['hasAssignedRider'] == true;
 
-    if (notifyRider && assignedRider != null) {
-      // Fire-and-forget: van3 ฟัง orders snapshot อยู่แล้ว
-      unawaited(
-        FirebaseFirestore.instance
-            .collection('app_notifications')
-            .add({
-              'targetApp': 'van3',
-              'recipientUid': assignedRider.riderId,
-              'orderId': orderRef.id,
-              'title': isVerifiedPayment
-                  ? 'ชำระเงินแล้ว มีงานเดินทางใหม่'
-                  : 'มีคำขอเดินทางใหม่',
-              'body': orderCode.isNotEmpty
-                  ? isVerifiedPayment
-                      ? 'งานเดินทาง $orderCode ชำระเงินแล้ว'
-                      : 'งานเดินทาง $orderCode จาก ${request.pickup.title}'
-                  : 'มีงานเดินทางใหม่จาก ${request.pickup.title}',
-              'read': false,
-              'createdAt': FieldValue.serverTimestamp(),
-              'source': 'van2_customer',
-              'sourceApp': 'van2_customer',
-              'action': isVerifiedPayment
-                  ? 'order_payment_verified'
-                  : 'travel_order_created_customer_confirmed',
-              'customerConfirmed': true,
-              'riderNotifyReady': isVerifiedPayment ? true : riderNotifyReady,
-            })
-            .catchError(
-              (_) => FirebaseFirestore.instance
-                  .collection('app_notifications')
-                  .doc(),
-            ),
-      );
+      if (orderIds.isEmpty) {
+        throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+      }
+
+      if (mounted && !hasAssignedRider) {
+        await showRiderUnavailableDialog(
+          context,
+          shopNames: const <String>['บริการเดินทาง'],
+          orderIds: orderIds,
+          isTravelOrder: true,
+        );
+      }
+
+      return (orderIds: orderIds, combinedGrandTotal: combinedGrandTotal);
+    } catch (e) {
+      throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้: $e');
     }
-
-    if (mounted && !hasAssignedRider) {
-      await showRiderUnavailableDialog(
-        context,
-        shopNames: const <String>['บริการเดินทาง'],
-        orderIds: <String>[orderRef.id],
-        isTravelOrder: true,
-      );
-    }
-
-    return (orderIds: <String>[orderRef.id], combinedGrandTotal: fare);
   }
 
   void _focusRoadmapOrders(List<String> orderIds) {
@@ -2565,13 +2460,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _openOrderRoadmap(List<String> orderIds) async {
+  Future<void> _openOrderRoadmap(
+    List<String> orderIds, {
+    bool showTravelTracking = true,
+  }) async {
     if (!mounted || orderIds.isEmpty) {
       return;
     }
 
     final orderId = orderIds.first.trim();
-    if (orderId.isNotEmpty) {
+    if (showTravelTracking && orderId.isNotEmpty) {
       try {
         final doc = await FirebaseFirestore.instance
             .collection('orders')
@@ -2589,172 +2487,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     _focusRoadmapOrders(orderIds);
-  }
-
-  Future<_RiderSearchResult> _findNearestPassengerRider({
-    required double pickupLatitude,
-    required double pickupLongitude,
-    required TravelVehicleType vehicleType,
-  }) async {
-    try {
-      final docs = await fetchTravelAvailableRiders();
-      final singleOnlineRiderId = docs.length == 1 ? docs.first.id : null;
-
-      final candidates = <_RiderDistance>[];
-      final fallbackCandidates = <_RiderDistance>[];
-      final excludedBreakdown = <String, int>{};
-
-      void addExcludedReason(String reason) {
-        excludedBreakdown[reason] = (excludedBreakdown[reason] ?? 0) + 1;
-      }
-
-      for (final doc in docs) {
-        final data = doc.data();
-        if (!isRiderAvailableForTravel(data)) {
-          addExcludedReason('not_travel_available');
-          continue;
-        }
-
-        final riderVehicleType = readRiderTravelVehicleType(data);
-        if (riderVehicleType != vehicleType) {
-          addExcludedReason('vehicle_type_mismatch');
-          continue;
-        }
-
-        final geo = data['currentLocation'];
-        final lat = geo is GeoPoint
-            ? geo.latitude
-            : _toDouble(data['latitude']);
-        final lng = geo is GeoPoint
-            ? geo.longitude
-            : _toDouble(data['longitude']);
-
-        if (lat == null || lng == null) {
-          addExcludedReason('missing_coordinates');
-          continue;
-        }
-
-        if ((lat == 0.0 && lng == 0.0) || !_isValidRiderCoordinates(lat, lng)) {
-          addExcludedReason('invalid_coordinates');
-          continue;
-        }
-
-        final meters = Geolocator.distanceBetween(
-          pickupLatitude,
-          pickupLongitude,
-          lat,
-          lng,
-        );
-        final riderDistance = _RiderDistance(
-          riderId: doc.id,
-          distanceKm: meters / 1000.0,
-        );
-        fallbackCandidates.add(riderDistance);
-
-        if (!isRiderTravelLocationFresh(data)) {
-          addExcludedReason('stale_or_offline_location');
-          continue;
-        }
-
-        candidates.add(riderDistance);
-      }
-
-      if (candidates.isEmpty) {
-        if (fallbackCandidates.length == 1) {
-          return _RiderSearchResult(
-            rider: fallbackCandidates.first,
-            searchedRadiusKm: 10,
-            onlineRiderCount: docs.length,
-            eligibleRiderCount: 1,
-            excludedRiderCount: docs.length > 1 ? docs.length - 1 : 0,
-            excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-            reason: 'single_travel_ready_fallback',
-          );
-        }
-
-        if (singleOnlineRiderId != null) {
-          return _RiderSearchResult(
-            rider: _RiderDistance(riderId: singleOnlineRiderId, distanceKm: 0),
-            searchedRadiusKm: 10,
-            onlineRiderCount: docs.length,
-            eligibleRiderCount: 1,
-            excludedRiderCount: 0,
-            excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-            reason: 'single_travel_ready_no_location_fallback',
-          );
-        }
-
-        return _RiderSearchResult(
-          rider: null,
-          searchedRadiusKm: 10,
-          onlineRiderCount: docs.length,
-          eligibleRiderCount: 0,
-          excludedRiderCount: docs.length,
-          excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-          reason: docs.isEmpty
-              ? 'no_travel_ready_riders'
-              : 'no_eligible_travel_riders',
-        );
-      }
-
-      for (var radiusKm = 2; radiusKm <= 10; radiusKm += 2) {
-        final inRadius =
-            candidates
-                .where((candidate) => candidate.distanceKm <= radiusKm)
-                .toList(growable: false)
-              ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-
-        if (inRadius.isNotEmpty) {
-          return _RiderSearchResult(
-            rider: inRadius.first,
-            searchedRadiusKm: radiusKm.toDouble(),
-            onlineRiderCount: docs.length,
-            eligibleRiderCount: candidates.length,
-            excludedRiderCount: docs.length - candidates.length,
-            excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-          );
-        }
-      }
-
-      final nearest = [...candidates]
-        ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-      return _RiderSearchResult(
-        rider: nearest.first,
-        searchedRadiusKm: 10,
-        onlineRiderCount: docs.length,
-        eligibleRiderCount: candidates.length,
-        excludedRiderCount: docs.length - candidates.length,
-        excludedBreakdown: Map<String, int>.unmodifiable(excludedBreakdown),
-        reason: 'nearest_travel_ready_out_of_radius_fallback',
-      );
-    } catch (e) {
-      return _RiderSearchResult(
-        rider: null,
-        searchedRadiusKm: 0,
-        onlineRiderCount: 0,
-        eligibleRiderCount: 0,
-        excludedRiderCount: 0,
-        excludedBreakdown: const <String, int>{},
-        reason: 'passenger_rider_query_failed:$e',
-      );
-    }
-  }
-
-  bool _isValidRiderCoordinates(double latitude, double longitude) {
-    return latitude >= -90 &&
-        latitude <= 90 &&
-        longitude >= -180 &&
-        longitude <= 180;
-  }
-
-  double? _toDouble(Object? value) {
-    if (value is num) {
-      return value.toDouble();
-    }
-    if (value is String) {
-      return double.tryParse(value.trim());
-    }
-    return null;
   }
 
   void _onBottomTabSelected(int index) {
@@ -2784,7 +2516,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const labels = <String>[
           'โฮม',
           'ตะกร้า',
-          'โรดแมป',
+          'ลูกค้า',
           'แจ้งเตือน',
           'ตั้งค่า',
         ];
@@ -2868,10 +2600,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           unawaited(_applySharedLocationToCart());
         },
         onConfirmCashOnDelivery: _confirmCashOnDeliveryOrder,
-        onSubmitPromptPaySlip: _submitPromptPaySlipOrder,
+        onSubmitOmisePayment: _submitOmiseCheckoutOrder,
         onOpenOrderRoadmap: _openOrderRoadmap,
       ),
-      2 => OrderRoadmapScreen(orderIds: _roadmapFocusOrderIds),
+      2 => OrderRoadmapScreen(
+        orderIds: _roadmapFocusOrderIds,
+        onReorderProducts: _reorderProductsFromHistory,
+        onTravelAgain: _startTravelPlannerFresh,
+      ),
       3 => NotificationScreen(onOpenOrder: _focusRoadmapOrders),
       _ => SettingsScreen(
         onLoggedOut: () {
@@ -2977,7 +2713,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const NavigationDestination(
                 icon: Icon(Icons.person_outline_rounded),
                 selectedIcon: Icon(Icons.person_rounded),
-                label: 'โรดแมป',
+                label: 'ลูกค้า',
               ),
               NavigationDestination(
                 icon: _CartNavIcon(
@@ -3137,12 +2873,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               foregroundColor: const Color(0xFF7A4B00),
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          const _HeaderAvatarBadge(
-                            icon: Icons.person,
-                            backgroundColor: Color(0xFF58BFC1),
-                            foregroundColor: Colors.white,
-                          ),
                         ],
                       ),
                     ],
@@ -3207,33 +2937,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ],
     );
   }
-}
-
-class _RiderDistance {
-  const _RiderDistance({required this.riderId, required this.distanceKm});
-
-  final String riderId;
-  final double distanceKm;
-}
-
-class _RiderSearchResult {
-  const _RiderSearchResult({
-    required this.rider,
-    required this.searchedRadiusKm,
-    required this.onlineRiderCount,
-    required this.eligibleRiderCount,
-    required this.excludedRiderCount,
-    required this.excludedBreakdown,
-    this.reason,
-  });
-
-  final _RiderDistance? rider;
-  final double searchedRadiusKm;
-  final int onlineRiderCount;
-  final int eligibleRiderCount;
-  final int excludedRiderCount;
-  final Map<String, int> excludedBreakdown;
-  final String? reason;
 }
 
 class _QuickActionItem {

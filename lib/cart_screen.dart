@@ -4,7 +4,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
@@ -23,8 +22,14 @@ import 'market_pricing_policy.dart';
 import 'models/promotion_models.dart';
 import 'services/promotion_display_config_service.dart';
 import 'shipping_pricing_policy.dart';
+import 'utils/web_blob_download.dart';
+import 'utils/app_check_guard.dart';
 import 'widgets/cached_app_image.dart';
+import 'widgets/online_rider_slider.dart';
+import 'widgets/payment_brand_strip.dart';
+import 'widgets/payment_checkout_sheet.dart';
 import 'widgets/promotion_cart_panel.dart';
+import 'models/omise_payment_channel.dart';
 
 class CartLineItem {
   const CartLineItem({
@@ -100,33 +105,6 @@ class PaymentSlipSubmissionResult {
   final String verificationStatus;
 }
 
-class _TrueMoneyDialogDraft {
-  const _TrueMoneyDialogDraft({
-    required this.grandTotal,
-    this.attachedSlip,
-    this.checkoutContext,
-  });
-
-  final double grandTotal;
-  final PlatformFile? attachedSlip;
-  final CartCheckoutContext? checkoutContext;
-
-  _TrueMoneyDialogDraft copyWith({
-    double? grandTotal,
-    PlatformFile? attachedSlip,
-    CartCheckoutContext? checkoutContext,
-    bool clearAttachedSlip = false,
-  }) {
-    return _TrueMoneyDialogDraft(
-      grandTotal: grandTotal ?? this.grandTotal,
-      attachedSlip: clearAttachedSlip
-          ? null
-          : (attachedSlip ?? this.attachedSlip),
-      checkoutContext: checkoutContext ?? this.checkoutContext,
-    );
-  }
-}
-
 class CartScreen extends StatefulWidget {
   const CartScreen({
     super.key,
@@ -138,7 +116,7 @@ class CartScreen extends StatefulWidget {
     required this.onPickCustomerLocation,
     required this.onApplySharedLocation,
     this.onConfirmCashOnDelivery,
-    this.onSubmitPromptPaySlip,
+    this.onSubmitOmisePayment,
     this.onOpenOrderRoadmap,
   });
 
@@ -151,10 +129,11 @@ class CartScreen extends StatefulWidget {
   final VoidCallback onApplySharedLocation;
   final Future<List<String>> Function(CartCheckoutContext context)?
       onConfirmCashOnDelivery;
-  final Future<PaymentSlipSubmissionResult> Function(
-    PaymentSlipSubmissionRequest request,
-  )?
-  onSubmitPromptPaySlip;
+  final Future<List<String>> Function(
+    OmisePaymentChannel channel,
+    CartCheckoutContext context,
+    double grandTotal,
+  )? onSubmitOmisePayment;
   final Future<void> Function(List<String> orderIds)? onOpenOrderRoadmap;
 
   @override
@@ -179,8 +158,6 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
   String? _appliedCouponCode;
   String? _pendingCouponCode;
   bool _isSubmittingCashOnDelivery = false;
-  _TrueMoneyDialogDraft? _trueMoneyDialogDraft;
-  bool _isTrueMoneyDialogShowing = false;
 
   @override
   void initState() {
@@ -217,26 +194,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
-      return;
-    }
-    if (_trueMoneyDialogDraft == null ||
-        _isTrueMoneyDialogShowing ||
-        !mounted) {
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final draft = _trueMoneyDialogDraft;
-      if (!mounted || draft == null || _isTrueMoneyDialogShowing) {
-        return;
-      }
-      _showTrueMoneyQrDialog(
-        grandTotal: draft.grandTotal,
-        discounts: draft.checkoutContext?.discounts ?? CartDiscountSnapshot.empty,
-        appliedCouponCode: draft.checkoutContext?.couponCode,
-      );
-    });
+    super.didChangeAppLifecycleState(state);
   }
 
   void _refreshShippingIfNeeded({bool force = false}) {
@@ -453,7 +411,14 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
           child: Column(
             children: <Widget>[
-              const _RiderOnlineStatusCard(),
+              _CartHeaderRow(
+                cartItems: cartItems,
+                customerLatitude: widget.customerLatitude,
+                customerLongitude: widget.customerLongitude,
+                customerLocationLabel: widget.customerLocationLabel,
+                onPickCustomerLocation: widget.onPickCustomerLocation,
+                onApplySharedLocation: widget.onApplySharedLocation,
+              ),
               const Expanded(
                 child: Center(
                   child: Padding(
@@ -539,17 +504,14 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
             return SafeArea(
               child: Column(
                 children: <Widget>[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-                    child: _RiderOnlineStatusCard(),
-                  ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _CustomerLocationCard(
-                      label: widget.customerLocationLabel,
-                      latitude: widget.customerLatitude,
-                      longitude: widget.customerLongitude,
-                      onPickLocation: widget.onPickCustomerLocation,
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                    child: _CartHeaderRow(
+                      cartItems: cartItems,
+                      customerLatitude: widget.customerLatitude,
+                      customerLongitude: widget.customerLongitude,
+                      customerLocationLabel: widget.customerLocationLabel,
+                      onPickCustomerLocation: widget.onPickCustomerLocation,
                       onApplySharedLocation: widget.onApplySharedLocation,
                     ),
                   ),
@@ -874,49 +836,35 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           ),
                         ],
                         const SizedBox(height: 12),
-                        Text(
-                          'วิธีจ่าย',
-                          style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFF1F2937),
+                        const PaymentBrandStrip(compact: true),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: !canCheckout
+                                ? null
+                                : () {
+                                    _openPaymentSheet(
+                                      subtotal: subtotal,
+                                      shippingFee: shippingFee,
+                                      grandTotal: grandTotal,
+                                      discounts: discounts,
+                                      appliedCouponCode: appliedCouponCode,
+                                      checkoutQuoteId: checkoutQuoteId,
+                                    );
+                                  },
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              backgroundColor: const Color(0xFFE55A00),
+                            ),
+                            child: const Text(
+                              'ชำระ',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
                               ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: <Widget>[
-                            _PaymentMethodChip(
-                              label: 'จ่ายปลายทาง',
-                              icon: Icons.local_shipping_outlined,
-                              onTap: !canCheckout
-                                  ? null
-                                  : () {
-                                      _confirmCashOnDelivery(
-                                        subtotal: subtotal,
-                                        shippingFee: shippingFee,
-                                        grandTotal: grandTotal,
-                                        discounts: discounts,
-                                        checkoutQuoteId: checkoutQuoteId,
-                                      );
-                                    },
                             ),
-                            _PaymentMethodChip(
-                              label: 'สแกนจ่าย',
-                              icon: Icons.qr_code_2_rounded,
-                              onTap: !canCheckout
-                                  ? null
-                                  : () {
-                                      _showTrueMoneyQrDialog(
-                                        grandTotal: grandTotal,
-                                        discounts: discounts,
-                                        appliedCouponCode: appliedCouponCode,
-                                        checkoutQuoteId: checkoutQuoteId,
-                                      );
-                                    },
-                            ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
@@ -942,6 +890,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
 
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
+        await AppCheckGuard.ensureCheckoutReady();
         final callable = _functions.httpsCallable('calculateCartTotals');
         final response = await callable
             .call(<String, dynamic>{
@@ -1321,6 +1270,54 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     return shortfall > 0 ? shortfall : 0;
   }
 
+  Future<void> _openPaymentSheet({
+    required double subtotal,
+    required double shippingFee,
+    required double grandTotal,
+    required CartDiscountSnapshot discounts,
+    required String? appliedCouponCode,
+    required String? checkoutQuoteId,
+  }) async {
+    final checkoutContext = CartCheckoutContext(
+      couponCode: appliedCouponCode,
+      discounts: discounts,
+      checkoutQuoteId: checkoutQuoteId,
+    );
+
+    await showPaymentCheckoutSheet(
+      context: context,
+      grandTotal: grandTotal,
+      subtitle: 'เลือกวิธีชำระเงินที่ต้องการ',
+      onCashOnDelivery: widget.onConfirmCashOnDelivery == null
+          ? null
+          : () => _confirmCashOnDelivery(
+                subtotal: subtotal,
+                shippingFee: shippingFee,
+                grandTotal: grandTotal,
+                discounts: discounts,
+                checkoutQuoteId: checkoutQuoteId,
+              ),
+      onOmisePayment: (channel) async {
+        final callback = widget.onSubmitOmisePayment;
+        if (callback == null) {
+          throw Exception('ระบบชำระเงิน Omise ยังไม่พร้อม');
+        }
+        final orderIds = await callback(
+          channel,
+          checkoutContext,
+          grandTotal,
+        );
+        if (orderIds.isEmpty) {
+          throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+        }
+        final openRoadmap = widget.onOpenOrderRoadmap;
+        if (openRoadmap != null) {
+          await openRoadmap(orderIds);
+        }
+      },
+    );
+  }
+
   Future<void> _confirmCashOnDelivery({
     required double subtotal,
     required double shippingFee,
@@ -1503,111 +1500,6 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       ),
     );
   }
-
-  Future<void> _showTrueMoneyQrDialog({
-    required double grandTotal,
-    required CartDiscountSnapshot discounts,
-    String? appliedCouponCode,
-    String? checkoutQuoteId,
-  }) async {
-    final checkoutContext = CartCheckoutContext(
-      couponCode: appliedCouponCode,
-      discounts: discounts,
-      checkoutQuoteId: checkoutQuoteId,
-    );
-    _trueMoneyDialogDraft =
-        (_trueMoneyDialogDraft ??
-                _TrueMoneyDialogDraft(
-                  grandTotal: grandTotal,
-                  checkoutContext: checkoutContext,
-                ))
-            .copyWith(
-              grandTotal: grandTotal,
-              checkoutContext: checkoutContext,
-            );
-    if (_isTrueMoneyDialogShowing) {
-      return;
-    }
-
-    _isTrueMoneyDialogShowing = true;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        final viewport = MediaQuery.of(context).size;
-        final draft =
-            _trueMoneyDialogDraft ??
-            _TrueMoneyDialogDraft(grandTotal: grandTotal);
-        return PopScope(
-          canPop: false,
-          child: Dialog(
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 24,
-            ),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: 420,
-                maxHeight: viewport.height * 0.78,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      'สแกนจ่าย',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      height: viewport.height * 0.58,
-                      child: TrueMoneyQrDialogContent(
-                        grandTotal: draft.grandTotal,
-                        checkoutContext: draft.checkoutContext,
-                        initialAttachedSlip: draft.attachedSlip,
-                        onAttachedSlipChanged: (slip) {
-                          _trueMoneyDialogDraft =
-                              (_trueMoneyDialogDraft ?? draft).copyWith(
-                                attachedSlip: slip,
-                                clearAttachedSlip: slip == null,
-                              );
-                        },
-                        onCloseRequested: () {
-                          _trueMoneyDialogDraft = null;
-                          Navigator.of(context).pop();
-                        },
-                        onSubmitPromptPaySlip: widget.onSubmitPromptPaySlip,
-                        onSubmissionCompleted: widget.onOpenOrderRoadmap,
-                        onSubmissionSucceeded: () {
-                          _trueMoneyDialogDraft = null;
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: FilledButton(
-                        onPressed: () {
-                          _trueMoneyDialogDraft = null;
-                          Navigator.of(context).pop();
-                        },
-                        child: const Text('ปิด'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    _isTrueMoneyDialogShowing = false;
-  }
 }
 
 class TrueMoneyQrDialogContent extends StatefulWidget {
@@ -1678,17 +1570,6 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
 
     setState(() => _isSavingQr = true);
     try {
-      final permissionGranted = await _ensureGalleryPermission();
-      if (!permissionGranted) {
-        if (!mounted) {
-          return;
-        }
-        messenger.showSnackBar(
-          const SnackBar(content: Text('ไม่ได้รับสิทธิ์บันทึกรูปลงเครื่อง')),
-        );
-        return;
-      }
-
       final image = await boundary.toImage(pixelRatio: 3);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final pngBytes = byteData?.buffer.asUint8List();
@@ -1699,6 +1580,37 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
         }
         messenger.showSnackBar(
           const SnackBar(content: Text('สร้างไฟล์คิวอาร์โค้ดไม่สำเร็จ')),
+        );
+        return;
+      }
+
+      if (kIsWeb) {
+        final downloaded = await downloadBytesInBrowser(
+          pngBytes,
+          'van2_qr_${DateTime.now().millisecondsSinceEpoch}.png',
+        );
+        if (!mounted) {
+          return;
+        }
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              downloaded
+                  ? 'ดาวน์โหลดคิวอาร์โค้ดแล้ว'
+                  : 'ดาวน์โหลดคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final permissionGranted = await _ensureGalleryPermission();
+      if (!permissionGranted) {
+        if (!mounted) {
+          return;
+        }
+        messenger.showSnackBar(
+          const SnackBar(content: Text('ไม่ได้รับสิทธิ์บันทึกรูปลงเครื่อง')),
         );
         return;
       }
@@ -2182,65 +2094,6 @@ class _UntrustedCartTotalWarning extends StatelessWidget {
   }
 }
 
-class _PaymentMethodChip extends StatelessWidget {
-  const _PaymentMethodChip({
-    required this.label,
-    required this.icon,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onTap != null;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: enabled ? const Color(0xFFFFEDD5) : const Color(0xFFF3F4F6),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: enabled
-                  ? const Color(0xFFE55A00)
-                  : const Color(0xFFD1D5DB),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                icon,
-                size: 16,
-                color: enabled
-                    ? const Color(0xFF9A3412)
-                    : const Color(0xFF9CA3AF),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: enabled
-                      ? const Color(0xFF9A3412)
-                      : const Color(0xFF9CA3AF),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _TrueMoneyQrCard extends StatelessWidget {
   const _TrueMoneyQrCard({
     required this.qrBoundaryKey,
@@ -2498,136 +2351,63 @@ class _SlipAttachmentSection extends StatelessWidget {
   }
 }
 
-class _RiderOnlineStatusCard extends StatelessWidget {
-  const _RiderOnlineStatusCard();
+class _CartHeaderRow extends StatelessWidget {
+  const _CartHeaderRow({
+    required this.cartItems,
+    required this.customerLatitude,
+    required this.customerLongitude,
+    required this.customerLocationLabel,
+    required this.onPickCustomerLocation,
+    required this.onApplySharedLocation,
+  });
+
+  final List<CartLineItem> cartItems;
+  final double customerLatitude;
+  final double customerLongitude;
+  final String customerLocationLabel;
+  final VoidCallback onPickCustomerLocation;
+  final VoidCallback onApplySharedLocation;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
+    double? referenceLatitude;
+    double? referenceLongitude;
+    for (final item in cartItems) {
+      final shopLat = item.shopLatitude;
+      final shopLng = item.shopLongitude;
+      if (shopLat != null && shopLng != null) {
+        referenceLatitude = shopLat;
+        referenceLongitude = shopLng;
+        break;
+      }
+    }
+    referenceLatitude ??= customerLatitude;
+    referenceLongitude ??= customerLongitude;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        Expanded(
+          child: OnlineRiderCartCompact(
+            referenceLatitude: referenceLatitude,
+            referenceLongitude: referenceLongitude,
           ),
-        ],
-      ),
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('riders')
-            .where('onlineReady', isEqualTo: true)
-            .snapshots(includeMetadataChanges: true),
-        builder: (context, snapshot) {
-          final onlineCount = snapshot.data?.docs.length ?? 0;
-          final hasError = snapshot.hasError;
-          final isLoading =
-              snapshot.connectionState == ConnectionState.waiting &&
-              !snapshot.hasData;
-
-          final title = hasError
-              ? 'สถานะไรเดอร์ไม่พร้อมใช้งาน'
-              : isLoading
-              ? 'กำลังตรวจสอบสถานะไรเดอร์...'
-              : onlineCount > 0
-              ? 'ไรเดอร์ออนไลน์ $onlineCount คน'
-              : 'ยังไม่มีไรเดอร์ออนไลน์';
-
-          final subtitle = hasError
-              ? 'เช็กสิทธิ์หรือโครงสร้างข้อมูล riders/onlineReady'
-              : onlineCount > 0
-              ? 'พร้อมรับออเดอร์จากตะกร้าของคุณ'
-              : 'รอไรเดอร์ออนไลน์เพื่อรับงาน';
-
-          return Row(
-            children: <Widget>[
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: hasError
-                      ? const Color(0xFFFEE2E2)
-                      : onlineCount > 0
-                      ? const Color(0xFFDCFCE7)
-                      : const Color(0xFFF3F4F6),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.delivery_dining,
-                  size: 18,
-                  color: hasError
-                      ? const Color(0xFFDC2626)
-                      : onlineCount > 0
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF6B7280),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: const Color(0xFF1F2937),
-                                ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: const Text(
-                            'อัปเดตสด',
-                            style: TextStyle(
-                              color: Color(0xFF166534),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF6B7280),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
+        ),
+        const SizedBox(width: 8),
+        _CartLocationButton(
+          label: customerLocationLabel,
+          latitude: customerLatitude,
+          longitude: customerLongitude,
+          onPickLocation: onPickCustomerLocation,
+          onApplySharedLocation: onApplySharedLocation,
+        ),
+      ],
     );
   }
 }
 
-class _CustomerLocationCard extends StatelessWidget {
-  const _CustomerLocationCard({
+class _CartLocationButton extends StatelessWidget {
+  const _CartLocationButton({
     required this.label,
     required this.latitude,
     required this.longitude,
@@ -2645,24 +2425,42 @@ class _CustomerLocationCard extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      backgroundColor: Colors.white,
       builder: (sheetContext) {
         void runAction(VoidCallback action) {
           Navigator.of(sheetContext).pop();
           action();
         }
 
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
+        return Material(
+          color: Colors.white,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
                 Text(
-                  'เปลี่ยนพิกัด',
+                  'เปลี่ยนพิกัดส่ง',
                   style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF111827),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF6B7280),
+                  ),
+                ),
+                Text(
+                  'Lat ${latitude.toStringAsFixed(6)} • Lng ${longitude.toStringAsFixed(6)}',
+                  style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF9CA3AF),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -2686,7 +2484,8 @@ class _CustomerLocationCard extends StatelessWidget {
                   subtitle: const Text('เปิดแผนที่เพื่อเลือกตำแหน่งใหม่'),
                   onTap: () => runAction(onPickLocation),
                 ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -2696,56 +2495,55 @@ class _CustomerLocationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
+    final coordText =
+        '${latitude.toStringAsFixed(4)}, ${longitude.toStringAsFixed(4)}';
+
+    return OutlinedButton(
+      onPressed: () => _showLocationOptions(context),
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        minimumSize: const Size(0, 34),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+        side: const BorderSide(color: Color(0xFFE5E7EB)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Expanded(
-                child: Text(
-                  'พิกัดลูกค้าที่ใช้งาน',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF1F2937),
-                  ),
-                ),
+              const Icon(
+                Icons.edit_location_alt_outlined,
+                size: 13,
+                color: Color(0xFF2563EB),
               ),
-              OutlinedButton.icon(
-                onPressed: () => _showLocationOptions(context),
-                icon: const Icon(Icons.edit_location_alt_outlined, size: 18),
-                label: const Text('เปลี่ยนพิกัดส่ง'),
+              const SizedBox(width: 3),
+              Text(
+                'เปลี่ยนพิกัดส่ง',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF1F2937),
+                  fontSize: 10,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF374151)),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Lat ${latitude.toStringAsFixed(6)} • Lng ${longitude.toStringAsFixed(6)}',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+          const SizedBox(height: 1),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 108),
+            child: Text(
+              coordText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: const Color(0xFF6B7280),
+                fontSize: 9,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ],
       ),

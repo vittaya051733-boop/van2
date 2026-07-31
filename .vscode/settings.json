@@ -1,6 +1,30 @@
 {
-    "cmake.sourceDirectory": "C:/Users/TAM/Desktop/van2/windows",
-    "files.exclude": {
-        "van2": true
-    }
+  "java.import.gradle.enabled": false,
+  "java.import.exclusions": [
+    "**/android/**",
+    "**/local_packages/**",
+    "**/build/**",
+    "**/.gradle/**",
+    "**/windows/**",
+    "**/linux/**",
+    "**/macos/**",
+    "**/ios/**"
+  ],
+  "java.errors.incompleteClasspath.severity": "ignore",
+  "java.configuration.updateBuildConfiguration": "disabled",
+  "java.autobuild.enabled": false,
+  "java.project.resourceFilters": [
+    "node_modules",
+    ".git",
+    "android",
+    "build",
+    ".gradle",
+    "local_packages",
+    "windows",
+    "linux",
+    "macos",
+    "ios"
+  ],
+  "cmake.configureOnOpen": false,
+  "cmake.enableLanguageServices": false
 }

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../cart_screen.dart';
 import '../tax_pricing_policy.dart';
+import '../utils/app_check_guard.dart';
 
 /// Persists cart locally and syncs stock holds on the server (1 hour).
 class CartSessionService {
@@ -101,6 +102,7 @@ class CartSessionService {
       return;
     }
     try {
+      await AppCheckGuard.ensureCheckoutReady();
       final callable = _functions.httpsCallable('syncVan2CartStockHold');
       await callable.call(<String, dynamic>{
         'items': cartItems.map(_lineItemToHoldPayload).toList(growable: false),
@@ -123,6 +125,7 @@ class CartSessionService {
       return;
     }
     try {
+      await AppCheckGuard.ensureCheckoutReady();
       final callable = _functions.httpsCallable('syncVan2CartStockHold');
       await callable.call(<String, dynamic>{
         'items': <Map<String, dynamic>>[],
@@ -139,6 +142,7 @@ class CartSessionService {
       return;
     }
     try {
+      await AppCheckGuard.ensureCheckoutReady();
       final callable = _functions.httpsCallable('syncVan2CartStockHold');
       await callable.call(<String, dynamic>{
         'items': <Map<String, dynamic>>[],

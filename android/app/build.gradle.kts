@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
@@ -45,11 +46,48 @@ android {
         versionName = flutter.versionName
     }
 
+    val keystorePropertiesFile = rootProject.file("key.properties")
+    val keystoreProperties = Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+    }
+
+    fun Properties.keystoreProp(name: String): String? {
+        val value = getProperty(name)?.trim().orEmpty()
+        if (value.isNotEmpty()) {
+            return value
+        }
+        val bomName = "\uFEFF$name"
+        val bomValue = getProperty(bomName)?.trim().orEmpty()
+        return bomValue.takeIf { it.isNotEmpty() }
+    }
+
+    val releaseStoreFile = keystoreProperties.keystoreProp("storeFile")
+        ?.let { rootProject.file(it) }
+    val hasReleaseKeystore = releaseStoreFile?.exists() == true &&
+        keystoreProperties.keystoreProp("storePassword") != null &&
+        keystoreProperties.keystoreProp("keyPassword") != null &&
+        keystoreProperties.keystoreProp("keyAlias") != null
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties.keystoreProp("keyAlias")
+                keyPassword = keystoreProperties.keystoreProp("keyPassword")
+                storeFile = releaseStoreFile
+                storePassword = keystoreProperties.keystoreProp("storePassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                // Local release builds without key.properties fall back to debug signing.
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

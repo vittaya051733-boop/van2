@@ -5,6 +5,126 @@ const DEFAULT_NATIONWIDE_BASE_FEE = 45;
 const DEFAULT_NATIONWIDE_PER_KG_FEE = 18;
 const DEFAULT_NATIONWIDE_REMOTE_SURCHARGE = 30;
 const RIDER_FRESH_LOCATION_MINUTES = 10;
+const ONLINE_RIDERS_CACHE_TTL_MS = 45 * 1000;
+const RIDER_POOL_MAX_AGE_MS = 2 * 60 * 1000;
+
+const {
+  RIDER_AVAILABILITY_DOC_PATH,
+  snapshotFromPool,
+} = require('./rider_availability');
+
+const VAN2_CART_SESSION_COLLECTION = 'van2_cart_sessions';
+
+function readFiniteProductStock(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+function buildHoldMapFromCheckoutItems(items) {
+  const holds = {};
+  for (const item of items) {
+    const productId = String(item?.productId || '').trim();
+    if (!productId) {
+      continue;
+    }
+    const quantityRaw = Number(item?.quantity);
+    const quantity = Number.isFinite(quantityRaw)
+      ? Math.max(1, Math.min(999, Math.floor(quantityRaw)))
+      : 1;
+    holds[productId] = (holds[productId] || 0) + quantity;
+  }
+  return holds;
+}
+
+async function assertCheckoutStockReady(db, FieldValue, HttpsError, uid, items) {
+  const holdMap = buildHoldMapFromCheckoutItems(items);
+  const productIds = Object.keys(holdMap);
+  if (productIds.length === 0) {
+    return { sessionRef: null, holdMap };
+  }
+
+  const sessionRef = db.collection(VAN2_CART_SESSION_COLLECTION).doc(uid);
+
+  await db.runTransaction(async (transaction) => {
+    const sessionSnap = await transaction.get(sessionRef);
+    const sessionHolds = sessionSnap.exists ? sessionSnap.data()?.holds || {} : {};
+
+    for (const productId of productIds) {
+      const requiredQty = holdMap[productId] || 0;
+      const heldQty = Math.max(0, Math.floor(Number(sessionHolds[productId] || 0)));
+      const productRef = db.collection('products').doc(productId);
+      const productSnap = await transaction.get(productRef);
+
+      if (!productSnap.exists) {
+        throw new HttpsError('not-found', `ไม่พบสินค้า ${productId}`);
+      }
+
+      const trackedStock = readFiniteProductStock(productSnap.data()?.stock);
+      if (trackedStock === null) {
+        continue;
+      }
+
+      if (heldQty >= requiredQty) {
+        continue;
+      }
+
+      const extraNeeded = requiredQty - heldQty;
+      if (trackedStock < extraNeeded) {
+        throw new HttpsError(
+          'failed-precondition',
+          `สต๊อกไม่พอสำหรับสินค้า ${productId}`,
+        );
+      }
+
+      transaction.update(productRef, {
+        stock: FieldValue.increment(-extraNeeded),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    if (sessionSnap.exists) {
+      transaction.delete(sessionRef);
+    }
+  });
+
+  return { sessionRef, holdMap };
+}
+
+let cachedOnlineRidersSnapshot = null;
+let cachedOnlineRidersAtMs = 0;
+
+async function getOnlineRidersSnapshot(db) {
+  const now = Date.now();
+  if (
+    cachedOnlineRidersSnapshot &&
+    now - cachedOnlineRidersAtMs < ONLINE_RIDERS_CACHE_TTL_MS
+  ) {
+    return cachedOnlineRidersSnapshot;
+  }
+
+  try {
+    const poolDoc = await db.doc(RIDER_AVAILABILITY_DOC_PATH).get();
+    const pool = poolDoc.data();
+    const updatedAtMs = pool?.updatedAt?.toDate?.()?.getTime() || 0;
+    if (pool && updatedAtMs > 0 && now - updatedAtMs <= RIDER_POOL_MAX_AGE_MS) {
+      cachedOnlineRidersSnapshot = snapshotFromPool(pool);
+      cachedOnlineRidersAtMs = now;
+      return cachedOnlineRidersSnapshot;
+    }
+  } catch (_) {
+    // Fall back to live riders query below.
+  }
+
+  cachedOnlineRidersSnapshot = await db
+    .collection('riders')
+    .where('onlineReady', '==', true)
+    .get();
+  cachedOnlineRidersAtMs = now;
+  return cachedOnlineRidersSnapshot;
+}
 
 function parseDiscountPercent(value, parseNumber) {
   const parsed = parseNumber(value);
@@ -408,7 +528,7 @@ async function persistCheckoutQuote(db, FieldValue, uid, totals, items) {
   return quoteRef.id;
 }
 
-async function validateCheckoutQuote(db, quoteId, uid, expectedGrandTotal, parseNumber) {
+async function validateCheckoutQuote(db, quoteId, uid, expectedGrandTotal, parseNumber, itemsFingerprint) {
   const quoteRef = db.collection(CHECKOUT_QUOTES_COLLECTION).doc(String(quoteId || '').trim());
   const snapshot = await quoteRef.get();
   if (!snapshot.exists) {
@@ -430,7 +550,112 @@ async function validateCheckoutQuote(db, quoteId, uid, expectedGrandTotal, parse
   if (Math.abs(quotedGrandTotal - expected) > 0.02) {
     throw new Error('ยอดรวมไม่ตรงกับ quote');
   }
+  if (itemsFingerprint && String(data.itemsFingerprint || '') !== String(itemsFingerprint)) {
+    throw new Error('รายการในตะกร้าไม่ตรงกับ quote');
+  }
   return quoteRef;
+}
+
+async function atomicallyConsumeCheckoutReservation(
+  db,
+  FieldValue,
+  HttpsError,
+  {
+    checkoutQuoteId,
+    uid,
+    expectedGrandTotal,
+    itemsFingerprint,
+    paymentSessionId,
+    isOmiseVerifiedPayment,
+    paymentMethod,
+    parseNumber,
+  },
+) {
+  const quoteRef = db.collection(CHECKOUT_QUOTES_COLLECTION).doc(String(checkoutQuoteId || '').trim());
+  const sessionRef =
+    isOmiseVerifiedPayment && paymentSessionId
+      ? db.collection('payment_sessions').doc(String(paymentSessionId).trim())
+      : null;
+
+  await db.runTransaction(async (transaction) => {
+    const quoteSnap = await transaction.get(quoteRef);
+    if (!quoteSnap.exists) {
+      throw new HttpsError('failed-precondition', 'ไม่พบ checkout quote');
+    }
+    const quoteData = quoteSnap.data() || {};
+    if (quoteData.customerId !== uid) {
+      throw new HttpsError('permission-denied', 'checkout quote ไม่ตรงกับผู้ใช้');
+    }
+    if (quoteData.consumed === true) {
+      throw new HttpsError('failed-precondition', 'checkout quote ถูกใช้แล้ว');
+    }
+    const expiresAt = Number(quoteData.expiresAt || 0);
+    if (expiresAt > 0 && expiresAt < Date.now()) {
+      throw new HttpsError('failed-precondition', 'checkout quote หมดอายุ');
+    }
+    const quotedGrandTotal = parseNumber(quoteData.grandTotal);
+    const expected = parseNumber(expectedGrandTotal);
+    if (Math.abs(quotedGrandTotal - expected) > 0.02) {
+      throw new HttpsError('failed-precondition', 'ยอดรวมไม่ตรงกับ quote');
+    }
+    if (
+      itemsFingerprint
+      && String(quoteData.itemsFingerprint || '') !== String(itemsFingerprint)
+    ) {
+      throw new HttpsError('failed-precondition', 'รายการในตะกร้าไม่ตรงกับ quote');
+    }
+
+    if (sessionRef) {
+      const sessionSnap = await transaction.get(sessionRef);
+      if (!sessionSnap.exists) {
+        throw new HttpsError('failed-precondition', 'ไม่พบ payment session');
+      }
+      const session = sessionSnap.data() || {};
+      if (String(session.uid || '') !== uid) {
+        throw new HttpsError('permission-denied', 'payment session ไม่ตรงกับผู้ใช้');
+      }
+      if (session.status !== 'paid') {
+        throw new HttpsError('failed-precondition', 'การชำระเงินยังไม่สำเร็จ');
+      }
+      if (session.consumed === true) {
+        throw new HttpsError('failed-precondition', 'payment session ถูกใช้แล้ว');
+      }
+      if (String(session.channel || '') !== paymentMethod) {
+        throw new HttpsError('failed-precondition', 'ช่องทางชำระเงินไม่ตรงกับ session');
+      }
+      const sessionAmount = parseNumber(session.amount);
+      if (Math.abs(sessionAmount - expected) > 0.01) {
+        throw new HttpsError('failed-precondition', 'ยอดชำระ Omise ไม่ตรงกับตะกร้า');
+      }
+      if (String(session.checkoutQuoteId || '') !== checkoutQuoteId) {
+        throw new HttpsError('failed-precondition', 'checkout quote ไม่ตรงกับ payment session');
+      }
+    }
+
+    transaction.set(
+      quoteRef,
+      {
+        consumed: true,
+        consumedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    if (sessionRef) {
+      transaction.set(
+        sessionRef,
+        {
+          consumed: true,
+          consumedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+  });
+
+  return { quoteRef, sessionRef };
 }
 
 function groupLinesByShop(resolvedLines) {
@@ -472,7 +697,7 @@ async function findNearestRiderForShop(db, shopLatitude, shopLongitude) {
 
   if (!Number.isFinite(shopLatitude) || !Number.isFinite(shopLongitude)) {
     try {
-      const snapshot = await db.collection('riders').where('onlineReady', '==', true).get();
+      const snapshot = await getOnlineRidersSnapshot(db);
       if (snapshot.size === 1) {
         const riderId = snapshot.docs[0].id;
         return {
@@ -535,7 +760,7 @@ async function findNearestRiderForShop(db, shopLatitude, shopLongitude) {
     }
   }
 
-  const snapshot = await db.collection('riders').where('onlineReady', '==', true).get();
+  const snapshot = await getOnlineRidersSnapshot(db);
   const candidates = [];
   const fallbackCandidates = [];
   const singleOnlineRiderId = snapshot.size === 1 ? snapshot.docs[0].id : null;
@@ -751,6 +976,9 @@ async function createCheckoutOrdersHandler(request, deps) {
     throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนสร้างออเดอร์');
   }
 
+  const { assertNonAnonymous } = require('./travel_orders');
+  assertNonAnonymous(request, HttpsError);
+
   const uid = request.auth.uid;
   const items = Array.isArray(request.data?.items) ? request.data.items : [];
   if (items.length === 0) {
@@ -770,19 +998,58 @@ async function createCheckoutOrdersHandler(request, deps) {
   const paymentStatus = String(request.data?.paymentStatus || '').trim();
   const verificationFeedbackId = String(request.data?.verificationFeedbackId || '').trim();
   const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
+  const paymentSessionId = String(request.data?.paymentSessionId || '').trim();
+  const OMISE_PAYMENT_METHODS = new Set([
+    'omise_promptpay',
+    'omise_card',
+    'omise_mobile_banking',
+    'omise_truemoney',
+  ]);
   const allowedPaymentStatuses = ['cash_on_delivery', 'awaiting_slip_review', 'verified'];
   if (!allowedPaymentStatuses.includes(paymentStatus)) {
     throw new HttpsError('invalid-argument', 'สถานะชำระเงินไม่รองรับ');
   }
+  if (paymentStatus === 'verified' && paymentMethod === 'promptpay_qr') {
+    throw new HttpsError(
+      'failed-precondition',
+      'ระบบสแกนจ่าย+สลิp ถูกยกเลิกแล้ว กรุณาใช้ Omise',
+    );
+  }
+  let omisePaymentSession = null;
   if (paymentStatus === 'verified') {
-    if (!verificationFeedbackId || !paymentGroupId) {
+    if (OMISE_PAYMENT_METHODS.has(paymentMethod)) {
+      if (!paymentSessionId) {
+        throw new HttpsError('invalid-argument', 'ต้องมี paymentSessionId');
+      }
+      const sessionDoc = await db.collection('payment_sessions').doc(paymentSessionId).get();
+      if (!sessionDoc.exists) {
+        throw new HttpsError('failed-precondition', 'ไม่พบ payment session');
+      }
+      omisePaymentSession = sessionDoc.data() || {};
+      if (String(omisePaymentSession.uid || '') !== uid) {
+        throw new HttpsError('permission-denied', 'payment session ไม่ตรงกับผู้ใช้');
+      }
+      if (omisePaymentSession.status !== 'paid') {
+        throw new HttpsError('failed-precondition', 'การชำระเงินยังไม่สำเร็จ');
+      }
+      if (String(omisePaymentSession.channel || '') !== paymentMethod) {
+        throw new HttpsError('failed-precondition', 'ช่องทางชำระเงินไม่ตรงกับ session');
+      }
+    } else if (!verificationFeedbackId || !paymentGroupId) {
       throw new HttpsError('invalid-argument', 'ข้อมูลการชำระเงินไม่ครบ');
-    }
-    if (paymentMethod !== 'promptpay_qr') {
-      throw new HttpsError('invalid-argument', 'การชำระเงินที่ยืนยันแล้วรองรับเฉพาะ PromptPay');
+    } else if (paymentMethod !== 'promptpay_qr') {
+      throw new HttpsError('invalid-argument', 'การชำระเงินที่ยืนยันแล้วไม่รองรับช่องทางนี้');
     }
   }
   const isVerifiedPayment = paymentStatus === 'verified';
+  const isOmiseVerifiedPayment =
+    isVerifiedPayment && OMISE_PAYMENT_METHODS.has(paymentMethod);
+  const resolvedPaymentGroupId = isOmiseVerifiedPayment
+    ? paymentSessionId
+    : paymentGroupId;
+  const resolvedVerificationFeedbackId = isOmiseVerifiedPayment
+    ? paymentSessionId
+    : verificationFeedbackId;
 
   const helpers = {
     parseNumber,
@@ -813,17 +1080,48 @@ async function createCheckoutOrdersHandler(request, deps) {
   if (!checkoutQuoteId) {
     throw new HttpsError('failed-precondition', 'ต้องมี checkout quote ก่อนสร้างออเดอร์');
   }
+  const itemsFingerprint = JSON.stringify(
+    items.map((item) => ({
+      productId: String(item?.productId || '').trim(),
+      quantity: Number(item?.quantity) || 1,
+      shopId: String(item?.shopId || '').trim(),
+      selectedToppings: Array.isArray(item?.selectedToppings) ? item.selectedToppings : [],
+    })),
+  );
+
   let quoteRef = null;
   try {
-    quoteRef = await validateCheckoutQuote(
+    const reservation = await atomicallyConsumeCheckoutReservation(
       db,
-      checkoutQuoteId,
-      uid,
-      totals.grandTotal,
-      parseNumber,
+      FieldValue,
+      HttpsError,
+      {
+        checkoutQuoteId,
+        uid,
+        expectedGrandTotal: totals.grandTotal,
+        itemsFingerprint,
+        paymentSessionId,
+        isOmiseVerifiedPayment,
+        paymentMethod,
+        parseNumber,
+      },
     );
+    quoteRef = reservation.quoteRef;
   } catch (error) {
+    if (error instanceof HttpsError) {
+      throw error;
+    }
     throw new HttpsError('failed-precondition', String(error.message || error));
+  }
+
+  if (isOmiseVerifiedPayment) {
+    const sessionAmount = parseNumber(omisePaymentSession?.amount);
+    if (Math.abs(sessionAmount - totals.grandTotal) > 0.01) {
+      throw new HttpsError('failed-precondition', 'ยอดชำระ Omise ไม่ตรงกับตะกร้า');
+    }
+    if (String(omisePaymentSession?.checkoutQuoteId || '') !== checkoutQuoteId) {
+      throw new HttpsError('failed-precondition', 'checkout quote ไม่ตรงกับ payment session');
+    }
   }
 
   const userRecord = await admin.auth().getUser(uid);
@@ -846,6 +1144,8 @@ async function createCheckoutOrdersHandler(request, deps) {
     combinedSubtotal += subtotal;
   }
 
+  await assertCheckoutStockReady(db, FieldValue, HttpsError, uid, items);
+
   const createdOrderIds = [];
   const shopsWithoutRider = [];
   let combinedGrandTotal = 0;
@@ -856,6 +1156,9 @@ async function createCheckoutOrdersHandler(request, deps) {
     paymentMethod === 'promptpay_qr' && paymentStatus === 'awaiting_slip_review'
       ? admin.firestore.Timestamp.fromDate(new Date(now.getTime() + 30 * 60 * 1000))
       : null;
+  const omiseChargeId = isOmiseVerifiedPayment
+    ? String(omisePaymentSession?.omiseChargeId || '').trim() || null
+    : null;
 
   for (const [shopId, lines] of grouped.entries()) {
     const firstItem = lines[0];
@@ -1095,29 +1398,62 @@ async function createCheckoutOrdersHandler(request, deps) {
       checkoutQuoteId: checkoutQuoteId || null,
       ...(isVerifiedPayment
         ? {
-            paymentGroupId,
+            paymentGroupId: resolvedPaymentGroupId,
             paymentSubmittedAt: FieldValue.serverTimestamp(),
-            paymentSlip: {
-              storagePath: String(request.data?.slipStoragePath || '').trim(),
-              downloadUrl: String(request.data?.slipDownloadUrl || '').trim(),
-              fileName: String(request.data?.slipFileName || 'slip.jpg').trim(),
-              contentType: request.data?.slipContentType || null,
-              sizeBytes: parseNumber(request.data?.slipSizeBytes),
-              uploadedBy: uid,
-              uploadedAt: FieldValue.serverTimestamp(),
-            },
-            paymentVerification: {
-              provider: 'slipok',
-              providerLabel: 'Slip OK',
-              feedbackId: verificationFeedbackId,
-              paymentGroupId,
-              expectedCombinedAmount: combinedGrandTotal,
-              verifiedSlipAmount: parseNumber(request.data?.verifiedSlipAmount),
-              status: 'verified',
-              statusLabel: 'ตรวจสอบสลิปผ่าน',
-              message: String(request.data?.verificationMessage || '').trim(),
-              checkedAt: FieldValue.serverTimestamp(),
-            },
+            ...(isOmiseVerifiedPayment
+              ? {
+                  paymentSessionId,
+                  paymentVerification: {
+                    provider: 'omise',
+                    providerLabel: 'Omise',
+                    feedbackId: resolvedVerificationFeedbackId,
+                    paymentGroupId: resolvedPaymentGroupId,
+                    paymentSessionId,
+                    omiseChargeId,
+                    expectedCombinedAmount: totals.grandTotal,
+                    verifiedAmount: parseNumber(omisePaymentSession?.amount),
+                    status: 'verified',
+                    statusLabel: 'ชำระเงินผ่าน Omise แล้ว',
+                    message: 'Omise charge successful',
+                    checkedAt: FieldValue.serverTimestamp(),
+                  },
+                  settlement: {
+                    shopPayout: {
+                      amount: merchantSubtotal,
+                      status: 'pending',
+                      fundingSource: 'platform_float',
+                      paymentProvider: 'omise',
+                      omiseChargeId,
+                      paymentSessionId,
+                      omiseExpectedSettleAt: admin.firestore.Timestamp.fromDate(
+                        new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+                      ),
+                    },
+                  },
+                }
+              : {
+                  paymentSlip: {
+                    storagePath: String(request.data?.slipStoragePath || '').trim(),
+                    downloadUrl: String(request.data?.slipDownloadUrl || '').trim(),
+                    fileName: String(request.data?.slipFileName || 'slip.jpg').trim(),
+                    contentType: request.data?.slipContentType || null,
+                    sizeBytes: parseNumber(request.data?.slipSizeBytes),
+                    uploadedBy: uid,
+                    uploadedAt: FieldValue.serverTimestamp(),
+                  },
+                  paymentVerification: {
+                    provider: 'slipok',
+                    providerLabel: 'Slip OK',
+                    feedbackId: verificationFeedbackId,
+                    paymentGroupId,
+                    expectedCombinedAmount: combinedGrandTotal,
+                    verifiedSlipAmount: parseNumber(request.data?.verifiedSlipAmount),
+                    status: 'verified',
+                    statusLabel: 'ตรวจสอบสลิปผ่าน',
+                    message: String(request.data?.verificationMessage || '').trim(),
+                    checkedAt: FieldValue.serverTimestamp(),
+                  },
+                }),
           }
         : {}),
       audit: {
@@ -1146,13 +1482,17 @@ async function createCheckoutOrdersHandler(request, deps) {
     if (isVerifiedPayment) {
       const verifiedTimelineRef = orderRef.collection('timeline').doc();
       batch.set(verifiedTimelineRef, {
-        event: 'payment_slip_verified',
-        eventLabel: 'ระบบตรวจสลิปผ่านแล้ว',
+        event: isOmiseVerifiedPayment ? 'payment_omise_verified' : 'payment_slip_verified',
+        eventLabel: isOmiseVerifiedPayment
+          ? 'ชำระเงินผ่าน Omise แล้ว'
+          : 'ระบบตรวจสลิปผ่านแล้ว',
         orderId: orderRef.id,
-        paymentGroupId,
+        paymentGroupId: resolvedPaymentGroupId,
         actorRole: 'system',
         actorId: 'createCheckoutOrders',
-        message: String(request.data?.verificationMessage || '').trim(),
+        message: isOmiseVerifiedPayment
+          ? 'Omise charge successful'
+          : String(request.data?.verificationMessage || '').trim(),
         timestamp: FieldValue.serverTimestamp(),
       });
     }
@@ -1190,9 +1530,19 @@ async function createCheckoutOrdersHandler(request, deps) {
     batch.set(
       quoteRef,
       {
-        consumed: true,
-        consumedAt: FieldValue.serverTimestamp(),
         orderIds: createdOrderIds,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+
+  if (isOmiseVerifiedPayment && paymentSessionId) {
+    batch.set(
+      db.collection('payment_sessions').doc(paymentSessionId),
+      {
+        orderIds: createdOrderIds,
+        updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     );

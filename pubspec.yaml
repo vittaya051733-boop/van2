@@ -66,6 +66,7 @@ dependencies:
   path: ^1.9.0
   intl: ^0.20.2
   qr_flutter: ^4.1.0
+  flutter_svg: ^2.2.0
   promptpay_qrcode_generate: ^1.0.2
   image_gallery_saver_plus: ^4.0.1
   google_maps_flutter: ^2.14.2
@@ -106,6 +107,7 @@ flutter:
 
   assets:
     - assets/
+    - assets/payment_logos/
     - assets/ringback-incoming.m4a
     - assets/ringback-outgoing.m4a
     - shorebird.yaml

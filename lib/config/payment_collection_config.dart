@@ -27,14 +27,18 @@ class PaymentCollectionSettings {
   final String slipProviderLabel;
 
   static const PaymentCollectionSettings defaults = PaymentCollectionSettings(
-    recipientDisplayName: 'วิทยา ทนหงษา',
-    bankName: 'ธนาคารกสิกรไทย',
-    bankAccountNumber: '1643440349',
+    recipientDisplayName: '',
+    bankName: '',
+    bankAccountNumber: '',
     promptPayPhoneNumber: null,
-    promptPayNationalIdOrTaxId: '1410400168710',
+    promptPayNationalIdOrTaxId: null,
     merchantQrPayload: null,
     slipProviderLabel: 'Slip OK',
   );
+
+  bool get isConfigured =>
+      recipientDisplayName.trim().isNotEmpty &&
+      bankAccountNumber.trim().isNotEmpty;
 
   factory PaymentCollectionSettings.fromFirestore(Map<String, dynamic>? data) {
     final source = data ?? const <String, dynamic>{};
@@ -154,9 +158,20 @@ class PaymentCollectionConfigService {
   }
 
   Stream<PaymentCollectionSettings> watch() {
-    return _documentRef.snapshots().map(
-      (snapshot) => PaymentCollectionSettings.fromFirestore(snapshot.data()),
-    );
+    return _watchWithResubscribe();
+  }
+
+  Stream<PaymentCollectionSettings> _watchWithResubscribe() async* {
+    while (true) {
+      try {
+        await for (final snapshot in _documentRef.snapshots()) {
+          yield PaymentCollectionSettings.fromFirestore(snapshot.data());
+        }
+        break;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
+    }
   }
 }
 

@@ -51,20 +51,27 @@ class PublicCatalogService {
   PublicCatalogService._();
 
   static const Duration _publicShopsNetworkTtl = Duration(minutes: 30);
+  static const Duration _catalogPollInterval = Duration(minutes: 3);
   static Map<String, Map<String, dynamic>>? _cachedPublicShops;
   static DateTime? _publicShopsCachedAt;
-  static StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-  _publicShopsSubscription;
+  static Timer? _catalogPollTimer;
+  static int _catalogPollRefCount = 0;
+  static bool _catalogPollInFlight = false;
+  static final StreamController<void> _catalogRefreshController =
+      StreamController<void>.broadcast();
+
+  /// Pull-to-refresh or manual catalog reload.
+  static Future<void> forceRefreshCatalog() => _refreshCatalogFromNetwork();
 
   static Stream<List<PublicCatalogSection>> streamAllSections() {
-    return _streamActiveProducts('', '');
+    return _streamSectionsFromPolledCatalog('', '');
   }
 
   static Stream<List<PublicCatalogSection>> streamSectionsByServiceType(
     String serviceType,
   ) {
     final normalized = _normalizeServiceType(serviceType);
-    return _streamActiveProducts(normalized, '');
+    return _streamSectionsFromPolledCatalog(normalized, '');
   }
 
   /// Builds catalog sections from on-device cache (for instant paint + prefetch).
@@ -87,14 +94,9 @@ class PublicCatalogService {
   }
 
   static Stream<List<PublicCatalogSection>> streamNationwideShippingSections() {
-    final query = FirebaseFirestore.instance
-        .collection('products')
-        .where('canShipNationwide', isEqualTo: true);
-
-    return _streamFromProductQuery(
-      query,
-      requiredServiceType: '',
-      requiredShopId: '',
+    return _streamSectionsFromPolledCatalog(
+      '',
+      '',
       nationwideShippingOnly: true,
     );
   }
@@ -121,19 +123,91 @@ class PublicCatalogService {
     );
   }
 
-  static Stream<List<PublicCatalogSection>> _streamActiveProducts(
+  static Stream<List<PublicCatalogSection>> _streamSectionsFromPolledCatalog(
     String requiredServiceType,
-    String requiredShopId,
-  ) {
-    final query = FirebaseFirestore.instance
-        .collection('products')
-        .where('isActive', isEqualTo: true);
+    String requiredShopId, {
+    bool nationwideShippingOnly = false,
+  }) {
+    return Stream<List<PublicCatalogSection>>.multi((controller) async {
+      await _ensureCatalogAuth();
+      await PublicCatalogLocalCache.ensureProductsHydrated();
+      await PublicCatalogLocalCache.ensurePublicShopsHydrated();
 
-    return _streamFromProductQuery(
-      query,
-      requiredServiceType: requiredServiceType,
-      requiredShopId: requiredShopId,
-    );
+      final diskShops = PublicCatalogLocalCache.publicShopsById;
+      if (diskShops.isNotEmpty) {
+        _cachedPublicShops = diskShops;
+      }
+
+      void emit() {
+        if (controller.isClosed) {
+          return;
+        }
+        controller.add(
+          _buildSectionsFromCachedProducts(
+            requiredServiceType,
+            requiredShopId,
+            _resolvePublicShops(),
+            nationwideShippingOnly: nationwideShippingOnly,
+          ),
+        );
+      }
+
+      emit();
+      _acquireCatalogPoller();
+
+      final subscription = _catalogRefreshController.stream.listen((_) {
+        emit();
+      });
+
+      controller.onCancel = () {
+        subscription.cancel();
+        _releaseCatalogPoller();
+      };
+    });
+  }
+
+  static void _acquireCatalogPoller() {
+    _catalogPollRefCount += 1;
+    if (_catalogPollTimer != null) {
+      return;
+    }
+    unawaited(_refreshCatalogFromNetwork());
+    _catalogPollTimer = Timer.periodic(_catalogPollInterval, (_) {
+      unawaited(_refreshCatalogFromNetwork());
+    });
+  }
+
+  static void _releaseCatalogPoller() {
+    _catalogPollRefCount -= 1;
+    if (_catalogPollRefCount > 0) {
+      return;
+    }
+    _catalogPollRefCount = 0;
+    _catalogPollTimer?.cancel();
+    _catalogPollTimer = null;
+  }
+
+  static Future<void> _refreshCatalogFromNetwork() async {
+    if (_catalogPollInFlight) {
+      return;
+    }
+    _catalogPollInFlight = true;
+    try {
+      await _ensureCatalogAuth();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('products')
+          .where('isActive', isEqualTo: true)
+          .get();
+      PublicCatalogLocalCache.applyProductSnapshot(snapshot);
+      await _getPublicShops();
+      if (!_catalogRefreshController.isClosed) {
+        _catalogRefreshController.add(null);
+      }
+    } catch (_) {
+      // Keep serving disk cache when network refresh fails.
+    } finally {
+      _catalogPollInFlight = false;
+    }
   }
 
   static Stream<List<PublicCatalogSection>> _streamFromProductQuery(
@@ -243,7 +317,6 @@ class PublicCatalogService {
       _cachedPublicShops = shops;
       _publicShopsCachedAt = DateTime.now();
       PublicCatalogLocalCache.replacePublicShops(shops);
-      _ensurePublicShopsListener();
       return shops;
     } catch (_) {
       if (cached != null) {
@@ -254,22 +327,6 @@ class PublicCatalogService {
       }
       return const <String, Map<String, dynamic>>{};
     }
-  }
-
-  static void _ensurePublicShopsListener() {
-    if (_publicShopsSubscription != null) {
-      return;
-    }
-
-    _publicShopsSubscription = FirebaseFirestore.instance
-        .collection('public_shops')
-        .snapshots()
-        .listen((snapshot) {
-          final shops = {for (final doc in snapshot.docs) doc.id: doc.data()};
-          _cachedPublicShops = shops;
-          _publicShopsCachedAt = DateTime.now();
-          PublicCatalogLocalCache.replacePublicShops(shops);
-        }, onError: (_) {});
   }
 
   static List<PublicCatalogSection> _buildSectionsFromDocs(
@@ -428,6 +485,7 @@ class PublicCatalogService {
   static Future<List<PublicCatalogProduct>> resolveProductsByIds(
     List<String> productIds, {
     Set<String> excludeIds = const <String>{},
+    bool requireDisplayImage = true,
   }) async {
     if (productIds.isEmpty) {
       return const <PublicCatalogProduct>[];
@@ -481,9 +539,10 @@ class PublicCatalogService {
     final results = <PublicCatalogProduct>[];
     for (final id in orderedIds) {
       final rawData = productDataById[id];
-      if (rawData == null ||
-          !_isProductActive(rawData) ||
-          !_productHasDisplayImage(rawData)) {
+      if (rawData == null || !_isProductActive(rawData)) {
+        continue;
+      }
+      if (requireDisplayImage && !_productHasDisplayImage(rawData)) {
         continue;
       }
 

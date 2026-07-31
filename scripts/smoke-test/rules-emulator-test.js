@@ -574,7 +574,7 @@ async function runSecurityNegativeTests(customerDb, shopDb, riderDb) {
     }),
     'van1: shop can update order workflow fields',
   );
-  await assertSucceeds(
+  await mustFail(
     setDoc(doc(riderDb, 'credits', `order_pay_at_destination_${ORDER.assigned}_${UID.rider}`), {
       uid: UID.rider,
       amount: -50,
@@ -583,7 +583,7 @@ async function runSecurityNegativeTests(customerDb, shopDb, riderDb) {
       source: 'smoke_test',
       timestamp: serverTimestamp(),
     }),
-    'van3: rider can create pay-at-destination hold ledger entry',
+    'van3: rider cannot create credits directly (Cloud Function only)',
   );
   await mustFail(
     setDoc(doc(customerDb, 'checkout_quotes', 'smoke-quote'), {
@@ -625,7 +625,7 @@ async function runSecurityNegativeTests(customerDb, shopDb, riderDb) {
     }),
     'van2 phase2: client cannot create nationwide_parcel order directly',
   );
-  await assertSucceeds(
+  await mustFail(
     setDoc(doc(customerDb, 'orders', 'smoke-client-travel'), {
       customerId: UID.customer,
       sourceApp: 'van2_customer',
@@ -637,7 +637,7 @@ async function runSecurityNegativeTests(customerDb, shopDb, riderDb) {
       subtotal: 80,
       createdAt: serverTimestamp(),
     }),
-    'van2 phase2: client can still create travel_passenger order',
+    'van2 phase2: client cannot create travel_passenger order directly',
   );
   await mustFail(
     setDoc(doc(customerDb, 'auth_rate_limits', 'smoke-ip'), {
@@ -666,17 +666,17 @@ async function runOrderLifecycleE2e(shopDb, riderDb, customerDb) {
     'e2e: van3 rider starts delivery',
   );
 
-  await assertSucceeds(
+  await mustFail(
     updateDoc(doc(riderDb, 'orders', ORDER.assigned), {
       status: 'delivered',
       deliveredAt: serverTimestamp(),
       deliveryProofCapturedById: UID.rider,
       updatedAt: serverTimestamp(),
     }),
-    'e2e: van3 rider completes delivery',
+    'e2e: van3 rider cannot complete delivery directly (Cloud Function only)',
   );
 
-  const deliveredSnap = await getDoc(doc(customerDb, 'orders', ORDER.assigned));
+  const deliveredSnap = await getDoc(doc(customerDb, 'orders', ORDER.delivered));
   if (!deliveredSnap.exists() || deliveredSnap.data().status !== 'delivered') {
     throw new Error('e2e: van2 customer cannot read delivered order');
   }

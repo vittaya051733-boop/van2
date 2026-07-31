@@ -12,4 +12,4 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'deploy-governance.ps1')
 
 Invoke-VanDeployPreflight -App $App -Target $Target
-Write-Host "[preflight] PASS — $App / $Target" -ForegroundColor Green
+Write-Host (Get-VanMsg 'preflightPass' @($App, $Target)) -ForegroundColor Green

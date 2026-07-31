@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'call_screen.dart';
 import 'chat_room_screen.dart';
+import 'models/rider_vehicle_profile.dart';
 import 'models/user_profile.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/chat_warmup.dart';
@@ -19,6 +20,10 @@ import 'utils/catalog_product_image_url.dart';
 import 'widgets/cached_app_image.dart';
 import 'widgets/no_rider_customer_actions_banner.dart';
 import 'widgets/order_refund_dialog.dart';
+import 'services/order_reorder_service.dart';
+import 'travel_tracking_screen.dart';
+import 'widgets/order_history_compact_card.dart';
+import 'widgets/travel_driver_profile_card.dart';
 
 const double _kRoadmapProductCarouselHeight = 128;
 
@@ -195,11 +200,15 @@ class OrderRoadmapScreen extends StatelessWidget {
     super.key,
     this.orderIds = const <String>[],
     this.showHistory = false,
+    this.onReorderProducts,
+    this.onTravelAgain,
     FirebaseFirestore? firestore,
   }) : firestore = firestore ?? FirebaseFirestore.instance;
 
   final List<String> orderIds;
   final bool showHistory;
+  final Future<void> Function(Map<String, dynamic> orderData)? onReorderProducts;
+  final VoidCallback? onTravelAgain;
   final FirebaseFirestore firestore;
 
   void _openHistory(BuildContext context) {
@@ -207,6 +216,8 @@ class OrderRoadmapScreen extends StatelessWidget {
       MaterialPageRoute<void>(
         builder: (_) => OrderRoadmapScreen(
           showHistory: true,
+          onReorderProducts: onReorderProducts,
+          onTravelAgain: onTravelAgain,
           firestore: firestore,
         ),
       ),
@@ -228,6 +239,8 @@ class OrderRoadmapScreen extends StatelessWidget {
         body: _CustomerHistoryRoadmapList(
           uid: uid,
           firestore: firestore,
+          onReorderProducts: onReorderProducts,
+          onTravelAgain: onTravelAgain,
         ),
       );
     }
@@ -406,18 +419,89 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
   }
 }
 
-class _CustomerHistoryRoadmapList extends StatelessWidget {
+String? _readHistoryShopImageUrl(Map<String, dynamic> data) {
+  for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+    final trimmed = data[field]?.toString().trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
+    }
+  }
+
+  final shopSnapshot = data['shopSnapshot'];
+  if (shopSnapshot is Map) {
+    for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+      final trimmed = shopSnapshot[field]?.toString().trim();
+      if (trimmed != null && trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+  }
+
+  final rawProducts = data['products'];
+  if (rawProducts is List) {
+    for (final rawProduct in rawProducts) {
+      if (rawProduct is! Map) {
+        continue;
+      }
+      for (final field in <String>['shopImageUrl', 'imageUrl', 'photoUrl']) {
+        final trimmed = rawProduct[field]?.toString().trim();
+        if (trimmed != null && trimmed.isNotEmpty) {
+          return trimmed;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+class _CustomerHistoryRoadmapList extends StatefulWidget {
   const _CustomerHistoryRoadmapList({
     required this.uid,
     required this.firestore,
+    this.onReorderProducts,
+    this.onTravelAgain,
   });
 
   final String? uid;
   final FirebaseFirestore firestore;
+  final Future<void> Function(Map<String, dynamic> orderData)? onReorderProducts;
+  final VoidCallback? onTravelAgain;
+
+  @override
+  State<_CustomerHistoryRoadmapList> createState() =>
+      _CustomerHistoryRoadmapListState();
+}
+
+class _CustomerHistoryRoadmapListState
+    extends State<_CustomerHistoryRoadmapList> {
+  String? _reorderingOrderId;
+
+  Future<void> _handleReorder(
+    Map<String, dynamic> orderData,
+    String orderId,
+  ) async {
+    final handler = widget.onReorderProducts;
+    if (handler == null) {
+      return;
+    }
+
+    setState(() => _reorderingOrderId = orderId);
+    try {
+      await handler(orderData);
+    } finally {
+      if (mounted) {
+        setState(() => _reorderingOrderId = null);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (uid == null || uid!.isEmpty) {
+    final uid = widget.uid;
+    final firestore = widget.firestore;
+
+    if (uid == null || uid.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
@@ -459,14 +543,24 @@ class _CustomerHistoryRoadmapList extends StatelessWidget {
             ).compareTo(_historyOrderSortMs(a.data())),
           );
 
-        final orderIds = historyDocs.map((doc) => doc.id).toList(growable: false);
+        final productEntries = <({String id, Map<String, dynamic> data})>[];
+        final travelEntries = <({String id, Map<String, dynamic> data})>[];
+        for (final doc in historyDocs) {
+          final data = doc.data();
+          final entry = (id: doc.id, data: data);
+          if (isTravelPassengerOrderData(data)) {
+            travelEntries.add(entry);
+          } else {
+            productEntries.add(entry);
+          }
+        }
 
         _scheduleRoadmapOrdersPrefetch(
-          orderIds: orderIds,
+          orderIds: historyDocs.map((doc) => doc.id).toList(growable: false),
           orders: docs.map((doc) => doc.data()),
         );
 
-        if (orderIds.isEmpty) {
+        if (historyDocs.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(24),
@@ -475,8 +569,77 @@ class _CustomerHistoryRoadmapList extends StatelessWidget {
           );
         }
 
-        return _RoadmapList(orderIds: orderIds, firestore: firestore);
+        return ListView(
+          padding: const EdgeInsets.all(12),
+          children: <Widget>[
+            if (productEntries.isNotEmpty) ...<Widget>[
+              const _HistorySectionHeader(title: 'สินค้า'),
+              const SizedBox(height: 8),
+              for (final entry in productEntries) ...<Widget>[
+                OrderHistoryCompactProductCard(
+                  orderId: entry.id,
+                  orderCode: (entry.data['orderCode'] as String?)?.trim(),
+                  shopName: (entry.data['shopName'] as String?)?.trim(),
+                  shopImageUrl: _readHistoryShopImageUrl(entry.data),
+                  totalAmount: (entry.data['grandTotal'] as num?) ??
+                      (entry.data['totalPrice'] as num?) ??
+                      0,
+                  products: buildHistoryProductLines(entry.data),
+                  isBusy: _reorderingOrderId == entry.id,
+                  onReorder: widget.onReorderProducts == null
+                      ? null
+                      : () => _handleReorder(entry.data, entry.id),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ],
+            if (travelEntries.isNotEmpty) ...<Widget>[
+              if (productEntries.isNotEmpty) const SizedBox(height: 6),
+              const _HistorySectionHeader(title: 'การเดินทาง'),
+              const SizedBox(height: 8),
+              for (final entry in travelEntries) ...<Widget>[
+                OrderHistoryCompactTravelCard(
+                  orderId: entry.id,
+                  orderCode: (entry.data['orderCode'] as String?)?.trim(),
+                  pickupLabel: _readTravelPickupLabel(entry.data),
+                  destinationLabel: _readTravelDestinationLabel(entry.data),
+                  totalAmount: (entry.data['grandTotal'] as num?) ??
+                      (entry.data['totalPrice'] as num?) ??
+                      0,
+                  vehicleLabel: _readTravelVehicleLabel(entry.data),
+                  scheduleLabel: _readTravelScheduleLabel(entry.data),
+                  firestore: firestore,
+                  driverId: (entry.data['driverId'] as String?)?.trim(),
+                  driverName: (entry.data['driverName'] as String?)?.trim(),
+                  onTravelAgain: widget.onTravelAgain,
+                ),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ],
+        );
       },
+    );
+  }
+}
+
+class _HistorySectionHeader extends StatelessWidget {
+  const _HistorySectionHeader({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w900,
+          color: Color(0xFF111827),
+        ),
+      ),
     );
   }
 }
@@ -555,6 +718,30 @@ class _OrderRoadmapCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (isTravelOrder &&
+                    driverId != null &&
+                    driverId.isNotEmpty) ...[
+                  FutureBuilder<RiderVehicleProfile?>(
+                    future: _loadRiderVehicleProfile(data),
+                    builder: (context, riderSnapshot) {
+                      final riderProfile = riderSnapshot.data;
+                      if (riderSnapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.only(bottom: 12),
+                          child: LinearProgressIndicator(minHeight: 2),
+                        );
+                      }
+                      if (riderProfile == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: TravelDriverProfileCard(rider: riderProfile),
+                      );
+                    },
+                  ),
+                ],
                 FutureBuilder<String?>(
                   future: _resolveShopImageUrl(data),
                   builder: (context, shopImageSnapshot) {
@@ -612,7 +799,7 @@ class _OrderRoadmapCard extends StatelessWidget {
                   Text('ประเภทรถ: $travelVehicleLabel'),
                 if (isTravelOrder && travelScheduleLabel != null)
                   Text('เวลาเดินทาง: $travelScheduleLabel'),
-                if (productEntries.isNotEmpty) ...[
+                if (productEntries.isNotEmpty && !isTravelOrder) ...[
                   const SizedBox(height: 10),
                   Text(
                     isTravelOrder ? 'รายละเอียดการเดินทาง' : 'สินค้าในออเดอร์',
@@ -729,6 +916,27 @@ class _OrderRoadmapCard extends StatelessWidget {
                     );
                   },
                 ),
+                if (isActiveTravelTrackingOrder(data)) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        showTravelTrackingScreen(
+                          context: context,
+                          orderId: orderId,
+                        );
+                      },
+                      icon: const Icon(Icons.map_outlined, size: 18),
+                      label: const Text('แผนที่'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFDC2626),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 NoRiderCustomerActionsBanner(
                   orderId: orderId,
@@ -748,20 +956,24 @@ class _OrderRoadmapCard extends StatelessWidget {
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder
-                      ? 'กำลังรอผู้โดยสารขึ้นรถ'
+                      ? 'ไรเดอร์ถึงจุดรับแล้ว'
                       : 'ร้านค้ารับออเดอร์',
-                  status: roadmap.shopPreparing,
+                  status: isTravelOrder
+                      ? roadmap.riderScannedPickup
+                      : roadmap.shopPreparing,
                   leadingIcon: isTravelOrder
-                      ? Icons.airline_seat_recline_normal_outlined
+                      ? Icons.location_on_outlined
                       : Icons.storefront_outlined,
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder
-                      ? 'ไรเดอร์ถึงจุดรับแล้ว'
+                      ? 'กำลังรอผู้โดยสารขึ้นรถ'
                       : 'ไรเดอร์สแกนรับสินค้า',
-                  status: roadmap.riderScannedPickup,
+                  status: isTravelOrder
+                      ? roadmap.shopPreparing
+                      : roadmap.riderScannedPickup,
                   leadingIcon: isTravelOrder
-                      ? Icons.location_on_outlined
+                      ? Icons.airline_seat_recline_normal_outlined
                       : Icons.qr_code_scanner_outlined,
                 ),
                 _TimelineStepTile(
@@ -1179,6 +1391,35 @@ class _OrderRoadmapCard extends StatelessWidget {
     return '$day/$month/$year $hour:$minute';
   }
 
+  Future<RiderVehicleProfile?> _loadRiderVehicleProfile(
+    Map<String, dynamic> data,
+  ) async {
+    final driverId = (data['driverId'] as String?)?.trim();
+    if (driverId == null || driverId.isEmpty) {
+      return null;
+    }
+
+    final fallbackName =
+        ((data['driverName'] as String?)?.trim().isNotEmpty ?? false)
+        ? (data['driverName'] as String).trim()
+        : 'ไรเดอร์';
+
+    try {
+      final doc = await firestore.collection('riders').doc(driverId).get();
+      if (doc.exists) {
+        return RiderVehicleProfile.fromFirestore(driverId, doc.data());
+      }
+    } catch (_) {
+      // Fall back to order snapshot fields below.
+    }
+
+    return RiderVehicleProfile(
+      riderId: driverId,
+      displayName: fallbackName,
+      phoneNumber: (data['driverPhone'] as String?)?.trim(),
+    );
+  }
+
   Future<_RiderContactState> _loadRiderContactState(
     Map<String, dynamic> data,
   ) async {
@@ -1343,6 +1584,10 @@ class _OrderRoadmapCard extends StatelessWidget {
   }
 
   _OrderRoadmapState _buildRoadmapState(Map<String, dynamic> data) {
+    if (_isTravelPassengerOrder(data)) {
+      return _buildTravelRoadmapState(data);
+    }
+
     final status = (data['status'] as String?)?.trim() ?? '';
     final hasDriver =
         ((data['driverId'] as String?)?.trim().isNotEmpty ?? false);
@@ -1409,6 +1654,70 @@ class _OrderRoadmapCard extends StatelessWidget {
       riderToShop: riderToShop,
       shopPreparing: shopPreparing,
       riderScannedPickup: riderScannedPickup,
+      delivering: delivering,
+      delivered: delivered,
+    );
+  }
+
+  _OrderRoadmapState _buildTravelRoadmapState(Map<String, dynamic> data) {
+    final status = (data['status'] as String?)?.trim() ?? '';
+    final hasDriver =
+        ((data['driverId'] as String?)?.trim().isNotEmpty ?? false);
+    final riderSearch = data['riderSearch'];
+    final matchedBySearch = riderSearch is Map<String, dynamic>
+        ? (riderSearch['matched'] == true)
+        : false;
+    final hasAcceptedAt = data['acceptedAt'] != null;
+    final hasPickupArrived =
+        data['pickupArrivedAt'] != null ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+    final hasScanned =
+        ((data['scannedByDriverId'] as String?)?.trim().isNotEmpty ?? false) ||
+        data['scannedAt'] != null;
+
+    final riderSearchStarted =
+        riderSearch is Map<String, dynamic> ||
+        status == 'awaiting_rider' ||
+        status == 'pending' ||
+        status == 'accepted' ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+
+    final riderMatched =
+        hasDriver ||
+        matchedBySearch ||
+        status == 'pending' ||
+        status == 'accepted' ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+
+    final riderAccepted =
+        hasAcceptedAt ||
+        status == 'accepted' ||
+        status == 'ready' ||
+        status == 'delivering' ||
+        status == 'delivered';
+
+    // Step 2: ไรเดอร์ถึงจุดรับแล้ว
+    final riderAtPickup = hasPickupArrived || hasScanned;
+
+    // Step 3: ผู้โดยสารขึ้นรถแล้ว (ไม่รอที่จุดรับอีก)
+    final passengerBoarded = status == 'delivering' || status == 'delivered';
+
+    final delivering = status == 'delivering' || status == 'delivered';
+    final delivered = status == 'delivered';
+
+    return _OrderRoadmapState(
+      riderSearchStarted: riderSearchStarted,
+      riderMatched: riderMatched,
+      riderAccepted: riderAccepted,
+      riderToShop: riderAccepted,
+      shopPreparing: passengerBoarded,
+      riderScannedPickup: riderAtPickup,
       delivering: delivering,
       delivered: delivered,
     );

@@ -39,7 +39,7 @@ service firebase.storage {
     }
 
     match /riders/{ownerId}/delivery_proofs/{allPaths=**} {
-      allow read: if signedIn();
+      allow read: if ownsSegment(ownerId) || isPrivilegedAdmin();
       allow write: if ownsSegment(ownerId);
     }
 
@@ -69,6 +69,11 @@ service firebase.storage {
     }
 
     match /review_uploads/{ownerId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if ownsSegment(ownerId);
+    }
+
+    match /comment_uploads/{ownerId}/{allPaths=**} {
       allow read: if signedIn();
       allow write: if ownsSegment(ownerId);
     }

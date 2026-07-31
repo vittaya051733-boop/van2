@@ -1,7 +1,7 @@
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
+import 'services/rider_availability_service.dart';
 
 enum TravelVehicleType { motorcycle, sedan, pickup }
 
@@ -23,6 +23,18 @@ extension TravelVehicleTypePresentation on TravelVehicleType {
     switch (this) {
       case TravelVehicleType.motorcycle:
         return Icons.two_wheeler;
+      case TravelVehicleType.sedan:
+        return Icons.directions_car_filled_rounded;
+      case TravelVehicleType.pickup:
+        return Icons.local_shipping_rounded;
+    }
+  }
+
+  /// Compact map pin icon (scooter-style for motorcycle).
+  IconData get mapMarkerIcon {
+    switch (this) {
+      case TravelVehicleType.motorcycle:
+        return Icons.moped;
       case TravelVehicleType.sedan:
         return Icons.directions_car_filled_rounded;
       case TravelVehicleType.pickup:
@@ -80,6 +92,9 @@ double? _readRiderLatitude(Map<String, dynamic> data) {
   if (geo is GeoPoint) {
     return geo.latitude;
   }
+  if (geo is Map) {
+    return _travelParseDouble(geo['latitude']) ?? _travelParseDouble(geo['lat']);
+  }
   return _travelParseDouble(data['latitude']) ?? _travelParseDouble(data['lat']);
 }
 
@@ -87,6 +102,9 @@ double? _readRiderLongitude(Map<String, dynamic> data) {
   final geo = data['currentLocation'];
   if (geo is GeoPoint) {
     return geo.longitude;
+  }
+  if (geo is Map) {
+    return _travelParseDouble(geo['longitude']) ?? _travelParseDouble(geo['lng']);
   }
   return _travelParseDouble(data['longitude']) ?? _travelParseDouble(data['lng']);
 }
@@ -99,6 +117,26 @@ double? _travelParseDouble(Object? value) {
     return double.tryParse(value.trim());
   }
   return null;
+}
+
+TravelVehicleType? readTravelOrderVehicleType(Map<String, dynamic> orderData) {
+  final travelRequest = orderData['travelRequest'];
+  if (travelRequest is! Map) {
+    return null;
+  }
+
+  final raw = travelRequest['vehicleType']?.toString().trim().toLowerCase();
+  if (raw == null || raw.isEmpty) {
+    return null;
+  }
+
+  for (final vehicleType in TravelVehicleType.values) {
+    if (vehicleType.wireValue == raw) {
+      return vehicleType;
+    }
+  }
+
+  return readRiderTravelVehicleType(<String, dynamic>{'vehicleType': raw});
 }
 
 TravelVehicleType? readRiderTravelVehicleType(Map<String, dynamic> data) {
@@ -179,82 +217,55 @@ Map<TravelVehicleType, int> countOnlineTravelVehicles(
   return counts;
 }
 
-Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-watchTravelAvailableRiders() {
-  final firestore = FirebaseFirestore.instance;
-  QuerySnapshot<Map<String, dynamic>>? passengerSnapshot;
-  QuerySnapshot<Map<String, dynamic>>? onlineSnapshot;
-
-  late final StreamController<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-      controller;
-  late final StreamSubscription<QuerySnapshot<Map<String, dynamic>>>
-      passengerSub;
-  late final StreamSubscription<QuerySnapshot<Map<String, dynamic>>> onlineSub;
-
-  void emitMerged() {
-    if (passengerSnapshot == null || onlineSnapshot == null) {
-      return;
-    }
-    final merged =
-        <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
-    for (final doc in passengerSnapshot!.docs) {
-      merged[doc.id] = doc;
-    }
-    for (final doc in onlineSnapshot!.docs) {
-      merged[doc.id] = doc;
-    }
-    if (!controller.isClosed) {
-      controller.add(merged.values.toList(growable: false));
-    }
-  }
-
-  controller = StreamController<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-    onListen: () {
-      passengerSub = firestore
-          .collection('riders')
-          .where('passengerReady', isEqualTo: true)
-          .snapshots(includeMetadataChanges: true)
-          .listen(
-            (snapshot) {
-              passengerSnapshot = snapshot;
-              emitMerged();
-            },
-            onError: controller.addError,
-          );
-      onlineSub = firestore
-          .collection('riders')
-          .where('onlineReady', isEqualTo: true)
-          .snapshots(includeMetadataChanges: true)
-          .listen(
-            (snapshot) {
-              onlineSnapshot = snapshot;
-              emitMerged();
-            },
-            onError: controller.addError,
-          );
-    },
-    onCancel: () async {
-      await passengerSub.cancel();
-      await onlineSub.cancel();
-    },
-  );
-
-  return controller.stream;
+Map<TravelVehicleType, int> parseTravelVehicleCounts(Map<String, int> raw) {
+  int readCount(String key) => raw[key] ?? 0;
+  return <TravelVehicleType, int>{
+    TravelVehicleType.motorcycle: readCount('motorcycle'),
+    TravelVehicleType.sedan: readCount('sedan'),
+    TravelVehicleType.pickup: readCount('pickup'),
+  };
 }
 
-Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
-fetchTravelAvailableRiders() async {
-  final firestore = FirebaseFirestore.instance;
-  final results = await Future.wait(<Future<QuerySnapshot<Map<String, dynamic>>>>[
-    firestore.collection('riders').where('passengerReady', isEqualTo: true).get(),
-    firestore.collection('riders').where('onlineReady', isEqualTo: true).get(),
-  ]);
+Map<TravelVehicleType, int> countOnlineTravelVehiclesFromEntries(
+  Iterable<RiderAvailabilityEntry> entries,
+) {
+  final counts = <TravelVehicleType, int>{
+    for (final vehicle in TravelVehicleType.values) vehicle: 0,
+  };
 
-  final merged = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
-  for (final snapshot in results) {
-    for (final doc in snapshot.docs) {
-      merged[doc.id] = doc;
+  for (final entry in entries) {
+    final data = entry.data;
+    if (!isRiderAvailableForTravel(data)) {
+      continue;
     }
+
+    final vehicleType = readRiderTravelVehicleType(data);
+    if (vehicleType == null) {
+      continue;
+    }
+
+    counts[vehicleType] = (counts[vehicleType] ?? 0) + 1;
   }
-  return merged.values.toList(growable: false);
+
+  return counts;
+}
+
+Stream<Map<TravelVehicleType, int>> watchTravelVehicleCounts() {
+  return RiderAvailabilityService.instance.watchTravelVehicleCounts().map(
+    parseTravelVehicleCounts,
+  );
+}
+
+Map<TravelVehicleType, int> peekTravelVehicleCounts() {
+  return parseTravelVehicleCounts(
+    RiderAvailabilityService.instance.peekTravelVehicleCounts,
+  );
+}
+
+Stream<List<RiderAvailabilityEntry>> watchTravelAvailableRiders() {
+  return RiderAvailabilityService.instance.watchTravelRiderEntries();
+}
+
+Future<List<RiderAvailabilityEntry>> fetchTravelAvailableRiders() async {
+  return RiderAvailabilityService.instance.fetchTravelRiderEntries();
 }

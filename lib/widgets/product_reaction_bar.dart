@@ -11,11 +11,13 @@ class ProductReactionBar extends StatelessWidget {
     super.key,
     required this.productId,
     required this.shopId,
+    this.showCommentAction = true,
     this.onCommentTap,
   });
 
   final String productId;
   final String shopId;
+  final bool showCommentAction;
   final VoidCallback? onCommentTap;
 
   @override
@@ -47,6 +49,7 @@ class ProductReactionBar extends StatelessWidget {
                 stats: stats,
                 commentCount: commentCount,
                 activeReaction: null,
+                showCommentAction: showCommentAction,
                 onCommentTap: onCommentTap,
               );
             }
@@ -61,6 +64,7 @@ class ProductReactionBar extends StatelessWidget {
                   stats: stats,
                   commentCount: commentCount,
                   activeReaction: reactionSnapshot.data,
+                  showCommentAction: showCommentAction,
                   onCommentTap: onCommentTap,
                   onToggleReaction: (type) => _toggleReaction(context, type),
                 );
@@ -98,6 +102,7 @@ class _ReactionRow extends StatelessWidget {
     required this.stats,
     required this.commentCount,
     required this.activeReaction,
+    this.showCommentAction = true,
     this.onCommentTap,
     this.onToggleReaction,
   });
@@ -105,6 +110,7 @@ class _ReactionRow extends StatelessWidget {
   final ProductReactionStats stats;
   final int commentCount;
   final ProductReactionType? activeReaction;
+  final bool showCommentAction;
   final VoidCallback? onCommentTap;
   final ValueChanged<ProductReactionType>? onToggleReaction;
 
@@ -119,10 +125,11 @@ class _ReactionRow extends StatelessWidget {
           if (stats.likeCount > 0) Text('👍 ${stats.likeCount}'),
           if (stats.dislikeCount > 0) Text('👎 ${stats.dislikeCount}'),
           if (stats.loveCount > 0) Text('❤️ ${stats.loveCount}'),
-          _CommentActionButton(
-            count: commentCount,
-            onTap: onCommentTap,
-          ),
+          if (showCommentAction)
+            _CommentActionButton(
+              count: commentCount,
+              onTap: onCommentTap,
+            ),
         ],
       );
     }
@@ -159,10 +166,11 @@ class _ReactionRow extends StatelessWidget {
           isActive: activeReaction == ProductReactionType.love,
           onTap: () => onToggleReaction!(ProductReactionType.love),
         ),
-        _CommentActionButton(
-          count: commentCount,
-          onTap: onCommentTap,
-        ),
+        if (showCommentAction)
+          _CommentActionButton(
+            count: commentCount,
+            onTap: onCommentTap,
+          ),
       ],
     );
   }

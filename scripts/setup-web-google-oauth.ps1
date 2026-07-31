@@ -1,19 +1,23 @@
-# Registers van*.web.app on the Firebase/Google web OAuth client (fixes "no registered origin").
-# Requires: gcloud auth login with project editor/owner on van-merchant
+# Fixes Google Sign-In "no registered origin" / 401 invalid_client on van*.web.app.
+# Google Cloud has NO public API for OAuth web-client JavaScript origins — edit in Console once.
 #
-# Manual fallback (Console):
-# https://console.cloud.google.com/apis/credentials/oauthclient/802503541368-0tg37vm56t3mvuokacoc8idm9mgj0no8.apps.googleusercontent.com?project=van-merchant
-# Add Authorized JavaScript origins:
-#   https://van1.web.app
-#   https://van2.web.app
-#   https://van3.web.app
-#   https://van4.web.app
+# Usage:
+#   scripts\setup-web-google-oauth.ps1           # print checklist + open Console tabs
+#   scripts\setup-web-google-oauth.ps1 -OpenOnly # open Console only
+
+param(
+  [switch]$OpenOnly
+)
 
 $ErrorActionPreference = 'Stop'
 
 $ProjectId = 'van-merchant'
 $ClientNumber = '802503541368-0tg37vm56t3mvuokacoc8idm9mgj0no8'
-$ClientResource = "projects/$ProjectId/brands/-/identityAwareProxyClients/$ClientNumber"
+$ClientId = "$ClientNumber.apps.googleusercontent.com"
+
+$OAuthConsoleUrl = "https://console.cloud.google.com/apis/credentials/oauthclient/$ClientNumber.apps.googleusercontent.com?project=$ProjectId"
+$AuthDomainsUrl = "https://console.firebase.google.com/project/$ProjectId/authentication/settings"
+
 $Origins = @(
   'https://van1.web.app',
   'https://van2.web.app',
@@ -30,36 +34,35 @@ $Redirects = @(
   'https://van-merchant.firebaseapp.com/__/auth/handler'
 )
 
-$token = gcloud auth print-access-token 2>$null
-if (-not $token) {
-  throw 'Run: gcloud auth login'
+Write-Host ''
+Write-Host 'Google Sign-In on web requires ONE-TIME Console setup (no public API).' -ForegroundColor Cyan
+Write-Host "OAuth web client: $ClientId" -ForegroundColor DarkGray
+Write-Host ''
+
+Write-Host '1) Google Cloud → Credentials → OAuth 2.0 Web client' -ForegroundColor Yellow
+Write-Host "   $OAuthConsoleUrl"
+Write-Host '   Add Authorized JavaScript origins:' -ForegroundColor White
+foreach ($origin in $Origins) { Write-Host "     $origin" }
+Write-Host '   Add Authorized redirect URIs:' -ForegroundColor White
+foreach ($redirect in $Redirects) { Write-Host "     $redirect" }
+Write-Host ''
+
+Write-Host '2) Firebase → Authentication → Settings → Authorized domains' -ForegroundColor Yellow
+Write-Host "   $AuthDomainsUrl"
+Write-Host '   Ensure these domains exist:' -ForegroundColor White
+Write-Host '     van1.web.app'
+Write-Host '     van2.web.app'
+Write-Host '     van3.web.app'
+Write-Host '     van4.web.app'
+Write-Host ''
+
+Write-Host '3) Wait ~1–5 minutes, then hard-refresh https://van2.web.app (Ctrl+Shift+R) and retry Google sign-in.' -ForegroundColor Green
+Write-Host ''
+
+Start-Process $OAuthConsoleUrl
+Start-Sleep -Milliseconds 800
+Start-Process $AuthDomainsUrl
+
+if ($OpenOnly) {
+  exit 0
 }
-
-Write-Host 'Patching OAuth web client JavaScript origins via Cloud Console API...' -ForegroundColor Cyan
-
-# Classic OAuth client update (Credentials API)
-$clientId = "$ClientNumber.apps.googleusercontent.com"
-$getUri = "https://content.googleapis.com/oauth2/v2/client/$clientId"
-$headers = @{ Authorization = "Bearer $token" }
-
-try {
-  $existing = Invoke-RestMethod -Method Get -Uri $getUri -Headers $headers
-} catch {
-  Write-Host '[warn] Could not read OAuth client via API. Use Console link in script header.' -ForegroundColor Yellow
-  Write-Host $_.Exception.Message
-  exit 1
-}
-
-$jsOrigins = [System.Collections.Generic.HashSet[string]]::new([string[]]@($existing.javascript_origins))
-$redirectUris = [System.Collections.Generic.HashSet[string]]::new([string[]]@($existing.redirect_uris))
-foreach ($origin in $Origins) { [void]$jsOrigins.Add($origin) }
-foreach ($redirect in $Redirects) { [void]$redirectUris.Add($redirect) }
-
-$body = @{
-  client_id = $clientId
-  javascript_origins = @($jsOrigins)
-  redirect_uris = @($redirectUris)
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Put -Uri $getUri -Headers $headers -Body $body -ContentType 'application/json'
-Write-Host "[ok] OAuth client updated: $clientId" -ForegroundColor Green

@@ -9,7 +9,7 @@
   Workflow แนะนำ: deploy-plan.ps1 -DryRunOnly แล้วค่อย -Execute
 
 .EXAMPLE
-  .\deploy-self.ps1 -App van3 -Target storage -ConfirmDeploy "APPROVE:van3:van-merchant" -FinalAcknowledge "YES I UNDERSTAND"
+  .\deploy-self.ps1 -App van3 -Target storage -ConfirmDeploy "อนุมัติ:van3:van-merchant" -FinalAcknowledge "ฉันเข้าใจแล้ว"
 #>
 param(
   [Parameter(Mandatory)]
@@ -25,7 +25,7 @@ param(
   [string]$ConfirmDeploy,
   [string]$ConfirmFile,
   [string]$ConfirmImpact,
-  [string]$FinalAcknowledge = 'YES I UNDERSTAND',
+  [string]$FinalAcknowledge,
   [switch]$InteractiveConfirm,
   [switch]$DryRun,
   [switch]$BuildWeb,
@@ -40,6 +40,10 @@ $scriptRoot = $PSScriptRoot
 . (Join-Path $scriptRoot 'deploy-governance.ps1')
 
 $cfg = Get-VanGovernanceConfig
+if ([string]::IsNullOrWhiteSpace($FinalAcknowledge)) {
+  $FinalAcknowledge = Get-VanAckTh
+}
+
 $safeScript = Join-Path $scriptRoot 'deploy-safe.ps1'
 $readinessScript = Join-Path $scriptRoot 'deploy-readiness.ps1'
 
@@ -47,7 +51,7 @@ if (-not $SkipReadiness) {
   Show-VanDeployImpactSummary -App $App -Target $Target
   & $readinessScript -App $App -Target $Target -Quiet
   if ($LASTEXITCODE -ne 0) {
-    throw "Readiness check failed. Fix issues or use -SkipReadiness (not recommended)."
+    throw (Get-VanMsg 'selfReadinessFailed')
   }
 }
 
@@ -77,13 +81,13 @@ function Invoke-VanFirestoreSmokeGate {
 
   if ($Phase -eq 'PreDeploy') {
     Write-Host ''
-    Write-Host '=== Pre-Deploy Firestore Gate ===' -ForegroundColor Cyan
+    Write-Host (Get-VanMsg 'selfPreDeployGateTitle') -ForegroundColor Cyan
   }
 
   & $smokeScript @smokeArgs
   if ($LASTEXITCODE -ne 0) {
     if ($Phase -eq 'PreDeploy') {
-      throw 'Pre-deploy smoke gate failed — Firestore deploy blocked. Fix rules/emulator (Java 21+) first.'
+      throw (Get-VanMsg 'selfPreDeployGateFail')
     }
     return $false
   }
@@ -107,7 +111,7 @@ function Invoke-VanDeploySelfTarget {
     }
     'firestore' {
       if ($App -ne 'van2') {
-        throw "Firestore (default DB) deploy is van2 only. Current: $App. See DEPLOY_RISK_MATRIX.md"
+        throw (Get-VanMsg 'selfFirestoreVan2Only' @($App))
       }
       $firestoreScript = Join-Path $scriptRoot 'deploy-firestore-isolated.ps1'
       & $firestoreScript `
@@ -131,10 +135,10 @@ function Invoke-VanDeploySelfTarget {
     }
     'functions' {
       if ($App -notin @('van1', 'van2')) {
-        throw "$App has no Cloud Functions. Functions deploy: van1 or van2 only."
+        throw (Get-VanMsg 'selfNoFunctions' @($App))
       }
       if (-not $FunctionName -or $FunctionName.Count -eq 0) {
-        throw 'Provide -FunctionName <name> (one function at a time recommended).'
+        throw (Get-VanMsg 'selfNeedFunctionName')
       }
       & $safeScript -Action functions -App $App -FunctionName $FunctionName `
         -ConfirmDeploy $(if ($ConfirmDeploy) { $ConfirmDeploy } else { Get-VanDeployConfirmToken -App $App }) `
@@ -182,7 +186,7 @@ if (-not $SkipPostGuide -and -not $DryRun -and $exitCode -eq 0) {
     if ($Target -eq 'firestore') {
       $postOk = Invoke-VanFirestoreSmokeGate -Phase PostDeploy
       if (-not $postOk) {
-        Write-Host 'WARNING: Post-deploy emulator smoke failed. Consider rollback (see DEPLOY_CONNECTION_SIGNALS.md).' -ForegroundColor Red
+        Write-Host (Get-VanMsg 'selfPostSmokeFail') -ForegroundColor Red
         Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $script:VanLastFirestoreBackupPath
         exit 1
       }
@@ -192,7 +196,7 @@ if (-not $SkipPostGuide -and -not $DryRun -and $exitCode -eq 0) {
       if (Test-Path $smokeScript) {
         & $smokeScript -AfterTarget $Target -Phase PostDeploy
         if ($LASTEXITCODE -ne 0) {
-          Write-Host 'WARNING: Smoke test failed after deploy. Consider rollback.' -ForegroundColor Red
+          Write-Host (Get-VanMsg 'selfPostSmokeFailShort') -ForegroundColor Red
           exit $LASTEXITCODE
         }
       }

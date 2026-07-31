@@ -52,7 +52,10 @@ if ($FinalAcknowledge -ne $expectedFinalAcknowledge) {
 }
 Write-Host "[guard] Final acknowledgement accepted." -ForegroundColor Green
 
-flutter build web
+& (Join-Path $PSScriptRoot 'build-web.ps1')
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}
 if ($DryRun) {
   Write-Host '[dry-run] Skipping firebase deploy for hosting.' -ForegroundColor Yellow
   return

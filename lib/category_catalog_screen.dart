@@ -1189,6 +1189,82 @@ class _ShopAvatar extends StatelessWidget {
   }
 }
 
+CartProductSelection? buildCartSelectionFromCatalogProduct({
+  required PublicCatalogProduct product,
+  required int quantity,
+  List<String> selectedToppingLabels = const <String>[],
+}) {
+  final data = product.data;
+  final toppingGroups = _extractToppings(data);
+  final normalizedRequested = selectedToppingLabels
+      .map((label) => label.trim().toLowerCase())
+      .where((label) => label.isNotEmpty)
+      .toSet();
+
+  final matchedOptions = <_ToppingOption>[];
+  for (final group in toppingGroups) {
+    for (final option in group.options) {
+      final label = option.label.trim().toLowerCase();
+      final displayLabel = option.displayLabel.trim().toLowerCase();
+      if (normalizedRequested.contains(label) ||
+          normalizedRequested.contains(displayLabel)) {
+        matchedOptions.add(option);
+      }
+    }
+  }
+
+  final toppingTotal = matchedOptions.fold<num>(
+    0,
+    (sum, option) => sum + option.adjustedPrice,
+  );
+  final adjustedBasePrice = TaxPricingPolicy.resolveCustomerUnitPrice(data);
+  final merchantBasePrice = TaxPricingPolicy.parseNumber(data['price']);
+  final discountPercent = TaxPricingPolicy.parseDiscountPercent(
+    data['discountPercent'],
+  );
+  final toppingMerchantPayout = matchedOptions.fold<num>(
+    0,
+    (sum, option) =>
+        sum + TaxPricingPolicy.merchantToppingPayout(option.rawPrice),
+  );
+  final merchantUnitPayout =
+      TaxPricingPolicy.resolveMerchantUnitPayout(data) + toppingMerchantPayout;
+  final availableStock = _extractAvailableStock(data);
+  if (availableStock != null && availableStock <= 0) {
+    return null;
+  }
+
+  final safeQuantity = quantity.clamp(1, availableStock ?? 99).toInt();
+  final name = (data['name'] ?? '').toString().trim();
+  final shopName = product.shopName?.trim().isNotEmpty == true
+      ? product.shopName!.trim()
+      : 'ร้านค้า';
+
+  return CartProductSelection(
+    productId: product.id,
+    shopId: product.shopId,
+    shopName: shopName,
+    shopLatitude: product.shopLatitude,
+    shopLongitude: product.shopLongitude,
+    productName: name.isEmpty ? 'สินค้า' : name,
+    unitPrice: adjustedBasePrice + toppingTotal,
+    merchantBasePrice: merchantBasePrice,
+    discountPercent: discountPercent,
+    merchantUnitPayout: merchantUnitPayout,
+    imageUrl: readCatalogProductImageUrl(data),
+    selectedToppings: matchedOptions
+        .map((option) => option.label)
+        .toList(growable: false),
+    quantity: safeQuantity,
+    availableStock: availableStock,
+    preparationTimeMinutes: _extractPreparationTimeMinutes(data),
+    parcelWeightGrams: _extractParcelWeightGrams(data),
+    parcelLengthCm: _parsePositiveDouble(data['parcelLengthCm']),
+    parcelWidthCm: _parsePositiveDouble(data['parcelWidthCm']),
+    parcelHeightCm: _parsePositiveDouble(data['parcelHeightCm']),
+  );
+}
+
 double? computeCatalogShopDistanceKm({
   required double? customerLatitude,
   required double? customerLongitude,

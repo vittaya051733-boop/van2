@@ -28,7 +28,7 @@ param(
   [string]$ConfirmDeploy,
   [string]$ConfirmFile,
   [string]$ConfirmImpact,
-  [string]$FinalAcknowledge = 'YES I UNDERSTAND',
+  [string]$FinalAcknowledge,
   [switch]$InteractiveConfirm,
   [switch]$BuildWeb
 )
@@ -36,6 +36,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
 . (Join-Path $scriptRoot 'deploy-governance.ps1')
+
+if ([string]::IsNullOrWhiteSpace($FinalAcknowledge)) {
+  $FinalAcknowledge = Get-VanAckTh
+}
 
 if (-not $DryRunOnly -and -not $Execute) {
   Write-Host ''
@@ -72,9 +76,9 @@ if ($SkipPreDeploySmoke) { $selfArgs.SkipPreDeploySmoke = $true }
 if ($AllowSkipEmulatorSmoke) { $selfArgs.AllowSkipEmulatorSmoke = $true }
 
 if ($DryRunOnly) {
-  Write-Host '(plan) Dry-run mode - item 5 - no real deploy' -ForegroundColor Yellow
-  if ($Target -eq 'firestore' -and $App -eq 'van2' -and -not $SkipPreDeploySmoke) {
-    Write-Host '(plan) Running pre-deploy smoke gate (rules compile + emulator)...' -ForegroundColor Cyan
+  Write-Host (Get-VanMsg 'planDryRun') -ForegroundColor Yellow
+    if ($Target -eq 'firestore' -and $App -eq 'van2' -and -not $SkipPreDeploySmoke) {
+    Write-Host (Get-VanMsg 'planPreDeployGate') -ForegroundColor Cyan
     $smokeScript = Join-Path $scriptRoot 'deploy-smoke-test.ps1'
     $smokeArgs = @{
       AfterTarget = 'firestore'
@@ -84,7 +88,7 @@ if ($DryRunOnly) {
     if ($AllowSkipEmulatorSmoke) { $smokeArgs.AllowSkipEmulator = $true }
     & $smokeScript @smokeArgs
     if ($LASTEXITCODE -ne 0) {
-      Write-Host 'Pre-deploy gate failed — fix rules/emulator before deploy.' -ForegroundColor Red
+      Write-Host (Get-VanMsg 'planPreDeployFail') -ForegroundColor Red
       exit $LASTEXITCODE
     }
   }
@@ -92,6 +96,6 @@ if ($DryRunOnly) {
   exit $LASTEXITCODE
 }
 
-Write-Host '(plan) Executing deploy - item 2 isolated target' -ForegroundColor Cyan
+Write-Host (Get-VanMsg 'planExecute') -ForegroundColor Cyan
 & $selfScript @selfArgs
 exit $LASTEXITCODE

@@ -11,6 +11,7 @@ import 'cart_screen.dart';
 import 'map_picker_screen.dart';
 import 'services/nationwide_shipping_service.dart';
 import 'storage_helper.dart';
+import 'utils/app_check_guard.dart';
 import 'widgets/cached_app_image.dart';
 
 class NationwideCartScreen extends StatefulWidget {
@@ -447,6 +448,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
 
     setState(() => _isResolvingAddress = true);
     try {
+      await AppCheckGuard.ensureCheckoutReady();
       final callable = FirebaseFunctions.instanceFor(
         region: 'asia-southeast1',
       ).httpsCallable('reverseGeocodeDeliveryLocation');
@@ -721,6 +723,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     required double? verifiedSlipAmount,
     required String verificationMessage,
   }) async {
+    await AppCheckGuard.ensureCheckoutReady();
     final callable = FirebaseFunctions.instanceFor(
       region: 'asia-southeast1',
     ).httpsCallable('createNationwideParcelOrders');

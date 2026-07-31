@@ -30,24 +30,27 @@ class ObservabilityService {
 
     try {
       _analytics = FirebaseAnalytics.instance;
-      final crashlytics = FirebaseCrashlytics.instance;
-      await crashlytics.setCrashlyticsCollectionEnabled(kReleaseMode);
-      await crashlytics.setCustomKey('van_app', appName);
 
-      final previousFlutterHandler = FlutterError.onError;
-      FlutterError.onError = (FlutterErrorDetails details) {
-        if (kDebugMode) {
-          FlutterError.presentError(details);
-        }
-        unawaited(crashlytics.recordFlutterFatalError(details));
-        previousFlutterHandler?.call(details);
-      };
+      if (!kIsWeb) {
+        final crashlytics = FirebaseCrashlytics.instance;
+        await crashlytics.setCrashlyticsCollectionEnabled(kReleaseMode);
+        await crashlytics.setCustomKey('van_app', appName);
 
-      final previousPlatformHandler = PlatformDispatcher.instance.onError;
-      PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-        unawaited(crashlytics.recordError(error, stack, fatal: true));
-        return previousPlatformHandler?.call(error, stack) ?? true;
-      };
+        final previousFlutterHandler = FlutterError.onError;
+        FlutterError.onError = (FlutterErrorDetails details) {
+          if (kDebugMode) {
+            FlutterError.presentError(details);
+          }
+          unawaited(crashlytics.recordFlutterFatalError(details));
+          previousFlutterHandler?.call(details);
+        };
+
+        final previousPlatformHandler = PlatformDispatcher.instance.onError;
+        PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+          unawaited(crashlytics.recordError(error, stack, fatal: true));
+          return previousPlatformHandler?.call(error, stack) ?? true;
+        };
+      }
 
       await _analytics!.logEvent(
         name: 'app_start',

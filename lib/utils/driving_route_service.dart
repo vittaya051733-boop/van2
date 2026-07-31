@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/google_maps_web_api_key.dart';
+import 'app_check_guard.dart';
 
 enum DrivingRouteProvider { cloudFunction, googleDirections, osrm }
 
@@ -41,7 +42,7 @@ class DrivingRouteService {
   static const Duration _requestTimeout = Duration(seconds: 15);
   static const String _functionsRegion = 'asia-southeast1';
 
-  static bool get isGoogleConfigured => googleMapsWebApiKey.isNotEmpty;
+  static bool get isGoogleConfigured => effectiveGoogleMapsWebApiKey.isNotEmpty;
 
   static Future<DrivingRouteFetchResult> fetchDrivingRoute({
     required double originLat,
@@ -97,6 +98,7 @@ class DrivingRouteService {
     }
 
     try {
+      await AppCheckGuard.ensureCheckoutReady();
       final callable = FirebaseFunctions.instanceFor(
         region: _functionsRegion,
       ).httpsCallable('computeRouteMetrics');
@@ -156,7 +158,7 @@ class DrivingRouteService {
         'mode': 'driving',
         'language': 'th',
         'region': 'th',
-        'key': googleMapsWebApiKey,
+        'key': effectiveGoogleMapsWebApiKey,
       },
     );
 

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'phone_login_helper.dart';
+import 'utils/app_check_guard.dart';
 
 enum VerificationChannel { phone, email }
 
@@ -178,6 +179,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     setState(() => _isLoading = true);
 
     try {
+      await AppCheckGuard.ensureAuthReady();
       final callable = _functions.httpsCallable('sendEmailOtp');
       await callable.call(<String, dynamic>{
         'email': _email,
@@ -261,6 +263,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
 
     setState(() => _isLoading = true);
     try {
+      await AppCheckGuard.ensureAuthReady();
       final verifyCallable = _functions.httpsCallable('verifyEmailOtp');
       final response = await verifyCallable.call(<String, dynamic>{
         'email': _email,
@@ -323,6 +326,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
   Future<void> _verifyResetPasswordOtp(String otp) async {
     setState(() => _isLoading = true);
     try {
+      await AppCheckGuard.ensureAuthReady();
       final verifyCallable = _functions.httpsCallable('verifyEmailOtp');
       await verifyCallable.call(<String, dynamic>{
         'email': _email,

@@ -402,25 +402,19 @@ class _RiderSliderCard extends StatelessWidget {
 }
 
 class _RiderAvatar extends StatelessWidget {
-  const _RiderAvatar({
-    this.imageUrl,
-    this.radius = 16,
-    this.iconSize = 16,
-  });
+  const _RiderAvatar({this.imageUrl});
 
   final String? imageUrl;
-  final double radius;
-  final double iconSize;
 
   @override
   Widget build(BuildContext context) {
     final url = imageUrl?.trim();
     return CircleAvatar(
-      radius: radius,
+      radius: 16,
       backgroundColor: const Color(0xFFDCFCE7),
       backgroundImage: url != null && url.isNotEmpty ? NetworkImage(url) : null,
       child: url == null || url.isEmpty
-          ? Icon(Icons.person, size: iconSize, color: const Color(0xFF16A34A))
+          ? const Icon(Icons.person, size: 16, color: Color(0xFF16A34A))
           : null,
     );
   }

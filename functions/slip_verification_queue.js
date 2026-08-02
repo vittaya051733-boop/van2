@@ -83,6 +83,7 @@ function createSlipVerificationQueueHandlers({
     {
       region: DEFAULT_REGION,
       secrets: [SLIPOK_API_KEY_SECRET],
+      enforceAppCheck: true,
     },
     enqueueStandaloneSlipVerification,
   );

@@ -1,24 +1,26 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../services/customer_order_actions_service.dart';
 import '../utils/order_no_rider_policy.dart';
 import 'order_refund_dialog.dart';
 
 /// Wait / refund actions when no rider accepts (immediate or scheduled travel).
 class NoRiderCustomerActionsBanner extends StatefulWidget {
-  const NoRiderCustomerActionsBanner({
+  NoRiderCustomerActionsBanner({
     super.key,
     required this.orderId,
     required this.data,
     required this.firestore,
-  });
+    CustomerOrderActionsService? orderActions,
+  }) : orderActions = orderActions ?? CustomerOrderActionsService.production();
 
   final String orderId;
   final Map<String, dynamic> data;
   final FirebaseFirestore firestore;
+  final CustomerOrderActionsService orderActions;
 
   @override
   State<NoRiderCustomerActionsBanner> createState() =>
@@ -95,15 +97,7 @@ class _NoRiderCustomerActionsBannerState
     }
     setState(() => _busy = true);
     try {
-      final until =
-          DateTime.now().add(OrderNoRiderPolicy.customerExtraWait);
-      await widget.firestore.collection('orders').doc(widget.orderId).set({
-        'customerWaitUntil': Timestamp.fromDate(until),
-        'customerWaitRequestedAt': FieldValue.serverTimestamp(),
-        'customerNoRiderChoice': 'wait_15_min',
-        'reassignFailureReason': FieldValue.delete(),
-        'needsReassign': true,
-      }, SetOptions(merge: true));
+      await widget.orderActions.noRiderWait15Min(orderId: widget.orderId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -125,8 +119,6 @@ class _NoRiderCustomerActionsBannerState
   }
 
   Future<void> _cancelWithoutRefund({
-    required String cancelReason,
-    required String customerChoiceValue,
     required String successMessage,
   }) async {
     if (_busy) {
@@ -135,17 +127,10 @@ class _NoRiderCustomerActionsBannerState
 
     setState(() => _busy = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      await widget.firestore.collection('orders').doc(widget.orderId).set({
-        'status': 'cancelled',
-        'statusLabel': 'ยกเลิกออเดอร์',
-        'cancelledAt': FieldValue.serverTimestamp(),
-        'cancelledBy': uid,
-        'cancelReason': cancelReason,
-        'customerNoRiderChoice': customerChoiceValue,
-        'needsReassign': false,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await widget.orderActions.noRiderCancel(
+        orderId: widget.orderId,
+        scheduledTravel: _isScheduledTravel,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(successMessage)),
@@ -176,23 +161,11 @@ class _NoRiderCustomerActionsBannerState
 
     setState(() => _busy = true);
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      final cancelReason = _isScheduledTravel
-          ? 'scheduled_travel_no_rider_refund_requested'
-          : 'no_rider_available_refund_requested';
-      await widget.firestore.collection('orders').doc(widget.orderId).set({
-        'status': 'refund',
-        'cancelledAt': FieldValue.serverTimestamp(),
-        'cancelReason': cancelReason,
-        'refundRequested': true,
-        'refundRequestedAt': FieldValue.serverTimestamp(),
-        'refundRequestedBy': uid,
-        'refundStatus': 'requested',
-        ...refundInfo,
-        'customerNoRiderChoice': 'refund',
-        'needsReassign': false,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await widget.orderActions.noRiderRefund(
+        orderId: widget.orderId,
+        scheduledTravel: _isScheduledTravel,
+        refundInfo: refundInfo,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -220,10 +193,6 @@ class _NoRiderCustomerActionsBannerState
     }
 
     await _cancelWithoutRefund(
-      cancelReason: _isScheduledTravel
-          ? 'scheduled_travel_no_rider_customer_cancelled'
-          : 'no_rider_available_customer_cancelled',
-      customerChoiceValue: 'cancel',
       successMessage: 'ยกเลิกออเดอร์แล้ว',
     );
   }

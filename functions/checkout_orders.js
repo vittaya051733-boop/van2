@@ -14,6 +14,82 @@ const {
 } = require('./rider_availability');
 
 const VAN2_CART_SESSION_COLLECTION = 'van2_cart_sessions';
+const SLIPOK_FEEDBACK_COLLECTION = 'slipok_feedback';
+
+function slipAmountsMatch(actualAmount, expectedAmount) {
+  const actual = Number(actualAmount);
+  const expected = Number(expectedAmount);
+  if (!Number.isFinite(actual) || !Number.isFinite(expected)) {
+    return false;
+  }
+  return Math.abs(actual - expected) < 0.01;
+}
+
+async function loadVerifiedStandaloneSlipFeedback(
+  db,
+  HttpsError,
+  {
+    uid,
+    verificationFeedbackId,
+    paymentGroupId,
+    slipStoragePath,
+    expectedCombinedAmount,
+  },
+) {
+  const feedbackRef = db.collection(SLIPOK_FEEDBACK_COLLECTION).doc(verificationFeedbackId);
+  const feedbackDoc = await feedbackRef.get();
+  if (!feedbackDoc.exists) {
+    throw new HttpsError(
+      'failed-precondition',
+      'ไม่พบหลักฐานการตรวจสลิป กรุณาส่งสลิปใหม่',
+    );
+  }
+
+  const data = feedbackDoc.data() || {};
+  if (String(data.status || '').trim() !== 'verified') {
+    throw new HttpsError('failed-precondition', 'สลิปยังไม่ผ่านการตรวจสอบ');
+  }
+  if (String(data.customerUid || '').trim() !== uid) {
+    throw new HttpsError('permission-denied', 'สลิปไม่ตรงกับบัญชีผู้ใช้');
+  }
+  if (String(data.paymentGroupId || '').trim() !== paymentGroupId) {
+    throw new HttpsError('failed-precondition', 'ข้อมูลการชำระเงินไม่ตรงกับสลิป');
+  }
+  const storedPath = String(data.storagePath || '').trim();
+  const requestedPath = String(slipStoragePath || '').trim();
+  if (!storedPath || !requestedPath || storedPath !== requestedPath) {
+    throw new HttpsError('failed-precondition', 'ไฟล์สลิปไม่ตรงกับที่ตรวจสอบแล้ว');
+  }
+  if (!slipAmountsMatch(data.expectedCombinedAmount, expectedCombinedAmount)) {
+    throw new HttpsError('failed-precondition', 'ยอดชำระไม่ตรงกับสลิปที่ตรวจแล้ว');
+  }
+
+  const existingOrderIds = Array.isArray(data.orderIds) ? data.orderIds : [];
+  if (existingOrderIds.length > 0) {
+    throw new HttpsError('failed-precondition', 'สลิปนี้ถูกใช้สร้างออเดอร์แล้ว');
+  }
+
+  return feedbackRef;
+}
+
+async function markStandaloneSlipFeedbackConsumed(db, FieldValue, feedbackRef, orderIds) {
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(feedbackRef);
+    if (!snapshot.exists) {
+      throw new Error('missing_slip_feedback');
+    }
+    const data = snapshot.data() || {};
+    const existingOrderIds = Array.isArray(data.orderIds) ? data.orderIds : [];
+    if (existingOrderIds.length > 0) {
+      throw new Error('slip_already_consumed');
+    }
+    transaction.update(feedbackRef, {
+      orderIds,
+      consumedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+}
 
 function readFiniteProductStock(value) {
   const parsed = Number(value);
@@ -1574,6 +1650,9 @@ async function createNationwideParcelOrdersHandler(request, deps) {
     toFiniteOrNull,
   } = deps;
 
+  const { assertNonAnonymous } = require('./travel_orders');
+  assertNonAnonymous(request, HttpsError);
+
   if (!request.auth?.uid) {
     throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบก่อนสร้างออเดอร์');
   }
@@ -1587,8 +1666,12 @@ async function createNationwideParcelOrdersHandler(request, deps) {
 
   const paymentGroupId = String(request.data?.paymentGroupId || '').trim();
   const verificationFeedbackId = String(request.data?.verificationFeedbackId || '').trim();
+  const slipStoragePath = String(request.data?.slipStoragePath || '').trim();
   if (!paymentGroupId || !verificationFeedbackId) {
     throw new HttpsError('invalid-argument', 'ข้อมูลการชำระเงินไม่ครบ');
+  }
+  if (!slipStoragePath) {
+    throw new HttpsError('invalid-argument', 'ไม่พบไฟล์สลิปสำหรับยืนยันการชำระเงิน');
   }
 
   const productIds = [
@@ -1614,10 +1697,7 @@ async function createNationwideParcelOrdersHandler(request, deps) {
   });
 
   const grouped = groupLinesByShop(resolvedLines);
-  const userRecord = await admin.auth().getUser(uid);
-  const batch = db.batch();
-  const orderIds = [];
-  const now = new Date();
+  const shopOrderDrafts = [];
   let combinedGrandTotal = 0;
 
   for (const [, lines] of grouped.entries()) {
@@ -1637,7 +1717,50 @@ async function createNationwideParcelOrdersHandler(request, deps) {
     );
     const grandTotal = subtotal + shippingFee;
     combinedGrandTotal += grandTotal;
+    shopOrderDrafts.push({
+      lines,
+      firstItem,
+      subtotal,
+      merchantSubtotal,
+      totalQuantity,
+      parcel,
+      shippingFee,
+      grandTotal,
+    });
+  }
 
+  let feedbackRef;
+  try {
+    feedbackRef = await loadVerifiedStandaloneSlipFeedback(db, HttpsError, {
+      uid,
+      verificationFeedbackId,
+      paymentGroupId,
+      slipStoragePath,
+      expectedCombinedAmount: combinedGrandTotal,
+    });
+  } catch (error) {
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError('failed-precondition', 'ไม่สามารถยืนยันสลิปได้');
+  }
+
+  const userRecord = await admin.auth().getUser(uid);
+  const batch = db.batch();
+  const orderIds = [];
+  const now = new Date();
+
+  for (const draft of shopOrderDrafts) {
+    const {
+      lines,
+      firstItem,
+      subtotal,
+      merchantSubtotal,
+      totalQuantity,
+      parcel,
+      shippingFee,
+      grandTotal,
+    } = draft;
     const orderRef = db.collection('orders').doc();
     const orderCode = buildOrderCode('NWP', orderRef.id, now);
     const products = buildProductsPayload(lines);
@@ -1754,6 +1877,17 @@ async function createNationwideParcelOrdersHandler(request, deps) {
   }
 
   await batch.commit();
+
+  try {
+    await markStandaloneSlipFeedbackConsumed(db, FieldValue, feedbackRef, orderIds);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === 'slip_already_consumed') {
+      throw new HttpsError('failed-precondition', 'สลิปนี้ถูกใช้สร้างออเดอร์แล้ว');
+    }
+    throw new HttpsError('internal', 'สร้างออเดอร์แล้ว แต่บันทึกสถานะสลิปไม่สำเร็จ');
+  }
+
   return { orderIds, combinedGrandTotal };
 }
 

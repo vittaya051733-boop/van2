@@ -33,6 +33,7 @@ const { createOmisePayoutHandlers } = require('./omise_payouts');
 const { createPlatformFloatHandlers } = require('./platform_float');
 const { verifyStandaloneSlipCore } = require('./slipok_standalone');
 const { readClientIp, assertCallableRateLimit } = require('./callable_rate_limit');
+const { createCouponClaimsHandlers } = require('./coupon_claims');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -40,6 +41,12 @@ admin.initializeApp({
 
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
+const couponClaimsHandlers = createCouponClaimsHandlers({
+  db,
+  FieldValue,
+  DEFAULT_REGION: 'asia-southeast1',
+  enforceAppCheck: true,
+});
 const DEFAULT_REGION = 'asia-southeast1';
 const CALL_TTL_MS = 30 * 1000;
 const VAN3_ORDER_ALERT_TTL_MS = 60 * 1000;
@@ -656,12 +663,22 @@ async function identityToolkitRequest(path, body) {
     process.env.GOOGLE_CLOUD_PROJECT ||
     'van-merchant';
   const url = `https://identitytoolkit.googleapis.com/v1/projects/${projectId}/${path}`;
-  const response = await client.request({
-    url,
-    method: 'POST',
-    data: body,
-  });
-  return response.data || {};
+  try {
+    const response = await client.request({
+      url,
+      method: 'POST',
+      data: body,
+    });
+    return response.data || {};
+  } catch (error) {
+    const apiError = error?.response?.data?.error;
+    const message =
+      apiError?.message ||
+      (error instanceof Error ? error.message : String(error));
+    const wrapped = new Error(message);
+    wrapped.code = apiError?.status || error?.code;
+    throw wrapped;
+  }
 }
 
 async function sendPhoneVerificationCode(phoneNumber) {
@@ -1464,6 +1481,16 @@ exports.verifyEmailOtp = onCall(
         },
         { merge: true },
       );
+      // Keep OTP alive for the password step if the reset session lookup fails.
+      await otpRef.set(
+        {
+          expiresAt: admin.firestore.Timestamp.fromMillis(
+            Date.now() + RESET_PASSWORD_SESSION_TTL_MS,
+          ),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
       return { success: true, otpVerified: true };
     }
 
@@ -1481,7 +1508,10 @@ exports.verifyEmailOtp = onCall(
 
       if (!hasActiveResetSession) {
         if (!otpPattern.test(otp)) {
-          throw new HttpsError('invalid-argument', 'OTP ต้องเป็นตัวเลข 6 หลัก');
+          throw new HttpsError(
+            'failed-precondition',
+            'กรุณายืนยัน OTP ก่อนตั้งรหัสผ่านใหม่',
+          );
         }
         await verifyOtpDocument();
       }
@@ -1600,6 +1630,7 @@ exports.verifyEmailOtp = onCall(
 exports.sendMerchantPhoneOtp = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
@@ -1646,13 +1677,19 @@ exports.sendMerchantPhoneOtp = onCall(
       );
       return { success: true, expiresInSeconds: OTP_TTL_MS / 1000 };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       logger.error('sendMerchantPhoneOtp failed', {
         phoneNumber,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+        code: error?.code,
       });
       throw new HttpsError(
         'unavailable',
-        'ไม่สามารถส่ง SMS OTP ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง',
+        message.includes('BILLING')
+          ? 'ต้องเปิด Firebase Blaze (Billing) ก่อนส่ง SMS OTP'
+          : message.includes('RECAPTCHA') || message.includes('CAPTCHA')
+            ? 'ระบบยืนยันเบอร์ไม่พร้อม กรุณาอัปเดตแอปแล้วลองใหม่'
+            : 'ไม่สามารถส่ง SMS OTP ได้ในขณะนี้ กรุณาลองใหม่ภายหลัง',
       );
     }
   },
@@ -1661,6 +1698,7 @@ exports.sendMerchantPhoneOtp = onCall(
 exports.verifyMerchantPhoneOtp = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
@@ -1765,6 +1803,16 @@ exports.verifyMerchantPhoneOtp = onCall(
       { merge: true },
     );
 
+    await db.collection('customer_users').doc(uid).set(
+      {
+        phoneNumber,
+        displayName: buildDefaultCustomerDisplayName({ phoneNumber }),
+        profileCompleted: false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
     await docRef.delete().catch(() => {});
 
     const customToken = await admin.auth().createCustomToken(uid);
@@ -1775,6 +1823,7 @@ exports.verifyMerchantPhoneOtp = onCall(
 exports.upsertPhonePasswordProfile = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     if (!request.auth?.uid) {
@@ -1814,6 +1863,7 @@ exports.upsertPhonePasswordProfile = onCall(
 exports.signInWithPhonePassword = onCall(
   {
     region: DEFAULT_REGION,
+    enforceAppCheck: true,
   },
   async (request) => {
     const phoneNumber = normalizePhoneNumber(request.data?.phoneNumber);
@@ -2465,10 +2515,14 @@ exports.recordCheckoutDiscounts = onCall(
       );
     }
 
+    couponClaimsHandlers.markClaimedCouponsUsed(batch, userId, discountLines, now);
+
     await batch.commit();
     return { recorded: true, orderIds, checkoutQuoteId };
   },
 );
+
+exports.claimCoupon = couponClaimsHandlers.claimCoupon;
 
 function buildCheckoutDeps() {
   return {
@@ -3063,6 +3117,7 @@ exports.verifyOrderPaymentSlip = onCall(
   {
     region: DEFAULT_REGION,
     secrets: [SLIPOK_API_KEY_SECRET],
+    enforceAppCheck: true,
   },
   async (request) => {
     if (!request.auth?.uid) {
@@ -4994,6 +5049,10 @@ Object.assign(exports, riderWallet.registerHandlers());
 const riderOrderOps = require('./rider_order_ops');
 riderOrderOps.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
 Object.assign(exports, riderOrderOps.registerHandlers());
+
+const customerOrderActions = require('./customer_order_actions');
+customerOrderActions.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
+Object.assign(exports, customerOrderActions.registerHandlers());
 
 const slipVerificationDeps = {
   readRequiredConfiguredSecret,

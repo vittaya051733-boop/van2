@@ -4,6 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:van2/order_roadmap_screen.dart';
+import 'package:van2/services/customer_order_actions_service.dart';
+
+CustomerOrderActionsService testOrderActions(FakeFirebaseFirestore firestore) {
+  return CustomerOrderActionsService.forTesting(firestore);
+}
 
 void main() {
   testWidgets('roadmap card stays readable on a small screen', (tester) async {
@@ -29,6 +34,7 @@ void main() {
         home: OrderRoadmapScreen(
           orderIds: const ['order-small-1'],
           firestore: firestore,
+          orderActions: testOrderActions(firestore),
         ),
       ),
     );
@@ -70,6 +76,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-shop-image-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );
@@ -108,6 +115,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-shop-timeout-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );
@@ -151,6 +159,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-shop-cancel-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );
@@ -218,6 +227,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-shop-cod-cancel-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );
@@ -269,6 +279,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-rider-cod-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );
@@ -303,6 +314,7 @@ void main() {
         home: OrderRoadmapScreen(
           orderIds: const ['order-delivered-1'],
           firestore: firestore,
+          orderActions: testOrderActions(firestore),
         ),
       ),
     );
@@ -338,6 +350,7 @@ void main() {
           home: OrderRoadmapScreen(
             orderIds: const ['order-shop-reject-1'],
             firestore: firestore,
+            orderActions: testOrderActions(firestore),
           ),
         ),
       );

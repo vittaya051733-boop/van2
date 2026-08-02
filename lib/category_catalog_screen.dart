@@ -370,10 +370,17 @@ class _CategoryCatalogBodyState extends State<_CategoryCatalogBody> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final sections = CatalogSearchUtils.filterSections(
+        final filteredSections = CatalogSearchUtils.filterSections(
           rawSections,
           _searchQuery,
         );
+        final sections = filterByShop
+            ? filteredSections
+            : _sortSectionsByCustomerDistance(
+                filteredSections,
+                customerLatitude: widget.customerLatitude,
+                customerLongitude: widget.customerLongitude,
+              );
         if (sections.isNotEmpty) {
           AppImagePrefetch.scheduleCatalogSectionsPrefetch(
             sections,
@@ -1285,6 +1292,57 @@ double? computeCatalogShopDistanceKm({
     shopLongitude,
   );
   return meters / 1000;
+}
+
+List<PublicCatalogSection> _sortSectionsByCustomerDistance(
+  List<PublicCatalogSection> sections, {
+  required double? customerLatitude,
+  required double? customerLongitude,
+}) {
+  if (customerLatitude == null ||
+      customerLongitude == null ||
+      sections.length <= 1) {
+    return sections;
+  }
+
+  final indexed = sections.asMap().entries.toList(growable: false);
+  indexed.sort((leftEntry, rightEntry) {
+    final left = leftEntry.value;
+    final right = rightEntry.value;
+    final leftDistance = computeCatalogShopDistanceKm(
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
+      shopLatitude: left.shopLatitude,
+      shopLongitude: left.shopLongitude,
+    );
+    final rightDistance = computeCatalogShopDistanceKm(
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
+      shopLatitude: right.shopLatitude,
+      shopLongitude: right.shopLongitude,
+    );
+
+    if (leftDistance == null && rightDistance == null) {
+      return leftEntry.key.compareTo(rightEntry.key);
+    }
+    if (leftDistance == null) {
+      return 1;
+    }
+    if (rightDistance == null) {
+      return -1;
+    }
+
+    final distanceCompare = leftDistance.compareTo(rightDistance);
+    if (distanceCompare != 0) {
+      return distanceCompare;
+    }
+
+    return (left.shopName ?? left.shopId).compareTo(
+      right.shopName ?? right.shopId,
+    );
+  });
+
+  return indexed.map((entry) => entry.value).toList(growable: false);
 }
 
 bool _isRecentlyUpdatedShop(DateTime? updatedAt) {

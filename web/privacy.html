@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>นโยบายความเป็นส่วนตัว — แว๊นตลาด (VANTALAD)</title>
+  <meta name="description" content="นโยบายความเป็นส่วนตัวของแอป VANTALAD (van2) สำหรับลูกค้าแว๊นตลาด" />
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4fafb;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #4b5563;
+      --accent: #f57c00;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    header {
+      background: var(--accent);
+      color: #fff;
+      padding: 24px 16px;
+    }
+    header h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    header p { margin: 0; opacity: 0.95; }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+    }
+    .updated { color: var(--muted); font-size: 0.95rem; margin-bottom: 16px; }
+    h2 { font-size: 1.1rem; margin: 20px 0 8px; color: var(--accent); }
+    h2:first-child { margin-top: 0; }
+    p, li { color: var(--text); }
+    ul { padding-left: 1.25rem; margin: 8px 0; }
+    nav { margin-top: 12px; font-size: 0.95rem; }
+    nav a { color: #fff; margin-right: 16px; }
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 16px;
+    }
+    .lang-toggle { margin-top: 8px; }
+    .lang-toggle a { color: #fff; opacity: 0.9; }
+    #en { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>นโยบายความเป็นส่วนตัว</h1>
+    <p>แว๊นตลาด (VANTALAD / van2)</p>
+    <nav>
+      <a href="/">หน้าแรกแอป</a>
+      <a href="/terms.html">ข้อกำหนดการใช้งาน</a>
+      <span class="lang-toggle"><a href="#en" onclick="showEn(); return false;">English</a></span>
+    </nav>
+  </header>
+  <main>
+    <div class="card" id="th">
+      <p class="updated">อัปเดตล่าสุด: 1 มิ.ย. 2026</p>
+      <p>แอป VANTALAD (van2) ให้บริการสั่งซื้อสินค้าและบริการจัดส่ง</p>
+
+      <h2>ผู้ควบคุมข้อมูล</h2>
+      <ul>
+        <li>ผู้ให้บริการแพลตฟอร์ม VANTALAD (Van Market)</li>
+      </ul>
+
+      <h2>ข้อมูลที่เราเก็บ</h2>
+      <ul>
+        <li>บัญชีผู้ใช้ (อีเมล, เบอร์โทร, ชื่อ, รูปโปรไฟล์จาก Google)</li>
+        <li>ตำแหน่ง GPS เพื่อคำนวณค่าส่ง ค้นหาร้านใกล้เคียง และติดตามการจัดส่ง</li>
+        <li>ประวัติออเดอร์ ตะกร้า การชำระเงิน (รวมรูปสลิป) และบัญชีรับคืนเงิน</li>
+        <li>ข้อความแชท/โทรกับไรเดอร์ แอดมิน และรูปแนบ</li>
+        <li>โทเคนแจ้งเตือน (FCM) เมื่อคุณ opt-in</li>
+        <li>การตั้งค่าแอป (เช่น ภาษา)</li>
+      </ul>
+
+      <h2>ฐานทางกฎหมาย (PDPA)</h2>
+      <ul>
+        <li>สัญญา — ให้บริการสั่งซื้อ จัดส่ง ชำระเงิน</li>
+        <li>ความยินยอม — การตลาด/โปรโมชัน และการแจ้งเตือน (ถ้าเลือกเปิด)</li>
+        <li>ประโยชน์โดยชอบด้วยกฎหมาย — ความปลอดภัย ป้องกันทุจริต</li>
+      </ul>
+
+      <h2>ผู้ประมวลผลภายนอก</h2>
+      <ul>
+        <li>Google Firebase (Auth, Firestore, Storage, Functions, FCM)</li>
+        <li>SlipOK — ตรวจสอบสลิปชำระเงิน</li>
+        <li>Omise — ชำระเงินบัตร/QR</li>
+        <li>Agora — โทร/วิดีโอคอลผ่านแอป</li>
+        <li>ผู้ให้บริการแผนที่/พิกัด (ตามที่ระบบเรียกใช้)</li>
+      </ul>
+
+      <h2>การโอนข้อมูลต่างประเทศ</h2>
+      <p>ข้อมูลอาจถูกประมวลผลบนเซิร์ฟเวอร์ของ Google/Firebase ในต่างประเทศ ตามมาตรฐานความปลอดภัยของผู้ให้บริการ</p>
+
+      <h2>การเก็บรักษา</h2>
+      <ul>
+        <li>บัญชีและออเดอร์: ตามระยะเวลาที่จำเป็นต่อบริการ ภาษี และข้อพิพาท</li>
+        <li>สลิป/หลักฐานชำระเงิน: ตามนโยบายตรวจสอบการเงิน</li>
+        <li>บันทึกความยินยอม: เก็บเพื่อพิสูจน์การยอมรับนโยบาย</li>
+      </ul>
+
+      <h2>สิทธิของคุณ (PDPA)</h2>
+      <ul>
+        <li>เข้าถึง ส่งออก แก้ไข ลบ คัดค้าน หรือถอนความยินยอม</li>
+        <li>ใช้เมนู ตั้งค่า → ความเป็นส่วนตัวและความปลอดภัย ในแอป</li>
+      </ul>
+
+      <h2>ติดต่อ</h2>
+      <p>ตั้งค่า → ความเป็นส่วนตัว → ขอใช้สิทธิข้อมูล หรือ ติดต่อแอดมินผ่านแอป</p>
+    </div>
+
+    <div class="card" id="en">
+      <p class="updated">Last updated: 1 Jun 2026</p>
+      <p>VANTALAD (van2) provides ordering and delivery services.</p>
+      <h2>Data controller</h2>
+      <p>VANTALAD platform operator (Van Market)</p>
+      <h2>Data we collect</h2>
+      <ul>
+        <li>Account (email, phone, name, Google profile photo)</li>
+        <li>GPS for delivery fees, nearby shops, and order tracking</li>
+        <li>Orders, cart, payment proofs, refund account details</li>
+        <li>Chat/calls with riders and admin, attachments</li>
+        <li>FCM token when you opt in</li>
+        <li>App preferences (e.g. language)</li>
+      </ul>
+      <h2>Legal bases (PDPA)</h2>
+      <ul>
+        <li>Contract — ordering, delivery, payments</li>
+        <li>Consent — marketing and push notifications (if enabled)</li>
+        <li>Legitimate interest — security and fraud prevention</li>
+      </ul>
+      <h2>Processors</h2>
+      <ul>
+        <li>Google Firebase, SlipOK, Omise, Agora, map/location providers</li>
+      </ul>
+      <h2>Your rights</h2>
+      <p>Access, export, correct, delete, object, or withdraw consent via Settings → Privacy &amp; security in the app.</p>
+    </div>
+  </main>
+  <footer>© VANTALAD — Van Market</footer>
+  <script>
+    function showEn() {
+      document.getElementById('th').style.display = 'none';
+      document.getElementById('en').style.display = 'block';
+      document.querySelector('.lang-toggle').innerHTML = '<a href="#" onclick="showTh(); return false;">ไทย</a>';
+    }
+    function showTh() {
+      document.getElementById('th').style.display = 'block';
+      document.getElementById('en').style.display = 'none';
+      document.querySelector('.lang-toggle').innerHTML = '<a href="#en" onclick="showEn(); return false;">English</a>';
+    }
+  </script>
+</body>
+</html>

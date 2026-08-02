@@ -37,6 +37,167 @@ class PromotionDisplayConfig {
   bool get isBannerOnlyCart => cartStyle == 'banner_only';
 }
 
+class ClaimableCouponOffer {
+  const ClaimableCouponOffer({
+    required this.id,
+    required this.name,
+    required this.active,
+    required this.shortLabel,
+    required this.imageUrl,
+    required this.presentation,
+    required this.popupTitle,
+    required this.ctaText,
+    required this.discountType,
+    required this.discountValue,
+    required this.minSubtotal,
+    required this.priority,
+    required this.claimCount,
+    required this.maxClaimsTotal,
+    this.startAt,
+    this.endAt,
+  });
+
+  final String id;
+  final String name;
+  final bool active;
+  final String shortLabel;
+  final String imageUrl;
+  final String presentation;
+  final String popupTitle;
+  final String ctaText;
+  final String discountType;
+  final double discountValue;
+  final double minSubtotal;
+  final int priority;
+  final int claimCount;
+  final int maxClaimsTotal;
+  final DateTime? startAt;
+  final DateTime? endAt;
+
+  bool get showsPopup =>
+      presentation == 'popup' || presentation == 'both';
+  bool get showsInline =>
+      presentation == 'inline' || presentation == 'both';
+
+  String get discountSummary {
+    if (discountType == 'percent') {
+      return 'ลด ${discountValue.toStringAsFixed(0)}%';
+    }
+    if (discountType == 'free_shipping') {
+      return 'ฟรีค่าส่ง';
+    }
+    return 'ลด ฿${discountValue.toStringAsFixed(0)}';
+  }
+
+  bool get isClaimQuotaFull =>
+      maxClaimsTotal > 0 && claimCount >= maxClaimsTotal;
+
+  bool isWithinSchedule([DateTime? now]) {
+    final current = now ?? DateTime.now();
+    if (startAt != null && current.isBefore(startAt!)) {
+      return false;
+    }
+    if (endAt != null && current.isAfter(endAt!)) {
+      return false;
+    }
+    return true;
+  }
+
+  factory ClaimableCouponOffer.fromFirestore(
+    String id,
+    Map<String, dynamic> data,
+  ) {
+    final display = data['display'] is Map
+        ? Map<String, dynamic>.from(data['display'] as Map)
+        : const <String, dynamic>{};
+    final conditions = data['conditions'] is Map
+        ? Map<String, dynamic>.from(data['conditions'] as Map)
+        : const <String, dynamic>{};
+    final discount = data['discount'] is Map
+        ? Map<String, dynamic>.from(data['discount'] as Map)
+        : const <String, dynamic>{};
+
+    return ClaimableCouponOffer(
+      id: id,
+      name: (data['name'] ?? '').toString(),
+      active: data['active'] == true,
+      shortLabel: (display['shortLabel'] ?? data['name'] ?? 'คูปอง').toString(),
+      imageUrl: (display['imageUrl'] ?? '').toString(),
+      presentation: (display['presentation'] ?? 'inline').toString(),
+      popupTitle: (display['popupTitle'] ?? data['name'] ?? 'คูปอง').toString(),
+      ctaText: (display['ctaText'] ?? 'รับคูปอง').toString(),
+      discountType: (discount['type'] ?? 'fixed').toString(),
+      discountValue: (discount['value'] as num?)?.toDouble() ?? 0,
+      minSubtotal: (conditions['minSubtotal'] as num?)?.toDouble() ?? 0,
+      priority: (data['priority'] as num?)?.toInt() ?? 0,
+      claimCount: (data['claimCount'] as num?)?.toInt() ?? 0,
+      maxClaimsTotal: (conditions['maxClaimsTotal'] as num?)?.toInt() ?? 0,
+      startAt: _parseFirestoreDate(conditions['startAt']),
+      endAt: _parseFirestoreDate(conditions['endAt']),
+    );
+  }
+}
+
+class ClaimedCoupon {
+  const ClaimedCoupon({
+    required this.couponId,
+    required this.code,
+    required this.name,
+    required this.shortLabel,
+    required this.discountSummary,
+    required this.imageUrl,
+    required this.status,
+    this.claimedAt,
+    this.expiresAt,
+    this.usedAt,
+  });
+
+  final String couponId;
+  final String code;
+  final String name;
+  final String shortLabel;
+  final String discountSummary;
+  final String imageUrl;
+  final String status;
+  final DateTime? claimedAt;
+  final DateTime? expiresAt;
+  final DateTime? usedAt;
+
+  bool get isActive => status == 'active';
+
+  factory ClaimedCoupon.fromFirestore(
+    String couponId,
+    Map<String, dynamic> data,
+  ) {
+    return ClaimedCoupon(
+      couponId: couponId,
+      code: (data['code'] ?? '').toString(),
+      name: (data['name'] ?? 'คูปอง').toString(),
+      shortLabel: (data['shortLabel'] ?? data['name'] ?? 'คูปอง').toString(),
+      discountSummary: (data['discountSummary'] ?? '').toString(),
+      imageUrl: (data['imageUrl'] ?? '').toString(),
+      status: (data['status'] ?? 'active').toString(),
+      claimedAt: _parseFirestoreDate(data['claimedAt']),
+      expiresAt: _parseFirestoreDate(data['expiresAt']),
+      usedAt: _parseFirestoreDate(data['usedAt']),
+    );
+  }
+}
+
+DateTime? _parseFirestoreDate(dynamic value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is DateTime) {
+    return value;
+  }
+  try {
+    return (value as dynamic).toDate() as DateTime;
+  } catch (_) {
+    return null;
+  }
+}
+
 class PromotionOffer {
   const PromotionOffer({
     required this.id,

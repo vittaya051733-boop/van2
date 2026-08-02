@@ -80,8 +80,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
   bool _isLoading = false;
   bool _isOtpSent = false;
   bool _isResetOtpVerified = false;
-  String _verificationId = '';
-  int? _resendToken;
+  String _verifiedResetOtp = '';
   Timer? _countdownTimer;
   int _countdownSeconds = 0;
 
@@ -193,6 +192,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       setState(() {
         _isOtpSent = true;
         _isResetOtpVerified = false;
+        _verifiedResetOtp = '';
       });
       _startCountdown();
       _showSnackBar(
@@ -226,6 +226,11 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       return;
     }
 
+    if (_isResetPasswordFlow && _isResetOtpVerified) {
+      await _submitNewPassword();
+      return;
+    }
+
     final otp = _normalizeOtp(_otpController.text);
     _syncNormalizedOtp(otp);
 
@@ -239,27 +244,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       return;
     }
 
-    final targetPassword = _isResetPasswordFlow
-        ? _newPasswordController.text.trim()
-        : widget.password;
-
-    if (_isResetPasswordFlow) {
-      final confirmPassword = _confirmPasswordController.text.trim();
-      if (targetPassword.length < 6) {
-        _showSnackBar(
-          'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร',
-          backgroundColor: Colors.red,
-        );
-        return;
-      }
-      if (targetPassword != confirmPassword) {
-        _showSnackBar(
-          'รหัสผ่านใหม่และรหัสยืนยันไม่ตรงกัน',
-          backgroundColor: Colors.red,
-        );
-        return;
-      }
-    }
+    final targetPassword = widget.password;
 
     setState(() => _isLoading = true);
     try {
@@ -269,9 +254,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         'email': _email,
         'otp': otp,
         'password': targetPassword,
-        'mode': _isResetPasswordFlow
-            ? 'reset_password'
-            : (_isRegisterFlow ? 'register' : 'sign_in'),
+        'mode': _isRegisterFlow ? 'register' : 'sign_in',
       });
 
       final data = response.data;
@@ -323,6 +306,84 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     }
   }
 
+  Future<void> _submitNewPassword() async {
+    final targetPassword = _newPasswordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+
+    if (targetPassword.length < 6) {
+      _showSnackBar(
+        'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร',
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
+    if (targetPassword != confirmPassword) {
+      _showSnackBar(
+        'รหัสผ่านใหม่และรหัสยืนยันไม่ตรงกัน',
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await AppCheckGuard.ensureAuthReady();
+      final verifyCallable = _functions.httpsCallable('verifyEmailOtp');
+      final payload = <String, dynamic>{
+        'email': _email,
+        'password': targetPassword,
+        'mode': 'reset_password',
+      };
+      if (_verifiedResetOtp.length == 6) {
+        payload['otp'] = _verifiedResetOtp;
+      }
+
+      final response = await verifyCallable.call(payload);
+      final data = response.data;
+      final responseMap = data is Map ? Map<Object?, Object?>.from(data) : null;
+      final customToken = responseMap?['customToken'];
+
+      if (customToken is String && customToken.trim().isNotEmpty) {
+        await FirebaseAuth.instance.signInWithCustomToken(customToken);
+      } else {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: _email,
+          password: targetPassword,
+        );
+      }
+
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } on FirebaseFunctionsException catch (error) {
+      if (error.code == 'not-found' || error.code == 'deadline-exceeded') {
+        setState(() {
+          _isResetOtpVerified = false;
+          _verifiedResetOtp = '';
+        });
+      }
+      _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
+    } on MissingPluginException {
+      _showSnackBar(
+        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ Email OTP',
+        backgroundColor: Colors.red,
+      );
+    } catch (error) {
+      _showSnackBar(
+        _mapUnexpectedFunctionError(
+          error,
+          fallback: 'ตั้งรหัสผ่านใหม่ไม่สำเร็จ',
+        ),
+        backgroundColor: Colors.red,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   Future<void> _verifyResetPasswordOtp(String otp) async {
     setState(() => _isLoading = true);
     try {
@@ -338,7 +399,10 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         return;
       }
 
-      setState(() => _isResetOtpVerified = true);
+      setState(() {
+        _isResetOtpVerified = true;
+        _verifiedResetOtp = otp;
+      });
       _showSnackBar('OTP ถูกต้อง กรุณาตั้งรหัสผ่านใหม่', backgroundColor: Colors.green);
     } on FirebaseFunctionsException catch (error) {
       _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
@@ -375,7 +439,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       case 'not-found':
         return error.message ?? 'ไม่พบข้อมูลสำหรับอีเมลนี้';
       case 'failed-precondition':
-        return 'ระบบ Email OTP ยังไม่ได้ตั้งค่า SMTP บนเซิร์ฟเวอร์';
+        return error.message ??
+            'ระบบ Email OTP ยังไม่ได้ตั้งค่า SMTP บนเซิร์ฟเวอร์';
       case 'unavailable':
       case 'internal':
         return error.message ??
@@ -420,38 +485,39 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     setState(() => _isLoading = true);
 
     try {
-      await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: _normalizedPhone,
-        forceResendingToken: _resendToken,
-        verificationCompleted: (credential) async {
-          await _signInWithPhoneCredential(credential);
-        },
-        verificationFailed: (error) {
-          if (!mounted) {
-            return;
-          }
-          setState(() => _isLoading = false);
-          _showSnackBar(_mapPhoneError(error), backgroundColor: Colors.red);
-        },
-        codeSent: (verificationId, resendToken) {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _isLoading = false;
-            _isOtpSent = true;
-            _verificationId = verificationId;
-            _resendToken = resendToken;
-          });
-          _startCountdown();
-          _showSnackBar(
-            'ส่ง OTP ไปที่ $_normalizedPhone แล้ว',
-            backgroundColor: Colors.green,
-          );
-        },
-        codeAutoRetrievalTimeout: (verificationId) {
-          _verificationId = verificationId;
-        },
+      await AppCheckGuard.ensureAuthReady();
+      final callable = _functions.httpsCallable('sendMerchantPhoneOtp');
+      await callable.call(<String, dynamic>{
+        'phoneNumber': _normalizedPhone,
+      });
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isLoading = false;
+        _isOtpSent = true;
+      });
+      _startCountdown();
+      _showSnackBar(
+        'ส่ง OTP SMS ไปที่ $_normalizedPhone แล้ว',
+        backgroundColor: Colors.green,
+      );
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _isLoading = false);
+      _showSnackBar(_mapPhoneFunctionError(error), backgroundColor: Colors.red);
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _isLoading = false);
+      _showSnackBar(
+        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ OTP',
+        backgroundColor: Colors.red,
       );
     } catch (error) {
       if (!mounted) {
@@ -465,14 +531,19 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     }
   }
 
-  String _mapPhoneError(FirebaseAuthException error) {
+  String _mapPhoneFunctionError(FirebaseFunctionsException error) {
     switch (error.code) {
-      case 'invalid-phone-number':
-        return 'เบอร์โทรศัพท์ไม่ถูกต้อง';
-      case 'too-many-requests':
-        return 'มีการขอ OTP มากเกินไป กรุณาลองใหม่ภายหลัง';
-      case 'quota-exceeded':
-        return 'โควตาการส่ง OTP เต็มแล้ว';
+      case 'invalid-argument':
+        return error.message ?? 'รหัส OTP ไม่ถูกต้อง';
+      case 'failed-precondition':
+        return error.message ?? 'กรุณากดส่ง OTP ก่อนยืนยัน';
+      case 'deadline-exceeded':
+        return error.message ?? 'OTP หมดอายุ กรุณาขอรหัสใหม่';
+      case 'resource-exhausted':
+        return error.message ?? 'ขอ OTP บ่อยเกินไป กรุณารอแล้วลองใหม่';
+      case 'unavailable':
+        return error.message ??
+            'ไม่สามารถส่ง SMS ได้ ตรวจ Firebase Billing (Blaze) และเปิด Phone sign-in';
       default:
         return error.message ?? 'ส่ง OTP ไม่สำเร็จ';
     }
@@ -489,22 +560,41 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: _verificationId,
-        smsCode: otp,
-      );
-      await _signInWithPhoneCredential(credential);
+      await AppCheckGuard.ensureAuthReady();
+      final callable = _functions.httpsCallable('verifyMerchantPhoneOtp');
+      final response = await callable.call(<String, dynamic>{
+        'phoneNumber': _normalizedPhone,
+        'otp': otp,
+        'password': widget.password,
+      });
+
+      final data = response.data;
+      final responseMap = data is Map ? Map<Object?, Object?>.from(data) : null;
+      final customToken = responseMap?['customToken'];
+
+      if (customToken is String && customToken.trim().isNotEmpty) {
+        await FirebaseAuth.instance.signInWithCustomToken(customToken);
+      } else {
+        throw Exception('ไม่พบ custom token หลังยืนยัน OTP');
+      }
+
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } on FirebaseFunctionsException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _isLoading = false);
+      _showSnackBar(_mapPhoneFunctionError(error), backgroundColor: Colors.red);
     } on FirebaseAuthException catch (error) {
       if (!mounted) {
         return;
       }
       setState(() => _isLoading = false);
       _showSnackBar(
-        error.code == 'invalid-verification-code'
-            ? 'รหัส OTP ไม่ถูกต้อง'
-            : error.code == 'session-expired'
-            ? 'OTP หมดอายุ กรุณาขอรหัสใหม่'
-            : (error.message ?? 'ยืนยัน OTP ไม่สำเร็จ'),
+        error.message ?? 'ยืนยัน OTP ไม่สำเร็จ',
         backgroundColor: Colors.red,
       );
     } catch (error) {
@@ -516,29 +606,6 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         'ยืนยัน OTP ไม่สำเร็จ: $error',
         backgroundColor: Colors.red,
       );
-    }
-  }
-
-  Future<void> _signInWithPhoneCredential(
-    PhoneAuthCredential credential,
-  ) async {
-    try {
-      await FirebaseAuth.instance.signInWithCredential(credential);
-      try {
-        final callable = _functions.httpsCallable('upsertPhonePasswordProfile');
-        await callable.call(<String, dynamic>{
-          'phoneNumber': _normalizedPhone,
-          'password': widget.password,
-        });
-      } catch (_) {
-        // Login already succeeded; do not block user if profile sync fails.
-      }
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } on FirebaseAuthException {
-      rethrow;
     }
   }
 

@@ -68,6 +68,11 @@ service firebase.storage {
       allow write: if ownsSegment(requesterUid);
     }
 
+    match /platform_coupon_images/{couponId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isPrivilegedAdmin();
+    }
+
     match /review_uploads/{ownerId}/{allPaths=**} {
       allow read: if signedIn();
       allow write: if ownsSegment(ownerId);

@@ -190,6 +190,19 @@
   </style>
 
   <script id="flutter-load-script">
+    function isFlutterAppVisible() {
+      return !!(
+        document.querySelector("flutter-view") ||
+        document.querySelector("flt-glass-pane") ||
+        document.querySelector("flt-scene-host")
+      );
+    }
+
+    function markFlutterReady() {
+      window._flutterAppReady = true;
+      removeSplashFromWeb();
+    }
+
     function removeSplashFromWeb() {
       document.getElementById("flutter-loading")?.remove();
       window.clearTimeout(window._flutterLoaderTimeout);
@@ -197,7 +210,28 @@
       document.getElementById("flutter-load-error")?.remove();
     }
 
+    window.addEventListener("flutter-first-frame", markFlutterReady);
+
+    function startFlutterObserver() {
+      const flutterObserver = new MutationObserver(function () {
+        if (isFlutterAppVisible()) {
+          markFlutterReady();
+          flutterObserver.disconnect();
+        }
+      });
+      flutterObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    if (document.body) {
+      startFlutterObserver();
+    } else {
+      window.addEventListener("DOMContentLoaded", startFlutterObserver);
+    }
+
     window.addEventListener("error", function (event) {
+      if (window._flutterAppReady || isFlutterAppVisible()) {
+        return;
+      }
       const message = event?.message || "";
       if (!message.includes("flutter") && !message.includes("canvaskit")) {
         return;
@@ -206,6 +240,10 @@
     });
 
     window._flutterLoaderTimeout = window.setTimeout(function () {
+      if (window._flutterAppReady || isFlutterAppVisible()) {
+        removeSplashFromWeb();
+        return;
+      }
       if (!document.getElementById("flutter-loading")) {
         return;
       }

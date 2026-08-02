@@ -70,11 +70,9 @@ void main() {
       config: malformed,
     );
 
-    expect(
-      resolved.promptPayNationalIdOrTaxId,
-      PaymentCollectionSettings.defaults.promptPayNationalIdOrTaxId,
-    );
-    expect(channel.qrPayload, isNotNull);
-    expect(channel.type, PaymentChannelType.promptPayNationalId);
+    expect(resolved.promptPayNationalIdOrTaxId, isNull);
+    expect(resolved.promptPayPhoneNumber, isNull);
+    expect(channel.type, PaymentChannelType.bankTransfer);
+    expect(channel.qrPayload, isNull);
   });
 }

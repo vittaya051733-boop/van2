@@ -4,6 +4,7 @@ import '../public_catalog_local_cache.dart';
 import '../public_catalog_service.dart';
 import '../utils/app_image_cache.dart';
 import '../utils/catalog_product_image_url.dart';
+import 'nationwide_catalog_service.dart';
 import 'video_prefetch_service.dart';
 
 /// Warms catalog/list thumbnails on disk (shared cache across all van2 screens).
@@ -187,13 +188,43 @@ class AppImagePrefetch {
     );
   }
 
-  static Future<void> continueWarmNationwide() async {
+  static Future<void> continueWarmNationwide({String? categoryKey}) async {
+    if (categoryKey != null && categoryKey.trim().isNotEmpty) {
+      await _continueWarmNationwideCategory(categoryKey.trim());
+      return;
+    }
     await _continueWarmCategory(
       key: nationwideKey,
       sectionsLoader: () => PublicCatalogService.sectionsFromLocalCache(
         nationwideShippingOnly: true,
       ),
     );
+  }
+
+  static Future<void> _continueWarmNationwideCategory(String categoryKey) async {
+    try {
+      final sections = await PublicCatalogService.sectionsFromLocalCache(
+        nationwideShippingOnly: true,
+      );
+      final products = sections
+          .expand((section) => section.products)
+          .where(
+            (product) =>
+                NationwideCatalogService.categoryKeyForProduct(product) ==
+                categoryKey,
+          )
+          .toList(growable: false);
+      if (products.isEmpty) {
+        return;
+      }
+      await prefetchProductsImmediate(
+        products,
+        limit: onTapPrefetchBatch,
+        parallel: 4,
+      );
+    } catch (_) {
+      // UI still loads images on demand.
+    }
   }
 
   static Future<void> _continueWarmCategory({

@@ -118,6 +118,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   bool _isLoadingSuggestions = false;
   bool _showSuggestions = false;
   Timer? _suggestionRefreshDebounce;
+  bool _mapReady = !kIsWeb;
   int _suggestionsRequestId = 0;
   bool _isSubmittingOrder = false;
   String? _activeIdempotencyKey;
@@ -231,6 +232,9 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   }
 
   Set<Polyline> get _polylines {
+    if (kIsWeb && !_mapReady) {
+      return const <Polyline>{};
+    }
     if (_routePoints.length < 2) {
       return const <Polyline>{};
     }
@@ -241,7 +245,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         points: _routePoints,
         color: const Color(0xFFF57C00),
         width: 5,
-        geodesic: true,
+        // geodesic on web triggers stripe artifacts when Maps JS tiles lag (Safari).
+        geodesic: !kIsWeb,
       ),
     };
   }
@@ -1293,23 +1298,33 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     return Scaffold(
       body: Stack(
         children: <Widget>[
-          GoogleMap(
-            initialCameraPosition: CameraPosition(
-              target: _mapCenter,
-              zoom: 15,
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: _mapCenter,
+                zoom: 15,
+              ),
+              onMapCreated: (controller) async {
+                _mapController = controller;
+                if (kIsWeb) {
+                  // Web-only: wait for Maps JS tiles before route overlays.
+                  await Future<void>.delayed(const Duration(milliseconds: 400));
+                  if (!mounted) {
+                    return;
+                  }
+                  setState(() => _mapReady = true);
+                }
+                if (_hasDestination) {
+                  unawaited(_fitRouteBounds());
+                }
+              },
+              markers: _markers,
+              polylines: _polylines,
+              myLocationEnabled: _pickupReady,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              onTap: _onMapTap,
             ),
-            onMapCreated: (controller) {
-              _mapController = controller;
-              if (_hasDestination) {
-                unawaited(_fitRouteBounds());
-              }
-            },
-            markers: _markers,
-            polylines: _polylines,
-            myLocationEnabled: _pickupReady,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            onTap: _onMapTap,
           ),
           SafeArea(
             child: Padding(

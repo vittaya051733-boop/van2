@@ -162,15 +162,29 @@ class RiderAvailabilityService {
   }
 
   void _ensurePoolSubscription() {
-    if (_poolSub != null) {
-      return;
+    if (_poolController == null) {
+      _poolController = StreamController<RiderPoolSnapshot>.broadcast();
+      _poolBroadcastStream = _poolController!.stream;
     }
-    _poolController ??= StreamController<RiderPoolSnapshot>.broadcast();
-    _poolBroadcastStream ??= _poolController!.stream;
-    _attachPoolListener();
+
+    _authSub ??= FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user == null) {
+        _poolSub?.cancel();
+        _poolSub = null;
+        return;
+      }
+      _attachPoolListener();
+    });
+
+    if (FirebaseAuth.instance.currentUser != null) {
+      _attachPoolListener();
+    }
   }
 
   void _attachPoolListener() {
+    if (FirebaseAuth.instance.currentUser == null) {
+      return;
+    }
     _poolSub?.cancel();
     _poolSub = FirebaseFirestore.instance.doc(_poolDocPath).snapshots().listen(
       (snapshot) {

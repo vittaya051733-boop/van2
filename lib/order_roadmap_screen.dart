@@ -20,6 +20,7 @@ import 'utils/catalog_product_image_url.dart';
 import 'widgets/cached_app_image.dart';
 import 'widgets/no_rider_customer_actions_banner.dart';
 import 'widgets/order_refund_dialog.dart';
+import 'services/customer_order_actions_service.dart';
 import 'services/order_reorder_service.dart';
 import 'travel_tracking_screen.dart';
 import 'widgets/order_history_compact_card.dart';
@@ -203,13 +204,16 @@ class OrderRoadmapScreen extends StatelessWidget {
     this.onReorderProducts,
     this.onTravelAgain,
     FirebaseFirestore? firestore,
-  }) : firestore = firestore ?? FirebaseFirestore.instance;
+    CustomerOrderActionsService? orderActions,
+  })  : firestore = firestore ?? FirebaseFirestore.instance,
+        orderActions = orderActions ?? CustomerOrderActionsService.production();
 
   final List<String> orderIds;
   final bool showHistory;
   final Future<void> Function(Map<String, dynamic> orderData)? onReorderProducts;
   final VoidCallback? onTravelAgain;
   final FirebaseFirestore firestore;
+  final CustomerOrderActionsService orderActions;
 
   void _openHistory(BuildContext context) {
     Navigator.of(context).push<void>(
@@ -219,6 +223,7 @@ class OrderRoadmapScreen extends StatelessWidget {
           onReorderProducts: onReorderProducts,
           onTravelAgain: onTravelAgain,
           firestore: firestore,
+          orderActions: orderActions,
         ),
       ),
     );
@@ -241,6 +246,7 @@ class OrderRoadmapScreen extends StatelessWidget {
           firestore: firestore,
           onReorderProducts: onReorderProducts,
           onTravelAgain: onTravelAgain,
+          orderActions: orderActions,
         ),
       );
     }
@@ -266,16 +272,22 @@ class OrderRoadmapScreen extends StatelessWidget {
         uid: uid,
         firestore: firestore,
         onOpenHistory: () => _openHistory(context),
+        orderActions: orderActions,
       ),
     );
   }
 }
 
 class _RoadmapList extends StatelessWidget {
-  const _RoadmapList({required this.orderIds, required this.firestore});
+  const _RoadmapList({
+    required this.orderIds,
+    required this.firestore,
+    required this.orderActions,
+  });
 
   final List<String> orderIds;
   final FirebaseFirestore firestore;
+  final CustomerOrderActionsService orderActions;
 
   @override
   Widget build(BuildContext context) {
@@ -285,7 +297,11 @@ class _RoadmapList extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         final orderId = orderIds[index];
-        return _OrderRoadmapCard(orderId: orderId, firestore: firestore);
+        return _OrderRoadmapCard(
+          orderId: orderId,
+          firestore: firestore,
+          orderActions: orderActions,
+        );
       },
     );
   }
@@ -318,12 +334,14 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
     required this.uid,
     required this.firestore,
     required this.onOpenHistory,
+    required this.orderActions,
   });
 
   final List<String> preferredOrderIds;
   final String? uid;
   final FirebaseFirestore firestore;
   final VoidCallback onOpenHistory;
+  final CustomerOrderActionsService orderActions;
 
   @override
   Widget build(BuildContext context) {
@@ -413,7 +431,11 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
           );
         }
 
-        return _RoadmapList(orderIds: orderIds, firestore: firestore);
+        return _RoadmapList(
+          orderIds: orderIds,
+          firestore: firestore,
+          orderActions: orderActions,
+        );
       },
     );
   }
@@ -461,12 +483,14 @@ class _CustomerHistoryRoadmapList extends StatefulWidget {
     required this.firestore,
     this.onReorderProducts,
     this.onTravelAgain,
+    this.orderActions,
   });
 
   final String? uid;
   final FirebaseFirestore firestore;
   final Future<void> Function(Map<String, dynamic> orderData)? onReorderProducts;
   final VoidCallback? onTravelAgain;
+  final CustomerOrderActionsService? orderActions;
 
   @override
   State<_CustomerHistoryRoadmapList> createState() =>
@@ -645,10 +669,15 @@ class _HistorySectionHeader extends StatelessWidget {
 }
 
 class _OrderRoadmapCard extends StatelessWidget {
-  const _OrderRoadmapCard({required this.orderId, required this.firestore});
+  const _OrderRoadmapCard({
+    required this.orderId,
+    required this.firestore,
+    required this.orderActions,
+  });
 
   final String orderId;
   final FirebaseFirestore firestore;
+  final CustomerOrderActionsService orderActions;
 
   @override
   Widget build(BuildContext context) {
@@ -942,12 +971,14 @@ class _OrderRoadmapCard extends StatelessWidget {
                   orderId: orderId,
                   data: data,
                   firestore: firestore,
+                  orderActions: orderActions,
                 ),
                 if (!isTravelOrder)
                   _AwaitingShopDecisionBanner(
                     orderId: orderId,
                     data: data,
                     firestore: firestore,
+                    orderActions: orderActions,
                   ),
                 _TimelineStepTile(
                   label: 'ไรเดอร์รับออเดอร์',
@@ -2787,11 +2818,13 @@ class _AwaitingShopDecisionBanner extends StatefulWidget {
     required this.orderId,
     required this.data,
     required this.firestore,
+    required this.orderActions,
   });
 
   final String orderId;
   final Map<String, dynamic> data;
   final FirebaseFirestore firestore;
+  final CustomerOrderActionsService orderActions;
 
   @override
   State<_AwaitingShopDecisionBanner> createState() =>
@@ -2891,18 +2924,7 @@ class _AwaitingShopDecisionBannerState
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final until = DateTime.now().add(_customerExtraWaitDuration);
-      await widget.firestore.collection('orders').doc(widget.orderId).set({
-        'status': 'accepted',
-        'customerShopWaitUntil': Timestamp.fromDate(until),
-        'customerShopWaitRequestedAt': FieldValue.serverTimestamp(),
-        'customerShopChoice': 'wait_15_min',
-        'shopDecisionStatus': FieldValue.delete(),
-        'shopRejectedAt': FieldValue.delete(),
-        'shopRejectedBy': FieldValue.delete(),
-        'cancelReason': FieldValue.delete(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await widget.orderActions.shopWait15Min(orderId: widget.orderId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -2932,35 +2954,11 @@ class _AwaitingShopDecisionBannerState
 
     setState(() => _busy = true);
     try {
-      final currentUid = _currentUserUidOrNull();
-      final cancelReason = _shopRejected
-          ? 'customer_cancelled_after_shop_rejected'
-          : 'customer_cancelled_after_shop_no_response';
-      final update = <String, dynamic>{
-        'status': 'cancelled',
-        'statusLabel': 'ยกเลิกออเดอร์',
-        'cancelledAt': FieldValue.serverTimestamp(),
-        'cancelledBy': currentUid,
-        'cancelReason': cancelReason,
-        'customerShopChoice': 'cancel',
-        'customerCancelledAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
-
-      if (refundInfo != null) {
-        update.addAll({
-          'refundRequested': true,
-          'refundRequestedAt': FieldValue.serverTimestamp(),
-          'refundRequestedBy': currentUid,
-          'refundStatus': 'requested',
-          ...refundInfo,
-        });
-      }
-
-      await widget.firestore
-          .collection('orders')
-          .doc(widget.orderId)
-          .set(update, SetOptions(merge: true));
+      await widget.orderActions.shopCancel(
+        orderId: widget.orderId,
+        shopRejected: _shopRejected,
+        refundInfo: refundInfo,
+      );
       if (mounted) {
         ScaffoldMessenger.of(
           context,

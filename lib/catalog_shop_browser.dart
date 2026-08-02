@@ -658,6 +658,201 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
   }
 }
 
+class NationwideMixedProductsFeed extends StatefulWidget {
+  const NationwideMixedProductsFeed({
+    super.key,
+    required this.products,
+    this.customerLatitude,
+    this.customerLongitude,
+    this.onConfirmOrder,
+    this.onNavigateToCart,
+  });
+
+  final List<PublicCatalogProduct> products;
+  final double? customerLatitude;
+  final double? customerLongitude;
+  final ValueChanged<CartProductSelection>? onConfirmOrder;
+  final VoidCallback? onNavigateToCart;
+
+  @override
+  State<NationwideMixedProductsFeed> createState() =>
+      _NationwideMixedProductsFeedState();
+}
+
+class _NationwideMixedProductsFeedState extends State<NationwideMixedProductsFeed> {
+  String? _selectedHeadingKey;
+
+  Map<String, List<PublicCatalogProduct>> _productsByShopId() {
+    final grouped = <String, List<PublicCatalogProduct>>{};
+    for (final product in widget.products) {
+      grouped
+          .putIfAbsent(product.shopId, () => <PublicCatalogProduct>[])
+          .add(product);
+    }
+    return grouped;
+  }
+
+  List<_CatalogHeadingGroup> _groupByHeading(List<PublicCatalogProduct> products) {
+    const fallbackHeading = 'อื่นๆ';
+    final byHeading = <String, List<PublicCatalogProduct>>{};
+    final headingLabels = <String, String>{};
+    final headingSortByKey = <String, int>{};
+
+    for (final product in products) {
+      final headingLabel = _readProductHeadingLabel(product.data, fallbackHeading);
+      final headingKey = _readCatalogSlug(null, headingLabel);
+      headingLabels[headingKey] = headingLabel;
+      byHeading.putIfAbsent(headingKey, () => <PublicCatalogProduct>[]).add(product);
+
+      final sort = _parseCatalogSort(product.data['catalogHeadingSort']);
+      if (headingLabel != fallbackHeading && sort != null) {
+        headingSortByKey[headingKey] = sort;
+      }
+    }
+
+    final groups = byHeading.entries
+        .map(
+          (entry) => _CatalogHeadingGroup(
+            heading: headingLabels[entry.key] ?? fallbackHeading,
+            sortOrder: headingSortByKey[entry.key] ?? 999999,
+            products: entry.value,
+          ),
+        )
+        .toList(growable: false);
+
+    groups.sort((left, right) {
+      final bySort = left.sortOrder.compareTo(right.sortOrder);
+      if (bySort != 0) {
+        return bySort;
+      }
+      return left.heading.compareTo(right.heading);
+    });
+
+    return groups;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.products.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final productsByShopId = _productsByShopId();
+    final headingGroups = _groupByHeading(widget.products);
+    const fallbackHeading = 'อื่นๆ';
+    final showHeadingFilters =
+        headingGroups.length > 1 ||
+        (headingGroups.isNotEmpty && headingGroups.first.heading != fallbackHeading);
+    final visibleHeadingGroups = _selectedHeadingKey == null
+        ? headingGroups
+        : headingGroups
+              .where(
+                (group) =>
+                    _readCatalogSlug(null, group.heading) == _selectedHeadingKey,
+              )
+              .toList(growable: false);
+
+    final cardSize = catalogGridProductCardSize(context);
+    const spacing = 12.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        if (showHeadingFilters) ...<Widget>[
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: FilterChip(
+                    label: const Text('ทั้งหมด'),
+                    selected: _selectedHeadingKey == null,
+                    onSelected: (_) => setState(() => _selectedHeadingKey = null),
+                    selectedColor: const Color(0xFFFFEDD5),
+                    checkmarkColor: const Color(0xFF9A3412),
+                  ),
+                ),
+                for (final headingGroup in headingGroups)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: FilterChip(
+                      label: Text(headingGroup.heading),
+                      selected:
+                          _selectedHeadingKey ==
+                          _readCatalogSlug(null, headingGroup.heading),
+                      onSelected: (_) => setState(
+                        () => _selectedHeadingKey = _readCatalogSlug(
+                          null,
+                          headingGroup.heading,
+                        ),
+                      ),
+                      selectedColor: const Color(0xFFFFEDD5),
+                      checkmarkColor: const Color(0xFF9A3412),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        for (final headingGroup in visibleHeadingGroups) ...<Widget>[
+          if (headingGroup.heading != fallbackHeading ||
+              headingGroups.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 8),
+              child: Text(
+                headingGroup.heading,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF111827),
+                ),
+              ),
+            ),
+          SizedBox(
+            height: cardSize.height,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              cacheExtent: 360,
+              itemCount: headingGroup.products.length,
+              separatorBuilder: (_, __) => const SizedBox(width: spacing),
+              itemBuilder: (context, index) {
+                final product = headingGroup.products[index];
+                final shopProducts =
+                    productsByShopId[product.shopId] ?? <PublicCatalogProduct>[product];
+                final shopDistanceKm = computeCatalogShopDistanceKm(
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  shopLatitude: product.shopLatitude,
+                  shopLongitude: product.shopLongitude,
+                );
+
+                return SizedBox(
+                  width: cardSize.width,
+                  height: cardSize.height,
+                  child: CatalogProductCard(
+                    product: product,
+                    shopProducts: shopProducts,
+                    shopLatitude: product.shopLatitude,
+                    shopLongitude: product.shopLongitude,
+                    shopDistanceKm: shopDistanceKm,
+                    customerLatitude: widget.customerLatitude,
+                    customerLongitude: widget.customerLongitude,
+                    onConfirmOrder: widget.onConfirmOrder,
+                    onNavigateToCart: widget.onNavigateToCart,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+      ],
+    );
+  }
+}
+
 List<_CatalogTypeGroup> _groupProductsByCatalogType(
   List<PublicCatalogProduct> products,
 ) {

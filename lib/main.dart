@@ -27,6 +27,7 @@ import 'services/home_product_image_prefetch.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
 import 'nationwide_cart_screen.dart';
+import 'nationwide_category_picker_screen.dart';
 import 'notification_screen.dart';
 import 'order_roadmap_screen.dart';
 import 'services/order_reorder_service.dart';
@@ -38,7 +39,12 @@ import 'pricing_config_service.dart';
 import 'services/locale_service.dart';
 import 'services/promotion_catalog_service.dart';
 import 'services/promotion_display_config_service.dart';
+import 'services/claimable_coupon_service.dart';
+import 'services/user_coupon_wallet_service.dart';
 import 'widgets/home_promo_carousel.dart';
+import 'widgets/claimable_coupon_popup.dart';
+import 'widgets/claimable_coupon_strip.dart';
+import 'widgets/my_coupons_sheet.dart';
 import 'public_catalog_service.dart';
 import 'services/cart_session_service.dart';
 import 'services/favorites_service.dart';
@@ -939,6 +945,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _selectedBottomTab = 0;
   List<String> _roadmapFocusOrderIds = const <String>[];
   int _unreadNotificationCount = 0;
+  StreamSubscription<User?>? _authStateSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _unreadNotificationSubscription;
   _ActiveCatalog? _activeCatalog;
@@ -948,6 +955,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _cartSyncDebounce;
   Timer? _cartExpiryTimer;
   DateTime? _lastRootBackPressAt;
+  final String _couponPopupSessionId =
+      DateTime.now().millisecondsSinceEpoch.toString();
+  String? _pendingCartCouponCode;
+  int _couponUiRevision = 0;
 
   static const Color _quickActionIconColor = Color(0xFFEF8A17);
 
@@ -1006,6 +1017,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _userLocation = widget.userLocation;
+    _authStateSubscription = FirebaseAuth.instance.authStateChanges().listen((_) {
+      _listenUnreadNotifications();
+    });
     _listenUnreadNotifications();
     unawaited(FavoritesService.instance.ensureLoaded());
     unawaited(_restorePersistedCart());
@@ -1016,6 +1030,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _cartSyncDebounce?.cancel();
     _cartExpiryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    _authStateSubscription?.cancel();
     _unreadNotificationSubscription?.cancel();
     unawaited(
       CartSessionService.saveLocalCart(
@@ -1198,37 +1213,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _listenUnreadNotifications() {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
+    _unreadNotificationSubscription?.cancel();
+    _unreadNotificationSubscription = null;
+
+    if (user == null || user.isAnonymous) {
+      if (mounted) {
+        setState(() => _unreadNotificationCount = 0);
+      }
       return;
     }
 
-    _unreadNotificationSubscription?.cancel();
     _unreadNotificationSubscription = FirebaseFirestore.instance
         .collection('app_notifications')
         .where('recipientUid', isEqualTo: user.uid)
         .limit(50)
         .snapshots()
-        .listen((snapshot) {
-          var totalUnread = 0;
-          for (final doc in snapshot.docs) {
-            final data = doc.data();
-            final targetApp = (data['targetApp'] ?? '').toString().trim();
-            if (targetApp.isNotEmpty && targetApp != 'van2') {
-              continue;
+        .listen(
+          (snapshot) {
+            var totalUnread = 0;
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              final targetApp = (data['targetApp'] ?? '').toString().trim();
+              if (targetApp.isNotEmpty && targetApp != 'van2') {
+                continue;
+              }
+              if (data['isRead'] == true ||
+                  data['read'] == true ||
+                  data['readAt'] != null) {
+                continue;
+              }
+              totalUnread += 1;
             }
-            if (data['isRead'] == true ||
-                data['read'] == true ||
-                data['readAt'] != null) {
-              continue;
-            }
-            totalUnread += 1;
-          }
 
-          if (!mounted) {
-            return;
-          }
-          setState(() => _unreadNotificationCount = totalUnread);
-        });
+            if (!mounted) {
+              return;
+            }
+            setState(() => _unreadNotificationCount = totalUnread);
+          },
+          onError: (Object error, StackTrace stack) {
+            debugPrint('Unread notifications listener error: $error');
+            if (mounted) {
+              setState(() => _unreadNotificationCount = 0);
+            }
+          },
+        );
   }
 
   Future<void> _pickCartCustomerLocation() async {
@@ -1828,19 +1856,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (item.actionKey == 'nationwide-shipping') {
+      await _ensureCatalogFirebaseSession();
       if (!mounted) {
         return;
       }
-      setState(() {
-        _selectedBottomTab = 0;
-        _showNationwideCart = false;
-        _activeCatalog = _ActiveCatalog(
-          title: item.label,
-          nationwideShippingOnly: true,
-        );
-      });
       unawaited(AppImagePrefetch.continueWarmNationwide());
-      unawaited(_ensureCatalogFirebaseSession());
+      await _openNationwideCategoryPicker();
       return;
     }
 
@@ -1976,16 +1997,98 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _openCartTab() {
     setState(() {
       _selectedBottomTab = 1;
+      _activeCatalog = null;
       _showNationwideCart = false;
     });
   }
 
+  void _openMyCouponsWallet() {
+    unawaited(
+      _runProtectedAction(() async {
+        if (!mounted) {
+          return;
+        }
+        await showMyCouponsSheet(
+          context,
+          onApplyToCart: (code) {
+            setState(() {
+              _pendingCartCouponCode = code;
+              _selectedBottomTab = 1;
+              _activeCatalog = null;
+              _showNationwideCart = false;
+            });
+          },
+        );
+      }),
+    );
+  }
+
+  void _onCouponClaimed() {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _couponUiRevision++);
+  }
+
+  Widget _buildClaimableCouponPopupOverlay() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (_selectedBottomTab != 0 ||
+        _activeCatalog != null ||
+        _showNationwideCart ||
+        user == null ||
+        user.isAnonymous) {
+      return const SizedBox.shrink();
+    }
+
+    return StreamBuilder<List<ClaimableCouponOffer>>(
+      stream: ClaimableCouponService.instance.watchActiveClaimableCoupons(),
+      builder: (context, couponsSnapshot) {
+        return StreamBuilder<Set<String>>(
+          stream: UserCouponWalletService.instance.watchClaimedCouponIds(user.uid),
+          builder: (context, claimedSnapshot) {
+            final coupons = couponsSnapshot.data ?? const <ClaimableCouponOffer>[];
+            final claimedIds = claimedSnapshot.data ?? <String>{};
+            if (coupons.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            return ClaimableCouponPopupHost(
+              key: ValueKey<String>(
+                'coupon-popup-$_couponUiRevision-${coupons.map((c) => c.id).join(',')}',
+              ),
+              coupons: coupons,
+              claimedCouponIds: claimedIds,
+              sessionId: _couponPopupSessionId,
+              onClaimed: _onCouponClaimed,
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _openNationwideCart() {
+    Navigator.of(context).popUntil((route) => route.isFirst);
     setState(() {
       _selectedBottomTab = 0;
       _activeCatalog = null;
       _showNationwideCart = true;
     });
+  }
+
+  Future<void> _openNationwideCategoryPicker() async {
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => NationwideCategoryPickerScreen(
+          customerLatitude: _userLocation.latitude,
+          customerLongitude: _userLocation.longitude,
+          onConfirmOrder: _addToNationwideCart,
+          onNavigateToCart: _openNationwideCart,
+        ),
+      ),
+    );
   }
 
   void _removeCartItem(int index) {
@@ -2542,11 +2645,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 onBackToCatalog: () {
                   setState(() {
                     _showNationwideCart = false;
-                    _activeCatalog = const _ActiveCatalog(
-                      title: 'สินค้าส่งทั่วประเทศ',
-                      nationwideShippingOnly: true,
-                    );
+                    _activeCatalog = null;
                   });
+                  unawaited(_openNationwideCategoryPicker());
                 },
                 onOrderCreated: (orderIds) async {
                   setState(() {
@@ -2602,6 +2703,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onConfirmCashOnDelivery: _confirmCashOnDeliveryOrder,
         onSubmitOmisePayment: _submitOmiseCheckoutOrder,
         onOpenOrderRoadmap: _openOrderRoadmap,
+        initialCouponCode: _pendingCartCouponCode,
+        onOpenMyCoupons: _openMyCouponsWallet,
       ),
       2 => OrderRoadmapScreen(
         orderIds: _roadmapFocusOrderIds,
@@ -2645,7 +2748,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           SystemNavigator.pop();
         }
       },
-      child: Scaffold(
+      child: Stack(
+        children: <Widget>[
+          Scaffold(
       backgroundColor: _selectedBottomTab == 4
           ? Colors.white
           : const Color(0xFFF4FAFB),
@@ -2735,6 +2840,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
+          ),
+          _buildClaimableCouponPopupOverlay(),
+        ],
       ),
     );
   }
@@ -2873,6 +2981,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               foregroundColor: const Color(0xFF7A4B00),
                             ),
                           ),
+                          const SizedBox(width: 12),
+                          InkWell(
+                            onTap: _openMyCouponsWallet,
+                            borderRadius: BorderRadius.circular(24),
+                            child: _HeaderAvatarBadge(
+                              icon: Icons.local_offer_outlined,
+                              backgroundColor: const Color(0xFFFFF7ED),
+                              foregroundColor: const Color(0xFFE55A00),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -2922,6 +3040,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+          sliver: SliverToBoxAdapter(
+            child: StreamBuilder<List<ClaimableCouponOffer>>(
+              stream: ClaimableCouponService.instance.watchActiveClaimableCoupons(),
+              builder: (context, couponsSnapshot) {
+                final user = FirebaseAuth.instance.currentUser;
+                return StreamBuilder<Set<String>>(
+                  stream: UserCouponWalletService.instance
+                      .watchClaimedCouponIds(user?.uid),
+                  builder: (context, claimedSnapshot) {
+                    final coupons =
+                        couponsSnapshot.data ?? const <ClaimableCouponOffer>[];
+                    final claimedIds = claimedSnapshot.data ?? <String>{};
+                    return ClaimableCouponStrip(
+                      coupons: coupons,
+                      claimedCouponIds: claimedIds,
+                      onClaimed: _onCouponClaimed,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
           sliver: SliverToBoxAdapter(

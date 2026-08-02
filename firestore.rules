@@ -782,6 +782,12 @@ service cloud.firestore {
         allow get, list: if isSelf(userId);
         allow write: if false;
       }
+
+      // คูปองที่ลูกค้ากดรับเอง — เขียนผ่าน Cloud Functions เท่านั้น
+      match /claimed_coupons/{couponId} {
+        allow get, list: if isSelf(userId);
+        allow create, update, delete: if false;
+      }
     }
 
     // โปรไฟล์ผู้ใช้เดิม (รองรับช่วง migration)
@@ -1014,6 +1020,33 @@ service cloud.firestore {
           || (newStatus == 'accepted' && oldStatus != 'accepted');
     }
 
+    function clientCannotMutateOrderLifecycle() {
+      let newStatus = request.resource.data.get('status', '');
+      let oldStatus = resource.data.get('status', '');
+      let statusChangedToCancelOrRefund =
+          newStatus != oldStatus && (newStatus == 'cancelled' || newStatus == 'refund');
+      let lifecycleFieldsChanged = request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'refundRequested',
+        'refundRequestedAt',
+        'refundRequestedBy',
+        'refundStatus',
+        'refundBankAccountNumber',
+        'refundAccountName',
+        'refundBankName',
+        'cancelledAt',
+        'cancelledBy',
+        'cancelReason',
+        'customerCancelledAt',
+        'customerShopChoice',
+        'customerNoRiderChoice',
+        'customerWaitUntil',
+        'customerShopWaitUntil',
+        'customerWaitRequestedAt',
+        'customerShopWaitRequestedAt',
+      ]);
+      return statusChangedToCancelOrRefund || lifecycleFieldsChanged;
+    }
+
     function canRiderAcceptAwaitingOrder() {
       return false;
     }
@@ -1028,6 +1061,7 @@ service cloud.firestore {
             && orderSensitiveFieldsUnchanged()
             && orderFinancialFieldsUnchanged()
             && !clientCannotAcceptOrDeliverOrder()
+            && !clientCannotMutateOrderLifecycle()
           );
       allow delete: if isPrivilegedAdmin();
 
@@ -1208,8 +1242,7 @@ service cloud.firestore {
 
     // สรุปไรเดอร์ออนไลน์ (van2 scale — อ่านได้ทุก signed-in, เขียนเฉพาะ Cloud Functions)
     match /system/rider_availability {
-      allow get: if signedIn();
-      allow list: if false;
+      allow read: if signedIn();
       allow create, update, delete: if false;
     }
 

@@ -118,6 +118,8 @@ class CartScreen extends StatefulWidget {
     this.onConfirmCashOnDelivery,
     this.onSubmitOmisePayment,
     this.onOpenOrderRoadmap,
+    this.initialCouponCode,
+    this.onOpenMyCoupons,
   });
 
   final List<CartLineItem> cartItems;
@@ -135,6 +137,8 @@ class CartScreen extends StatefulWidget {
     double grandTotal,
   )? onSubmitOmisePayment;
   final Future<void> Function(List<String> orderIds)? onOpenOrderRoadmap;
+  final String? initialCouponCode;
+  final VoidCallback? onOpenMyCoupons;
 
   @override
   State<CartScreen> createState() => _CartScreenState();
@@ -166,6 +170,22 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     _prefetchCartImages();
     _refreshShippingIfNeeded(force: true);
     _refreshServerTotalsIfNeeded(force: true);
+    _applyInitialCouponCode();
+  }
+
+  void _applyInitialCouponCode() {
+    final code = widget.initialCouponCode?.trim();
+    if (code == null || code.isEmpty) {
+      return;
+    }
+    _couponController.text = code;
+    _pendingCouponCode = code;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _applyCouponCode();
+    });
   }
 
   void _prefetchCartImages() {
@@ -187,6 +207,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.cartItems != widget.cartItems) {
       _prefetchCartImages();
+    }
+    if (widget.initialCouponCode != oldWidget.initialCouponCode) {
+      _applyInitialCouponCode();
     }
     _refreshShippingIfNeeded();
     _refreshServerTotalsIfNeeded();
@@ -696,6 +719,15 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
+                        if (widget.onOpenMyCoupons != null)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              onPressed: widget.onOpenMyCoupons,
+                              icon: const Icon(Icons.local_offer_outlined),
+                              label: const Text('คูปองของฉัน'),
+                            ),
+                          ),
                         PromotionCartPanel(
                           config: displayConfig,
                           discounts: discounts,

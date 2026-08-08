@@ -440,6 +440,7 @@ class CatalogProductCard extends StatelessWidget {
     this.onNavigateToCart,
     this.compact = false,
     this.showRatingSummary = true,
+    this.pinPriceToBottom = false,
   });
 
   final PublicCatalogProduct product;
@@ -453,6 +454,7 @@ class CatalogProductCard extends StatelessWidget {
   final VoidCallback? onNavigateToCart;
   final bool compact;
   final bool showRatingSummary;
+  final bool pinPriceToBottom;
 
   @override
   Widget build(BuildContext context) {
@@ -526,7 +528,138 @@ class CatalogProductCard extends StatelessWidget {
       ],
     );
 
+    void openProductComments() {
+      showProductCommentsSheet(
+        context: context,
+        productId: product.id,
+        shopId: product.shopId,
+      );
+    }
+
+    final Widget reactionRow = ProductReactionBar(
+      productId: product.id,
+      shopId: product.shopId,
+      compact: true,
+      showLikeDislike: pinPriceToBottom,
+      showDislike: !pinPriceToBottom,
+      showShareAction: pinPriceToBottom,
+      singleRow: pinPriceToBottom,
+      onCommentTap: openProductComments,
+      onShareTap: () => shareCatalogProduct(product, context: context),
+    );
+
+    if (pinPriceToBottom) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          imageTile,
+          Padding(
+            padding: EdgeInsets.fromLTRB(0, compact ? 6 : 6, 0, compact ? 2 : 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (compact)
+                  Text(
+                    name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF111827),
+                      height: 1.12,
+                    ),
+                  )
+                else
+                  Text(
+                    name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF111827),
+                      height: 1.15,
+                    ),
+                  ),
+                if (showRatingSummary)
+                  _ProductRatingSummary(
+                    productId: product.id,
+                    compact: compact,
+                  ),
+                reactionRow,
+                if (!compact && cleanDescription.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 2),
+                  Text(
+                    cleanDescription,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF6B7280),
+                      height: 1.15,
+                    ),
+                  ),
+                ],
+                if (!compact && distanceText != null) ...<Widget>[
+                  const SizedBox(height: 2),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(
+                          Icons.near_me_outlined,
+                          size: 14,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          distanceText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: const Color(0xFF6B7280),
+                            fontWeight: FontWeight.w600,
+                            height: 1.15,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 4),
+                priceRow,
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
     if (compact) {
+      final compactBody = <Widget>[
+        Expanded(
+          child: Text(
+            name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF111827),
+              height: 1.12,
+            ),
+          ),
+        ),
+        priceRow,
+        if (showRatingSummary)
+          _ProductRatingSummary(productId: product.id, compact: true),
+        reactionRow,
+      ];
+
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -536,30 +669,71 @@ class CatalogProductCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
-                        height: 1.12,
-                      ),
-                    ),
-                  ),
-                  if (showRatingSummary)
-                    _ProductRatingSummary(productId: product.id, compact: true),
-                  priceRow,
-                ],
+                children: compactBody,
               ),
             ),
           ),
         ],
       );
     }
+
+    final standardBody = <Widget>[
+      const SizedBox(height: 6),
+      Text(
+        name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: const Color(0xFF111827),
+          height: 1.15,
+        ),
+      ),
+      if (showRatingSummary) _ProductRatingSummary(productId: product.id),
+      priceRow,
+      reactionRow,
+      if (cleanDescription.isNotEmpty) ...<Widget>[
+        const SizedBox(height: 2),
+        Text(
+          cleanDescription,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: const Color(0xFF6B7280),
+            height: 1.15,
+          ),
+        ),
+      ],
+      if (distanceText != null) ...<Widget>[
+        const SizedBox(height: 2),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.only(top: 1),
+              child: Icon(
+                Icons.near_me_outlined,
+                size: 14,
+                color: Color(0xFF6B7280),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                distanceText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF6B7280),
+                  fontWeight: FontWeight.w600,
+                  height: 1.15,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -568,64 +742,7 @@ class CatalogProductCard extends StatelessWidget {
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const SizedBox(height: 8),
-              Text(
-                name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF111827),
-                  height: 1.15,
-                ),
-              ),
-              if (showRatingSummary)
-                _ProductRatingSummary(productId: product.id),
-              if (cleanDescription.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 4),
-                Text(
-                  cleanDescription,
-                  maxLines: distanceText != null ? 1 : 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF6B7280),
-                    height: 1.2,
-                  ),
-                ),
-              ],
-              if (distanceText != null) ...<Widget>[
-                const SizedBox(height: 4),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    const Padding(
-                      padding: EdgeInsets.only(top: 1),
-                      child: Icon(
-                        Icons.near_me_outlined,
-                        size: 14,
-                        color: Color(0xFF6B7280),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        distanceText,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF6B7280),
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 6),
-              priceRow,
-            ],
+            children: standardBody,
           ),
         ),
       ],
@@ -1388,7 +1505,17 @@ String? _formatDistanceKm(double? distanceKm) {
   const catalogHorizontalPadding = 40.0;
   const columnGap = 8.0;
   final width = (screenWidth - catalogHorizontalPadding - columnGap) / 2;
-  const textAndActionsHeight = 166.0;
+  const textAndActionsHeight = 174.0;
   final height = width / 1.05 + textAndActionsHeight;
   return (width: width, height: height);
+}
+
+/// Tighter card height for home shelf — price sits directly under metadata.
+({double width, double height}) catalogHomeShelfCardSize(
+  BuildContext context,
+) {
+  final grid = catalogGridProductCardSize(context);
+  const homeTextAndActionsHeight = 162.0;
+  final height = grid.width / 1.05 + homeTextAndActionsHeight;
+  return (width: grid.width, height: height);
 }

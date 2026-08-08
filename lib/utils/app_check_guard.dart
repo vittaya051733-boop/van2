@@ -5,6 +5,11 @@ const String kAppCheckRecaptchaSiteKey = String.fromEnvironment(
   'APP_CHECK_RECAPTCHA_SITE_KEY',
 );
 
+const String kVan2AppCheckDebugToken = String.fromEnvironment(
+  'VAN2_APP_CHECK_DEBUG_TOKEN',
+  defaultValue: 'c8e4a1f2-6b3d-4e9a-8f7c-2d5e6a9b0c41',
+);
+
 /// Ensures App Check token is available before payment / checkout callables.
 class AppCheckGuard {
   const AppCheckGuard._();
@@ -13,6 +18,9 @@ class AppCheckGuard {
     await _ensureToken(
       releaseMessage:
           'ไม่สามารถยืนยันความปลอดภัยของอุปกรณ์ได้ กรุณาอัปเดตแอปจาก Play Store หรือลองใหม่',
+      webMessage:
+          'เวอร์ชันเว็บยังไม่พร้อมชำระเงิน กรุณาใช้แอปมือถือหรือติดต่อผู้ดูแลระบบ',
+      requiredInDebug: true,
     );
   }
 
@@ -28,6 +36,7 @@ class AppCheckGuard {
   static Future<void> _ensureToken({
     required String releaseMessage,
     String? webMessage,
+    bool requiredInDebug = false,
   }) async {
     if (kIsWeb) {
       if (kReleaseMode && kAppCheckRecaptchaSiteKey.isEmpty) {
@@ -36,7 +45,9 @@ class AppCheckGuard {
               'เวอร์ชันเว็บยังไม่พร้อมชำระเงิน กรุณาใช้แอปมือถือหรือติดต่อผู้ดูแลระบบ',
         );
       }
-      return;
+      if (kAppCheckRecaptchaSiteKey.isEmpty) {
+        return;
+      }
     }
 
     Object? lastError;
@@ -51,7 +62,18 @@ class AppCheckGuard {
       }
     }
 
-    if (kReleaseMode) {
+    if (kReleaseMode || requiredInDebug) {
+      if (kIsWeb) {
+        throw Exception(
+          webMessage ??
+              'ไม่สามารถยืนยัน App Check บนเว็บได้ กรุณารีเฟรชหน้าแล้วลองใหม่',
+        );
+      }
+      if (kDebugMode && requiredInDebug) {
+        throw Exception(
+          'App Check ยังไม่พร้อม — ลงทะเบียน debug token ใน Firebase Console → App Check → Van2.com: $kVan2AppCheckDebugToken',
+        );
+      }
       throw Exception(releaseMessage);
     }
     if (kDebugMode && lastError != null) {

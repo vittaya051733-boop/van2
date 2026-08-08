@@ -312,6 +312,12 @@ Stream<QuerySnapshot<Map<String, dynamic>>> _activeRoadmapOrdersStream({
   required List<String> preferredOrderIds,
   required String? uid,
 }) {
+  if (uid != null && uid.isNotEmpty) {
+    return firestore
+        .collection('orders')
+        .where('customerId', isEqualTo: uid)
+        .snapshots();
+  }
   if (preferredOrderIds.isNotEmpty) {
     final ids = preferredOrderIds.take(30).toList(growable: false);
     return firestore
@@ -319,13 +325,12 @@ Stream<QuerySnapshot<Map<String, dynamic>>> _activeRoadmapOrdersStream({
         .where(FieldPath.documentId, whereIn: ids)
         .snapshots();
   }
-  if (uid == null || uid.isEmpty) {
-    return firestore.collection('orders').limit(0).snapshots();
-  }
-  return firestore
-      .collection('orders')
-      .where('customerId', isEqualTo: uid)
-      .snapshots();
+  return firestore.collection('orders').limit(0).snapshots();
+}
+
+int _preferredOrderRank(String orderId, List<String> preferredOrderIds) {
+  final index = preferredOrderIds.indexOf(orderId);
+  return index >= 0 ? index : preferredOrderIds.length + 1;
 }
 
 class _CustomerActiveRoadmapList extends StatelessWidget {
@@ -387,6 +392,12 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
             .toList(growable: false);
 
         activeDocs.sort((a, b) {
+          final aPreferred = _preferredOrderRank(a.id, preferredOrderIds);
+          final bPreferred = _preferredOrderRank(b.id, preferredOrderIds);
+          if (aPreferred != bPreferred) {
+            return aPreferred.compareTo(bPreferred);
+          }
+
           final aTs = a.data()['createdAt'];
           final bTs = b.data()['createdAt'];
           final aMs = aTs is Timestamp ? aTs.millisecondsSinceEpoch : 0;
@@ -2918,8 +2929,6 @@ class _AwaitingShopDecisionBannerState
     return DateTime.now().difference(acceptedAt) >= _shopDecisionThreshold;
   }
 
-  String? _currentUserUidOrNull() => _currentCustomerUid();
-
   Future<void> _wait15Min() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -2927,8 +2936,10 @@ class _AwaitingShopDecisionBannerState
       await widget.orderActions.shopWait15Min(orderId: widget.orderId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('รอเพิ่ม 15 นาที ร้านค้าจะเห็นออเดอร์นี้อีกครั้ง'),
+          SnackBar(
+            content: Text(
+              'รอเพิ่ม ${_customerExtraWaitDuration.inMinutes} นาที ร้านค้าจะเห็นออเดอร์นี้อีกครั้ง',
+            ),
           ),
         );
       }

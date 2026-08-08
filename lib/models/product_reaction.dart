@@ -35,6 +35,7 @@ class ProductReactionStats {
     required this.likeCount,
     required this.dislikeCount,
     required this.loveCount,
+    this.shareCount = 0,
   });
 
   final String productId;
@@ -42,6 +43,7 @@ class ProductReactionStats {
   final int likeCount;
   final int dislikeCount;
   final int loveCount;
+  final int shareCount;
 
   factory ProductReactionStats.fromDoc(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -53,6 +55,7 @@ class ProductReactionStats {
       likeCount: (data['likeCount'] as num?)?.toInt() ?? 0,
       dislikeCount: (data['dislikeCount'] as num?)?.toInt() ?? 0,
       loveCount: (data['loveCount'] as num?)?.toInt() ?? 0,
+      shareCount: (data['shareCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -62,5 +65,6 @@ class ProductReactionStats {
     likeCount: 0,
     dislikeCount: 0,
     loveCount: 0,
+    shareCount: 0,
   );
 }

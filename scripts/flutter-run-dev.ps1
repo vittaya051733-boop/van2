@@ -67,106 +67,132 @@ $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
 
-$process = [System.Diagnostics.Process]::Start($psi)
-if (-not $process) {
-  throw 'Failed to start flutter run --machine.'
-}
+$process = New-Object System.Diagnostics.Process
+$process.StartInfo = $psi
 
-Write-Host "Flutter dev supervisor started (PID $PID, flutter PID $($process.Id))." -ForegroundColor Green
+Write-Host "Starting flutter run --machine on $DeviceId ..." -ForegroundColor Cyan
 Write-Host "Logs: $LogFile"
 Write-Host "Hot reload: scripts\flutter-hot-reload.ps1"
 
 $appId = $null
 $debugUri = $null
-$reloadCounter = 0
+$lineQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+$reloadResult = $null
+$reloadDone = $false
+
+function Handle-FlutterLine {
+  param([string]$Line)
+
+  if (-not $Line) {
+    return
+  }
+
+  Add-Content -Path $LogFile -Value $Line -Encoding utf8
+  Write-Host $Line
+
+  if ($Line -match '"event"\s*:\s*"app\.debugPort"') {
+    if ($Line -match '"appId"\s*:\s*"([^"]+)"') {
+      $script:appId = $Matches[1]
+    }
+    if ($Line -match '"wsUri"\s*:\s*"ws://127\.0\.0\.1:(\d+)(/[^"]+)"') {
+      $script:debugUri = "http://127.0.0.1:$($Matches[1])$($Matches[2])"
+    } elseif ($Line -match '"uri"\s*:\s*"([^"]+)"') {
+      $script:debugUri = $Matches[1]
+    }
+    if ($script:appId) {
+      $resolvedDebugUri = if ($script:debugUri) { $script:debugUri } else { '' }
+      Save-Session -AppId $script:appId -DebugUri $resolvedDebugUri
+    }
+  }
+
+  if ($Line -match '"event"\s*:\s*"app\.started"') {
+    if (-not $script:appId -and ($Line -match '"appId"\s*:\s*"([^"]+)"')) {
+      $script:appId = $Matches[1]
+      $resolvedDebugUri = if ($script:debugUri) { $script:debugUri } else { '' }
+      Save-Session -AppId $script:appId -DebugUri $resolvedDebugUri
+    }
+  }
+
+  if ($script:reloadDone) {
+    return
+  }
+  if ($Line -match '"id"\s*:\s*2' -and $Line -notmatch '"error"') {
+    $script:reloadResult = 'ok'
+    $script:reloadDone = $true
+  } elseif ($Line -match '"id"\s*:\s*2.*"error"') {
+    $script:reloadResult = $Line
+    $script:reloadDone = $true
+  }
+}
+
+$process.add_OutputDataReceived({
+  param($sender, $eventArgs)
+  if ($eventArgs.Data) {
+    $lineQueue.Enqueue($eventArgs.Data)
+  }
+})
+$process.add_ErrorDataReceived({
+  param($sender, $eventArgs)
+  if ($eventArgs.Data) {
+    $lineQueue.Enqueue($eventArgs.Data)
+  }
+})
+if (-not $process.Start()) {
+  throw 'Failed to start flutter run --machine.'
+}
+
+Write-Host "Flutter dev supervisor started (PID $PID, flutter PID $($process.Id))." -ForegroundColor Green
+$process.BeginOutputReadLine()
+$process.BeginErrorReadLine()
 
 try {
   while (-not $process.HasExited) {
+    $dequeued = $null
+    while ($lineQueue.TryDequeue([ref]$dequeued)) {
+      Handle-FlutterLine -Line $dequeued
+    }
+
     if (Test-Path $ReloadRequestFile) {
       $payload = (Get-Content $ReloadRequestFile -Raw).Trim()
       Remove-Item $ReloadRequestFile -Force -ErrorAction SilentlyContinue
       Remove-Item $ReloadResultFile -Force -ErrorAction SilentlyContinue
 
       if ($payload) {
-        $reloadCounter++
+        $reloadDone = $false
+        $reloadResult = $null
         $process.StandardInput.WriteLine($payload)
         $process.StandardInput.Flush()
 
         $reloadDeadline = (Get-Date).AddSeconds(20)
-        $reloadOk = $false
-        $reloadError = $null
-
-        while ((Get-Date) -lt $reloadDeadline -and -not $process.HasExited) {
-          if ($process.StandardOutput.Peek() -ge 0) {
-            $line = $process.StandardOutput.ReadLine()
-            if ($line) {
-              Add-Content -Path $LogFile -Value $line -Encoding utf8
-              Write-Host $line
-              if ($line -match '"id"\s*:\s*2' -and $line -notmatch '"error"') {
-                $reloadOk = $true
-                break
-              }
-              if ($line -match '"id"\s*:\s*2.*"error"') {
-                $reloadError = $line
-                break
-              }
-            }
-          } else {
-            Start-Sleep -Milliseconds 100
+        while ((Get-Date) -lt $reloadDeadline -and -not $process.HasExited -and -not $reloadDone) {
+          $dequeued = $null
+          while ($lineQueue.TryDequeue([ref]$dequeued)) {
+            Handle-FlutterLine -Line $dequeued
           }
+          Start-Sleep -Milliseconds 100
         }
 
-        if ($reloadOk) {
+        if ($reloadResult -eq 'ok') {
           Set-Content -Path $ReloadResultFile -Value 'ok' -Encoding ascii
         } else {
-          $message = if ($reloadError) { $reloadError } else { 'timeout' }
+          $message = if ($reloadResult) { $reloadResult } else { 'timeout' }
           Set-Content -Path $ReloadResultFile -Value $message -Encoding utf8
         }
       }
     }
 
-    if ($process.StandardOutput.Peek() -ge 0) {
-      $line = $process.StandardOutput.ReadLine()
-      if ($line) {
-        Add-Content -Path $LogFile -Value $line -Encoding utf8
-        Write-Host $line
+    Start-Sleep -Milliseconds 100
+  }
 
-        if ($line -match '"event"\s*:\s*"app\.debugPort"') {
-          if ($line -match '"appId"\s*:\s*"([^"]+)"') {
-            $appId = $Matches[1]
-          }
-          if ($line -match '"wsUri"\s*:\s*"ws://127\.0\.0\.1:(\d+)(/[^"]+)"') {
-            $debugUri = "http://127.0.0.1:$($Matches[1])$($Matches[2])"
-          } elseif ($line -match '"uri"\s*:\s*"([^"]+)"') {
-            $debugUri = $Matches[1]
-          }
-          if ($appId) {
-            $resolvedDebugUri = if ($debugUri) { $debugUri } else { '' }
-            Save-Session -AppId $appId -DebugUri $resolvedDebugUri
-          }
-        }
-
-        if ($line -match '"event"\s*:\s*"app\.started"') {
-          if (-not $appId -and ($line -match '"appId"\s*:\s*"([^"]+)"')) {
-            $appId = $Matches[1]
-            $resolvedDebugUri = if ($debugUri) { $debugUri } else { '' }
-            Save-Session -AppId $appId -DebugUri $resolvedDebugUri
-          }
-        }
-      }
-    } else {
-      Start-Sleep -Milliseconds 100
-    }
+  $dequeued = $null
+  while ($lineQueue.TryDequeue([ref]$dequeued)) {
+    Handle-FlutterLine -Line $dequeued
   }
 } finally {
   Remove-Item $SupervisorPidFile, $SessionFile, $ReloadRequestFile, $ReloadResultFile -Force -ErrorAction SilentlyContinue
   if (-not $process.HasExited) {
     $process.Kill()
   }
-}
-
-while ($process.StandardError.Peek() -ge 0) {
-  Write-Host $process.StandardError.ReadLine() -ForegroundColor Yellow
 }
 
 if ($process.ExitCode -and $process.ExitCode -ne 0) {

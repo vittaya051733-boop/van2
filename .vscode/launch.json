@@ -2,12 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Flutter Debug (van2)",
+      "name": "Flutter Debug (van2 emulator)",
       "type": "dart",
       "request": "launch",
       "program": "lib/main.dart",
       "flutterMode": "debug",
-      "deviceId": "emulator-5554"
+      "deviceId": "emulator-5554",
+      "toolArgs": [
+        "--dart-define=APP_CHECK_DEBUG=true"
+      ]
     }
   ]
 }

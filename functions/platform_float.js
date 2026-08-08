@@ -1,6 +1,8 @@
 const RESERVE_DOC_ID = 'reserve';
-const WITHDRAW_HOLD_MS = 24 * 60 * 60 * 1000;
 const OMISE_SETTLE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_SHOP_CREDIT_DELAY_MS = 120 * 60 * 1000;
+
+const { createSettlementConfigLoader } = require('./settlement_config');
 
 function readMoney(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -26,6 +28,21 @@ function createPlatformFloatHandlers(deps) {
     logger,
     DEFAULT_REGION,
   } = deps;
+
+  const { loadSettlementConfig } = createSettlementConfigLoader({ db });
+
+  async function resolveShopCreditDelayMs() {
+    try {
+      const config = await loadSettlementConfig();
+      const minutes = config?.shopCreditDelayMinutes;
+      if (typeof minutes === 'number' && minutes >= 0) {
+        return minutes * 60 * 1000;
+      }
+    } catch (_) {
+      // fall through
+    }
+    return DEFAULT_SHOP_CREDIT_DELAY_MS;
+  }
 
   async function ensureReserveDoc(tx) {
     const reserveRef = db.collection('platform_config').doc(RESERVE_DOC_ID);
@@ -79,8 +96,9 @@ function createPlatformFloatHandlers(deps) {
       }
 
       const orderId = event.params.orderId;
+      const shopCreditDelayMs = await resolveShopCreditDelayMs();
       const now = new Date();
-      const availableForWithdrawAt = new Date(now.getTime() + WITHDRAW_HOLD_MS);
+      const availableForWithdrawAt = new Date(now.getTime() + shopCreditDelayMs);
       const omiseExpectedSettleAt = new Date(now.getTime() + OMISE_SETTLE_MS);
       const advanceRef = db.collection('float_advances').doc();
       const walletRef = db.collection('merchant_wallets').doc(shopOwnerId);

@@ -53,10 +53,70 @@
       document.body.appendChild(error);
     }
   </script>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB6Q5DE_VkpqO3qTn3bqPBawQjxzGEngxY&libraries=places"></script>
   <script>
     (function () {
       var placesService = null;
+      var mapsLoadPromise = null;
+      var mapsScriptId = 'van-google-maps-js';
+
+      function mapsApiKeyFromConfig() {
+        var configNode = document.getElementById('van-maps-config');
+        if (!configNode) {
+          return '';
+        }
+        try {
+          var config = JSON.parse(configNode.textContent || '{}');
+          return (config.apiKey || '').trim();
+        } catch (error) {
+          return '';
+        }
+      }
+
+      window.vanEnsureGoogleMapsReady = function () {
+        if (window.google && google.maps && google.maps.places) {
+          return Promise.resolve();
+        }
+        if (mapsLoadPromise) {
+          return mapsLoadPromise;
+        }
+
+        mapsLoadPromise = new Promise(function (resolve, reject) {
+          var apiKey = mapsApiKeyFromConfig();
+          if (!apiKey) {
+            reject(new Error('Missing Google Maps API key'));
+            return;
+          }
+
+          var existing = document.getElementById(mapsScriptId);
+          if (existing) {
+            existing.addEventListener('load', function () { resolve(); }, { once: true });
+            existing.addEventListener('error', function () {
+              reject(new Error('Google Maps script failed'));
+            }, { once: true });
+            return;
+          }
+
+          var script = document.createElement('script');
+          script.id = mapsScriptId;
+          script.async = true;
+          script.defer = true;
+          script.src =
+            'https://maps.googleapis.com/maps/api/js?key=' +
+            encodeURIComponent(apiKey) +
+            '&libraries=places';
+          script.onload = function () { resolve(); };
+          script.onerror = function () {
+            reject(new Error('Google Maps script failed'));
+          };
+          document.head.appendChild(script);
+        }).then(function () {
+          if (!window.google || !google.maps || !google.maps.places) {
+            throw new Error('Places library not loaded');
+          }
+        });
+
+        return mapsLoadPromise;
+      };
 
       function ensurePlacesReady() {
         if (!window.google || !google.maps || !google.maps.places) {
@@ -75,13 +135,8 @@
       }
 
       window.vanPlacesFetchSuggestions = function (input, lat, lng) {
-        return new Promise(function (resolve, reject) {
-          try {
-            ensurePlacesReady();
-          } catch (error) {
-            reject(error);
-            return;
-          }
+        return window.vanEnsureGoogleMapsReady().then(function () {
+          ensurePlacesReady();
 
           var service = new google.maps.places.AutocompleteService();
           var request = {
@@ -95,80 +150,311 @@
             request.radius = 50000;
           }
 
-          service.getPlacePredictions(request, function (predictions, status) {
-            if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-              resolve([]);
-              return;
-            }
-            if (status !== google.maps.places.PlacesServiceStatus.OK) {
-              reject(new Error(status));
-              return;
-            }
+          return new Promise(function (resolve, reject) {
+            service.getPlacePredictions(request, function (predictions, status) {
+              if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+                resolve([]);
+                return;
+              }
+              if (status !== google.maps.places.PlacesServiceStatus.OK) {
+                reject(new Error(status));
+                return;
+              }
 
-            resolve(
-              (predictions || []).map(function (prediction) {
-                return {
-                  placeId: prediction.place_id,
-                  primaryText:
-                    (prediction.structured_formatting &&
-                      prediction.structured_formatting.main_text) ||
-                    prediction.description ||
-                    '',
-                  secondaryText:
-                    (prediction.structured_formatting &&
-                      prediction.structured_formatting.secondary_text) ||
-                    '',
-                  description: prediction.description || '',
-                };
-              })
-            );
+              resolve(
+                (predictions || []).map(function (prediction) {
+                  return {
+                    placeId: prediction.place_id,
+                    primaryText:
+                      (prediction.structured_formatting &&
+                        prediction.structured_formatting.main_text) ||
+                      prediction.description ||
+                      '',
+                    secondaryText:
+                      (prediction.structured_formatting &&
+                        prediction.structured_formatting.secondary_text) ||
+                      '',
+                    description: prediction.description || '',
+                  };
+                })
+              );
+            });
           });
         });
       };
 
       window.vanPlacesResolvePlace = function (placeId) {
-        return new Promise(function (resolve, reject) {
-          try {
-            ensurePlacesReady();
-          } catch (error) {
-            reject(error);
-            return;
-          }
+        return window.vanEnsureGoogleMapsReady().then(function () {
+          ensurePlacesReady();
 
-          placesService.getDetails(
-            {
-              placeId: placeId,
-              fields: ['place_id', 'name', 'formatted_address', 'geometry'],
-              language: 'th',
-            },
-            function (result, status) {
-              if (status !== google.maps.places.PlacesServiceStatus.OK || !result) {
-                reject(new Error(status));
-                return;
+          return new Promise(function (resolve, reject) {
+            placesService.getDetails(
+              {
+                placeId: placeId,
+                fields: ['place_id', 'name', 'formatted_address', 'geometry'],
+                language: 'th',
+              },
+              function (result, status) {
+                if (status !== google.maps.places.PlacesServiceStatus.OK || !result) {
+                  reject(new Error(status));
+                  return;
+                }
+
+                var location =
+                  result.geometry && result.geometry.location
+                    ? result.geometry.location
+                    : null;
+                if (!location) {
+                  reject(new Error('Missing geometry'));
+                  return;
+                }
+
+                resolve({
+                  placeId: result.place_id || placeId,
+                  title: result.name || '',
+                  subtitle: result.formatted_address || '',
+                  latitude: location.lat(),
+                  longitude: location.lng(),
+                });
               }
-
-              var location =
-                result.geometry && result.geometry.location
-                  ? result.geometry.location
-                  : null;
-              if (!location) {
-                reject(new Error('Missing geometry'));
-                return;
-              }
-
-              resolve({
-                placeId: result.place_id || placeId,
-                title: result.name || '',
-                subtitle: result.formatted_address || '',
-                latitude: location.lat(),
-                longitude: location.lng(),
-              });
-            }
-          );
+            );
+          });
         });
       };
+
+      var travelRoutePolyline = null;
+      var travelDirectionsRenderer = null;
+
+      function patchFlutterGoogleMapConstructor() {
+        if (!window.google || !google.maps || !google.maps.Map) {
+          return;
+        }
+        if (google.maps.Map.__vanTravelPatched) {
+          return;
+        }
+        var OriginalMap = google.maps.Map;
+        function PatchedMap(div, opts) {
+          var map = new OriginalMap(div, opts);
+          try {
+            if (div && div.id && div.id.indexOf('google_maps_') !== -1) {
+              window.__vanFlutterTravelMap = map;
+              div.__vanGoogleMap = map;
+            }
+          } catch (error) {
+            // ignore
+          }
+          return map;
+        }
+        PatchedMap.prototype = OriginalMap.prototype;
+        PatchedMap.__vanTravelPatched = true;
+        google.maps.Map = PatchedMap;
+      }
+
+      function resolveFlutterTravelMap() {
+        patchFlutterGoogleMapConstructor();
+        var divs = document.querySelectorAll('[id^="plugins.flutter.io/google_maps_"]');
+        for (var i = divs.length - 1; i >= 0; i -= 1) {
+          var div = divs[i];
+          if (div.clientWidth <= 0 || div.clientHeight <= 0) {
+            continue;
+          }
+          if (div.__vanGoogleMap) {
+            window.__vanFlutterTravelMap = div.__vanGoogleMap;
+            return Promise.resolve(div.__vanGoogleMap);
+          }
+        }
+        if (window.__vanFlutterTravelMap) {
+          return Promise.resolve(window.__vanFlutterTravelMap);
+        }
+        return new Promise(function (resolve) {
+          var attempts = 0;
+          function tick() {
+            if (window.__vanFlutterTravelMap) {
+              resolve(window.__vanFlutterTravelMap);
+              return;
+            }
+            attempts += 1;
+            if (attempts >= 40) {
+              resolve(null);
+              return;
+            }
+            setTimeout(tick, 100);
+          }
+          tick();
+        });
+      }
+
+      window.vanTravelClearRoutePolyline = function () {
+        if (travelRoutePolyline) {
+          travelRoutePolyline.setMap(null);
+          travelRoutePolyline = null;
+        }
+      };
+
+      window.vanTravelClearDirectionsRoute = function () {
+        window.vanTravelClearRoutePolyline();
+        if (travelDirectionsRenderer) {
+          travelDirectionsRenderer.setMap(null);
+        }
+      };
+
+      window.vanTravelSetDirectionsRoute = function (
+        originLat,
+        originLng,
+        destLat,
+        destLng
+      ) {
+        return window.vanTravelShowRoute(
+          originLat,
+          originLng,
+          destLat,
+          destLng,
+          null
+        );
+      };
+
+      function drawRoutePolylineOnMap(map, points) {
+        window.vanTravelClearRoutePolyline();
+        if (!map || !points || points.length < 2) {
+          return false;
+        }
+
+        var path = [];
+        for (var i = 0; i < points.length; i += 1) {
+          var point = points[i];
+          if (!point) {
+            continue;
+          }
+          var lat = Number(point.lat);
+          var lng = Number(point.lng);
+          if (!isFinite(lat) || !isFinite(lng)) {
+            continue;
+          }
+          path.push({ lat: lat, lng: lng });
+        }
+        if (path.length < 2) {
+          return false;
+        }
+
+        travelRoutePolyline = new google.maps.Polyline({
+          path: path,
+          geodesic: false,
+          strokeColor: '#F57C00',
+          strokeOpacity: 1.0,
+          strokeWeight: 5,
+          map: map,
+          zIndex: 2,
+        });
+        return true;
+      }
+
+      window.vanTravelShowRoute = function (
+        originLat,
+        originLng,
+        destLat,
+        destLng,
+        routePoints
+      ) {
+        return window.vanEnsureGoogleMapsReady().then(function () {
+          return resolveFlutterTravelMap();
+        }).then(function (map) {
+          if (!map) {
+            return false;
+          }
+
+          if (travelDirectionsRenderer) {
+            travelDirectionsRenderer.setMap(null);
+          }
+
+          var service = new google.maps.DirectionsService();
+          return new Promise(function (resolve) {
+            service.route(
+              {
+                origin: { lat: Number(originLat), lng: Number(originLng) },
+                destination: { lat: Number(destLat), lng: Number(destLng) },
+                travelMode: google.maps.TravelMode.DRIVING,
+              },
+              function (result, status) {
+                if (status === google.maps.DirectionsStatus.OK && result) {
+                  window.vanTravelClearRoutePolyline();
+                  if (!travelDirectionsRenderer) {
+                    travelDirectionsRenderer = new google.maps.DirectionsRenderer({
+                      suppressMarkers: true,
+                      preserveViewport: true,
+                      polylineOptions: {
+                        strokeColor: '#F57C00',
+                        strokeOpacity: 1.0,
+                        strokeWeight: 5,
+                        zIndex: 2,
+                      },
+                    });
+                  }
+                  travelDirectionsRenderer.setMap(map);
+                  travelDirectionsRenderer.setDirections(result);
+                  resolve(true);
+                  return;
+                }
+
+                resolve(drawRoutePolylineOnMap(map, routePoints));
+              }
+            );
+          });
+        });
+      };
+
+      window.vanTravelSetRoutePolyline = function (points) {
+        return window.vanEnsureGoogleMapsReady().then(function () {
+          patchFlutterGoogleMapConstructor();
+          return resolveFlutterTravelMap();
+        }).then(function (map) {
+          window.vanTravelClearRoutePolyline();
+          if (!map) {
+            return false;
+          }
+          if (!points || points.length < 2) {
+            return true;
+          }
+
+          var path = [];
+          for (var i = 0; i < points.length; i += 1) {
+            var point = points[i];
+            if (!point) {
+              continue;
+            }
+            var lat = Number(point.lat);
+            var lng = Number(point.lng);
+            if (!isFinite(lat) || !isFinite(lng)) {
+              continue;
+            }
+            path.push({ lat: lat, lng: lng });
+          }
+          if (path.length < 2) {
+            return false;
+          }
+
+          travelRoutePolyline = new google.maps.Polyline({
+            path: path,
+            geodesic: false,
+            strokeColor: '#F57C00',
+            strokeOpacity: 1.0,
+            strokeWeight: 5,
+            map: map,
+            zIndex: 2,
+          });
+
+          return true;
+        });
+      };
+
+      // Defer Maps until Flutter boot — do not block initial app load.
+      window.addEventListener('flutter-first-frame', function () {
+        window.vanEnsureGoogleMapsReady().catch(function () {
+          // Maps is optional for first paint; auth banner handles hard failures.
+        });
+      });
     })();
   </script>
+  <script type="application/json" id="van-maps-config">{"apiKey":"AIzaSyB6Q5DE_VkpqO3qTn3bqPBawQjxzGEngxY"}</script>
   <link rel="manifest" href="manifest.json">
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
 
@@ -179,6 +465,13 @@
       background: #ffffff;
     }
 
+    /* Google Maps Flutter Web: fill flex parent, avoid gray tile strip */
+    gmp-map {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
     #flutter-loading {
       display: flex;
       min-height: 100vh;
@@ -186,9 +479,106 @@
       justify-content: center;
       color: #5d4037;
       font: 16px/1.4 sans-serif;
+      padding: 24px;
+      text-align: center;
+    }
+
+    #flutter-load-recovery {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: rgba(255, 255, 255, 0.96);
+      padding: 24px 20px 32px;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+
+    #flutter-load-recovery.is-visible {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    #flutter-load-recovery h2 {
+      margin: 0;
+      font: 700 20px/1.3 sans-serif;
+      color: #111827;
+      text-align: center;
+    }
+
+    #flutter-load-recovery p {
+      margin: 0;
+      max-width: 420px;
+      font: 15px/1.5 sans-serif;
+      color: #4b5563;
+      text-align: center;
+    }
+
+    #flutter-load-recovery ol {
+      margin: 0;
+      padding-left: 20px;
+      max-width: 420px;
+      font: 14px/1.55 sans-serif;
+      color: #374151;
+      text-align: left;
+    }
+
+    #flutter-load-recovery button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 20px;
+      font: 600 16px/1.2 sans-serif;
+      cursor: pointer;
+    }
+
+    #flutter-load-recovery .retry-btn {
+      background: #e55a00;
+      color: #fff;
+      min-width: 200px;
+    }
+
+    #flutter-load-recovery .dismiss-btn {
+      background: #f3f4f6;
+      color: #374151;
     }
   </style>
 
+  <script>
+    (function () {
+      var BUILD = '20260806-travel-route-stable';
+      var key = 'van2_web_build';
+      var prev = localStorage.getItem(key);
+      if (prev === BUILD) {
+        return;
+      }
+      localStorage.setItem(key, BUILD);
+      if (prev === null) {
+        return;
+      }
+      var purge = function () {
+        if ('serviceWorker' in navigator) {
+          return navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (reg) { return reg.unregister(); }));
+          });
+        }
+        return Promise.resolve();
+      };
+      var clearCaches = function () {
+        if (!window.caches) {
+          return Promise.resolve();
+        }
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (name) { return caches.delete(name); }));
+        });
+      };
+      purge().then(clearCaches).then(function () {
+        location.reload();
+      });
+    })();
+  </script>
   <script id="flutter-load-script">
     function isFlutterAppVisible() {
       return !!(
@@ -206,8 +596,8 @@
     function removeSplashFromWeb() {
       document.getElementById("flutter-loading")?.remove();
       window.clearTimeout(window._flutterLoaderTimeout);
-      // Keep transient loader errors removable; persistent map/auth errors stay visible.
       document.getElementById("flutter-load-error")?.remove();
+      hideFlutterLoadRecovery();
     }
 
     window.addEventListener("flutter-first-frame", markFlutterReady);
@@ -233,10 +623,18 @@
         return;
       }
       const message = event?.message || "";
-      if (!message.includes("flutter") && !message.includes("canvaskit")) {
+      if (
+        !message.includes("flutter") &&
+        !message.includes("canvaskit") &&
+        !message.includes("wasm") &&
+        !message.includes("Failed to fetch")
+      ) {
         return;
       }
-      showFlutterLoadError("โหลดแอปไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ");
+      showFlutterLoadRecovery(
+        "โหลดแอปไม่สำเร็จ",
+        "เครือข่ายหรือ cache อาจทำให้ Safari โหลดไฟล์ไม่ครบ"
+      );
     });
 
     window._flutterLoaderTimeout = window.setTimeout(function () {
@@ -247,19 +645,65 @@
       if (!document.getElementById("flutter-loading")) {
         return;
       }
-      showFlutterLoadError("โหลดนานผิดปกติ กรุณารีเฟรชหรือลอง Safari อีกครั้ง");
-    }, 45000);
+      showFlutterLoadRecovery(
+        "โหลดนานผิดปกติ",
+        "ถ้าใช้ iPhone ลองล้างข้อมูลเว็บ van2.web.app แล้วกดโหลดใหม่"
+      );
+    }, 25000);
 
-    function showFlutterLoadError(text) {
-      if (document.getElementById("flutter-load-error")) {
+    function hideFlutterLoadRecovery() {
+      const panel = document.getElementById("flutter-load-recovery");
+      if (panel) {
+        panel.classList.remove("is-visible");
+      }
+    }
+
+    function reloadWithoutServiceWorkerCache() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function (registrations) {
+          registrations.forEach(function (registration) {
+            registration.unregister();
+          });
+          window.location.reload();
+        }).catch(function () {
+          window.location.reload();
+        });
         return;
       }
-      const error = document.createElement("p");
-      error.id = "flutter-load-error";
-      error.textContent = text;
-      error.style.cssText =
-        "position:fixed;left:16px;right:16px;bottom:24px;margin:0;padding:12px 16px;border-radius:12px;background:#fff3e0;color:#5d4037;font:16px/1.4 sans-serif;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.12);z-index:9999;";
-      document.body.appendChild(error);
+      window.location.reload();
+    }
+
+    function showFlutterLoadRecovery(title, detail) {
+      if (window._flutterAppReady || isFlutterAppVisible()) {
+        return;
+      }
+
+      let panel = document.getElementById("flutter-load-recovery");
+      if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "flutter-load-recovery";
+        panel.innerHTML =
+          '<h2 id="flutter-load-recovery-title"></h2>' +
+          '<p id="flutter-load-recovery-detail"></p>' +
+          '<ol>' +
+          '<li>เปิดใน Safari (ไม่ใช่เบราว์เซอร์ใน LINE/Facebook)</li>' +
+          '<li>iPhone: ตั้งค่า → Safari → ขั้นสูง → ข้อมูลเว็บ → ค้นหา van2.web.app → ลบ</li>' +
+          '<li>ลอง Wi‑Fi หรือ 4G/5G อีกครั้ง</li>' +
+          '</ol>' +
+          '<button type="button" class="retry-btn" id="flutter-load-retry">โหลดใหม่</button>' +
+          '<button type="button" class="dismiss-btn" id="flutter-load-dismiss">ปิดแล้วลองรอต่อ</button>';
+        document.body.appendChild(panel);
+        document.getElementById("flutter-load-retry").addEventListener("click", reloadWithoutServiceWorkerCache);
+        document.getElementById("flutter-load-dismiss").addEventListener("click", hideFlutterLoadRecovery);
+      }
+
+      document.getElementById("flutter-load-recovery-title").textContent = title;
+      document.getElementById("flutter-load-recovery-detail").textContent = detail;
+      panel.classList.add("is-visible");
+    }
+
+    function showFlutterLoadError(text) {
+      showFlutterLoadRecovery("โหลดแอปไม่สำเร็จ", text);
     }
   </script>
 </head>

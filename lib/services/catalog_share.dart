@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import '../cart_screen.dart';
 import '../public_catalog_service.dart';
 import '../tax_pricing_policy.dart';
+import 'product_reaction_service.dart';
 
 Future<void> shareCatalogProduct(
   PublicCatalogProduct product, {
@@ -35,6 +36,14 @@ Future<void> shareCatalogProduct(
   buffer.writeln('\nจากแว๊นตลาด');
 
   await _shareText(buffer.toString().trim(), context: context);
+  try {
+    await ProductReactionService.recordShare(
+      productId: product.id,
+      shopId: product.shopId,
+    );
+  } catch (_) {
+    // แชร์สำเร็จแล้ว — ไม่บล็อก UX ถ้าบันทึกสถิติไม่ได้
+  }
 }
 
 Future<void> shareCartLineItem(

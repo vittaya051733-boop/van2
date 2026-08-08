@@ -25,6 +25,7 @@ class ProductReactionService {
           likeCount: 0,
           dislikeCount: 0,
           loveCount: 0,
+          shareCount: 0,
         );
       }
       return ProductReactionStats.fromDoc(snapshot);
@@ -138,6 +139,43 @@ class ProductReactionService {
           'loveCount': loveCount,
           'updatedAt': FieldValue.serverTimestamp(),
         },
+        SetOptions(merge: true),
+      );
+    });
+  }
+
+  static Future<void> recordShare({
+    required String productId,
+    required String shopId,
+  }) async {
+    final normalizedProductId = productId.trim();
+    final normalizedShopId = shopId.trim();
+    if (normalizedProductId.isEmpty) {
+      return;
+    }
+
+    final statsRef = _stats.doc(normalizedProductId);
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      final statsSnap = await transaction.get(statsRef);
+      final shareCount = statsSnap.exists
+          ? (statsSnap.data()?['shareCount'] as num?)?.toInt() ?? 0
+          : 0;
+
+      final payload = <String, dynamic>{
+        'productId': normalizedProductId,
+        'shopId': normalizedShopId,
+        'shareCount': shareCount + 1,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      if (!statsSnap.exists) {
+        payload['likeCount'] = 0;
+        payload['dislikeCount'] = 0;
+        payload['loveCount'] = 0;
+      }
+
+      transaction.set(
+        statsRef,
+        payload,
         SetOptions(merge: true),
       );
     });

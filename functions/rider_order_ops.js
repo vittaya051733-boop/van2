@@ -1,13 +1,24 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
+const { createSettlementConfigLoader } = require('./settlement_config');
+const {
+  buildSettlementPatchOnComplete,
+  enqueueCreditReleaseScheduledNotifications,
+  estimateShopNetAmountWithGp,
+} = require('./scheduled_credit_releases');
 
 let db;
 let FieldValue;
 let DEFAULT_REGION;
+let loadSettlementConfig;
+let riderDeductionRate;
 
 function init(deps) {
   db = deps.db;
   FieldValue = deps.FieldValue;
   DEFAULT_REGION = deps.DEFAULT_REGION;
+  const configLoader = createSettlementConfigLoader({ db });
+  loadSettlementConfig = configLoader.loadSettlementConfig;
+  riderDeductionRate = configLoader.riderDeductionRate;
 }
 
 function readDouble(value) {
@@ -25,28 +36,7 @@ function roundMoney(value) {
   return Math.round((readDouble(value) ?? 0) * 100) / 100;
 }
 
-const SETTLEMENT_DOC_PATH = 'platform_config/settlement';
 const DEFAULT_RIDER_PLATFORM_DEDUCTION_RATE = 0.15;
-
-function readRiderPlatformDeductionRateFromSettlement(data) {
-  if (!data || typeof data !== 'object') {
-    return DEFAULT_RIDER_PLATFORM_DEDUCTION_RATE;
-  }
-  const percent = readDouble(data.riderPlatformRatePercent);
-  if (percent == null || percent < 0 || percent > 100) {
-    return DEFAULT_RIDER_PLATFORM_DEDUCTION_RATE;
-  }
-  return percent / 100;
-}
-
-async function loadRiderPlatformDeductionRate() {
-  try {
-    const snap = await db.doc(SETTLEMENT_DOC_PATH).get();
-    return readRiderPlatformDeductionRateFromSettlement(snap.data());
-  } catch (_) {
-    return DEFAULT_RIDER_PLATFORM_DEDUCTION_RATE;
-  }
-}
 
 function computeRiderNetIncome(grossAmount, deductionRate) {
   const safeGross = roundMoney(grossAmount);
@@ -223,18 +213,18 @@ function buildDeliveryFinancialSnapshot({
       deliverySettlementType: 'pay_at_destination',
       deliveryGrossShippingFee: safeGross,
       deliveryPlatformFee: platformFee,
-      deliveryRiderNetIncome: 0,
+      deliveryRiderNetIncome: riderNetIncome,
       deliveryCollectedAmount: collectedAmount,
-      deliveryCreditReleaseAmount: 0,
+      deliveryCreditReleaseAmount: riderNetIncome,
       deliveryCompletedSource: completedSource,
       deliveryFinancials: {
         settlementType: 'pay_at_destination',
         grossShippingFee: safeGross,
         platformFee,
-        riderNetIncome: 0,
+        riderNetIncome,
         riderWalletTransfer: 0,
         collectedAmount,
-        creditReleaseAmount: 0,
+        creditReleaseAmount: riderNetIncome,
         deductionRate: safeRate,
         deductionRatePercent: roundMoney(safeRate * 100),
         currency: 'THB',
@@ -262,85 +252,6 @@ function buildDeliveryFinancialSnapshot({
       completedSource,
     },
   };
-}
-
-function buildPendingSettlementPatch({ riderNetAmount, shopNetAmount }) {
-  const now = FieldValue.serverTimestamp();
-  const patch = {
-    settlement: {},
-  };
-  if (riderNetAmount > 0) {
-    patch.settlement.riderPayout = {
-      status: 'pending',
-      amount: roundMoney(riderNetAmount),
-      updatedAt: now,
-    };
-  }
-  if (shopNetAmount > 0) {
-    patch.settlement.shopPayout = {
-      status: 'pending',
-      amount: roundMoney(shopNetAmount),
-      updatedAt: now,
-    };
-  }
-  return patch;
-}
-
-function readRecipientUid(value) {
-  const text = String(value || '').trim();
-  return text || null;
-}
-
-async function enqueuePayoutPendingNotifications({
-  orderId,
-  orderData,
-  riderNetAmount,
-  shopNetAmount,
-}) {
-  const orderCode = String(orderData.orderCode || '').trim();
-  const orderLabel = orderCode
-    ? `#${orderCode}`
-    : `#${orderId.substring(0, Math.min(orderId.length, 8))}`;
-  const batch = db.batch();
-  const now = FieldValue.serverTimestamp();
-
-  const shopOwnerId = readRecipientUid(
-    orderData.shopOwnerId || orderData.merchantId || orderData.shopId,
-  );
-  if (shopOwnerId && shopNetAmount > 0) {
-    const ref = db.collection('app_notifications').doc();
-    batch.set(ref, {
-      targetApp: 'van1',
-      recipientUid: shopOwnerId,
-      orderId,
-      title: 'มียอดเงินเข้า',
-      body: `ออเดอร์ ${orderLabel} ${roundMoney(shopNetAmount).toFixed(2)} บาท • รอชำระ`,
-      action: 'payout_pending',
-      sourceApp: 'cloud_function',
-      read: false,
-      isRead: false,
-      createdAt: now,
-    });
-  }
-
-  const riderId = readRecipientUid(orderData.driverId || orderData.riderId);
-  if (riderId && riderNetAmount > 0) {
-    const ref = db.collection('app_notifications').doc();
-    batch.set(ref, {
-      targetApp: 'van3',
-      recipientUid: riderId,
-      orderId,
-      title: 'มียอดเงินเข้า',
-      body: `ออเดอร์ ${orderLabel} ${roundMoney(riderNetAmount).toFixed(2)} บาท • รอชำระ`,
-      action: 'payout_pending',
-      sourceApp: 'cloud_function',
-      read: false,
-      isRead: false,
-      createdAt: now,
-    });
-  }
-
-  await batch.commit();
 }
 
 function registerHandlers() {
@@ -445,7 +356,9 @@ function registerHandlers() {
       );
     }
 
-    const deductionRate = await loadRiderPlatformDeductionRate();
+    const settlementConfig = await loadSettlementConfig();
+    const deductionRate = riderDeductionRate(settlementConfig);
+    const isCod = isPayAtDestinationOrder(order);
     const deliverySnapshot = buildDeliveryFinancialSnapshot({
       orderData: order,
       grossShippingFee,
@@ -453,11 +366,17 @@ function registerHandlers() {
       deductionRate,
     });
     const riderNetAmount = deliverySnapshot.deliveryRiderNetIncome ?? 0;
-    const shopNetAmount = estimateShopNetAmount(order);
-    const settlementPatch = buildPendingSettlementPatch({
-      riderNetAmount,
-      shopNetAmount,
-    });
+    const shopNetAmount = isCod
+      ? estimateShopNetAmountWithGp(order, settlementConfig)
+      : estimateShopNetAmount(order);
+    const { patch: settlementPatch, topLevel: settlementTopLevel } =
+      buildSettlementPatchOnComplete({
+        orderData: order,
+        isCod,
+        riderNetAmount,
+        shopNetAmount,
+        settlementConfig,
+      });
 
     const updatePayload = {
       status: 'delivered',
@@ -465,6 +384,7 @@ function registerHandlers() {
       updatedAt: FieldValue.serverTimestamp(),
       ...deliverySnapshot,
       ...settlementPatch,
+      ...settlementTopLevel,
     };
 
     if (deliveryProofImageUrl) {
@@ -480,11 +400,13 @@ function registerHandlers() {
     await orderRef.update(updatePayload);
 
     if (riderNetAmount > 0 || shopNetAmount > 0) {
-      await enqueuePayoutPendingNotifications({
+      await enqueueCreditReleaseScheduledNotifications({
         orderId,
         orderData: { ...order, driverId: uid },
         riderNetAmount,
         shopNetAmount,
+        riderDelayMinutes: settlementConfig.riderCreditDelayMinutes,
+        shopDelayMinutes: settlementConfig.shopCreditDelayMinutes,
       });
     }
 

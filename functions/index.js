@@ -5046,6 +5046,17 @@ const riderWallet = require('./rider_wallet');
 riderWallet.init({ db, FieldValue, DEFAULT_REGION });
 Object.assign(exports, riderWallet.registerHandlers());
 
+const scheduledCreditReleases = require('./scheduled_credit_releases');
+scheduledCreditReleases.init({
+  db,
+  FieldValue,
+  Timestamp: admin.firestore.Timestamp,
+  onSchedule,
+  logger,
+  DEFAULT_REGION,
+});
+Object.assign(exports, scheduledCreditReleases.registerHandlers());
+
 const riderOrderOps = require('./rider_order_ops');
 riderOrderOps.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
 Object.assign(exports, riderOrderOps.registerHandlers());

@@ -864,6 +864,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           const SizedBox(height: 10),
                           _UntrustedCartTotalWarning(
                             isLoading: isCalculatingServerTotals,
+                            errorMessage: serverTotals?.errorMessage,
                             onRetry: _retryServerTotals,
                           ),
                         ],
@@ -920,6 +921,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       return _ServerCartTotals.zero;
     }
 
+    Object? lastError;
     for (var attempt = 0; attempt < 3; attempt++) {
       try {
         await AppCheckGuard.ensureCheckoutReady();
@@ -948,6 +950,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
 
         final payload = response.data;
         if (payload is! Map) {
+          lastError = StateError('calculateCartTotals returned non-map payload');
           continue;
         }
 
@@ -986,7 +989,8 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                   ? checkoutQuoteId
                   : null,
         );
-      } catch (_) {
+      } catch (error) {
+        lastError = error;
         if (attempt < 2) {
           await Future<void>.delayed(
             Duration(milliseconds: 600 * (attempt + 1)),
@@ -995,7 +999,52 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       }
     }
 
-    return _ServerCartTotals.zero;
+    return _ServerCartTotals(
+      subtotal: 0,
+      shippingFee: 0,
+      marketCollectionFee: 0,
+      marketServiceFee: 0,
+      grandTotal: 0,
+      discounts: CartDiscountSnapshot.empty,
+      trusted: false,
+      errorMessage: _formatServerTotalsError(lastError),
+    );
+  }
+
+  String? _formatServerTotalsError(Object? error) {
+    if (error == null) {
+      return 'ไม่สามารถคำนวณราคาจากเซิร์ฟเวอร์ได้ กรุณาลองใหม่';
+    }
+
+    if (error is FirebaseFunctionsException) {
+      switch (error.code) {
+        case 'unauthenticated':
+          return 'กรุณาเข้าสู่ระบบก่อนคำนวณราคา';
+        case 'invalid-argument':
+          return error.message ?? 'ข้อมูลตะกร้าหรือพิกัดจัดส่งไม่ครบ';
+        case 'failed-precondition':
+        case 'permission-denied':
+          return error.message ??
+              'ระบบยืนยันความปลอดภัยไม่ผ่าน กรุณาอัปเดตแอปหรือลองใหม่';
+        default:
+          return error.message ?? 'ไม่สามารถคำนวณราคาจากเซิร์ฟเวอร์ได้';
+      }
+    }
+
+    final text = error.toString();
+    if (text.contains('เวอร์ชันเว็บยังไม่พร้อม') ||
+        text.contains('APP_CHECK_RECAPTCHA')) {
+      return 'เว็บยังไม่ได้ตั้งค่า App Check — กรุณาใช้แอปมือถือหรือติดต่อผู้ดูแล';
+    }
+    if (text.contains('App Check') ||
+        text.contains('app-check') ||
+        text.contains('appCheck')) {
+      return 'ระบบยืนยันความปลอดภัยไม่พร้อม กรุณาลองใหม่หรือใช้แอปมือถือ';
+    }
+    if (error is Exception) {
+      return error.toString().replaceFirst('Exception: ', '');
+    }
+    return 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาลองใหม่';
   }
 
   Future<_ShippingSummary> _calculateShipping({
@@ -1520,17 +1569,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          createdOrderIds.isNotEmpty
-              ? 'Order created: ${createdOrderIds.join(', ')}'
-              : createError != null
-              ? 'Unable to create order: $createError'
-              : 'Cash on delivery selected. Order ID pending.',
-        ),
-      ),
-    );
+    if (createError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('ไม่สามารถสร้างออเดอร์ได้: $createError')),
+      );
+    }
   }
 }
 
@@ -2007,6 +2050,7 @@ class _ServerCartTotals {
     required this.discounts,
     required this.trusted,
     this.checkoutQuoteId,
+    this.errorMessage,
   });
 
   final double subtotal;
@@ -2017,6 +2061,7 @@ class _ServerCartTotals {
   final CartDiscountSnapshot discounts;
   final bool trusted;
   final String? checkoutQuoteId;
+  final String? errorMessage;
 
   static const zero = _ServerCartTotals(
     subtotal: 0,
@@ -2027,6 +2072,7 @@ class _ServerCartTotals {
     discounts: CartDiscountSnapshot.empty,
     trusted: false,
     checkoutQuoteId: null,
+    errorMessage: null,
   );
 }
 
@@ -2081,13 +2127,21 @@ class _UntrustedCartTotalWarning extends StatelessWidget {
   const _UntrustedCartTotalWarning({
     required this.isLoading,
     required this.onRetry,
+    this.errorMessage,
   });
 
   final bool isLoading;
   final VoidCallback onRetry;
+  final String? errorMessage;
 
   @override
   Widget build(BuildContext context) {
+    final message = isLoading
+        ? 'กำลังยืนยันยอดจาก server กรุณารอสักครู่'
+        : (errorMessage?.trim().isNotEmpty == true
+              ? errorMessage!.trim()
+              : 'ยอดนี้เป็นประมาณการจากเครื่อง ยังชำระไม่ได้ กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วคำนวณใหม่');
+
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -2106,9 +2160,7 @@ class _UntrustedCartTotalWarning extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              isLoading
-                  ? 'กำลังยืนยันยอดจาก server กรุณารอสักครู่'
-                  : 'ยอดนี้เป็นประมาณการจากเครื่อง ยังชำระไม่ได้ กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วคำนวณใหม่',
+              message,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFF92400E),
                 fontWeight: FontWeight.w700,

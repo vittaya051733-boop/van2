@@ -59,7 +59,8 @@ import 'shop_qr_scanner_screen.dart';
 import 'travel_planner_screen.dart';
 import 'travel_tracking_screen.dart';
 import 'travel_vehicle_type.dart';
-import 'utils/app_check_guard.dart' show AppCheckGuard, kAppCheckRecaptchaSiteKey;
+import 'utils/app_check_guard.dart'
+    show AppCheckGuard, kAppCheckRecaptchaSiteKey, kVan2AppCheckDebugToken;
 import 'utils/customer_location.dart';
 
 const bool kAppCheckForceDebug = bool.fromEnvironment(
@@ -70,11 +71,6 @@ const bool kAppCheckForceDebug = bool.fromEnvironment(
 /// Debug-only App Check token pinned for van2 dev/emulator builds.
 /// Register this exact token once in Firebase Console → App Check → van2 → Debug tokens.
 /// Override at build time with --dart-define=VAN2_APP_CHECK_DEBUG_TOKEN=...
-const String kVan2AppCheckDebugToken = String.fromEnvironment(
-  'VAN2_APP_CHECK_DEBUG_TOKEN',
-  defaultValue: 'c8e4a1f2-6b3d-4e9a-8f7c-2d5e6a9b0c41',
-);
-
 const bool kDebugMapPicker = bool.fromEnvironment(
   'DEBUG_MAP_PICKER',
   defaultValue: false,
@@ -110,6 +106,19 @@ Future<void> main() async {
             )
             .timeout(const Duration(seconds: 5));
         await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+        try {
+          await FirebaseAppCheck.instance
+              .getToken(true)
+              .timeout(const Duration(seconds: 5));
+        } catch (error, stack) {
+          if (kDebugMode) {
+            debugPrint('Could not get App Check token on web startup: $error');
+          } else {
+            unawaited(
+              ObservabilityService.instance.recordError(error, stack),
+            );
+          }
+        }
       }
     } else {
       await FirebaseAppCheck.instance
@@ -2439,6 +2448,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (mounted) {
         await _clearCartAfterCheckout();
+        _focusRoadmapOrders(orderIds);
+        _showSnackBar('สั่งซื้อสำเร็จ — ติดตามสถานะได้ที่แท็บลูกค้า');
       }
 
       await _recordCheckoutDiscounts(
@@ -2571,6 +2582,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    _focusRoadmapOrders(orderIds);
+
     final orderId = orderIds.first.trim();
     if (showTravelTracking && orderId.isNotEmpty) {
       try {
@@ -2588,8 +2601,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Fall back to roadmap tab only.
       }
     }
-
-    _focusRoadmapOrders(orderIds);
   }
 
   void _onBottomTabSelected(int index) {
@@ -2635,7 +2646,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (totalQuantity, item) => totalQuantity + item.quantity,
     );
     final activeCatalog = _activeCatalog;
-    final isNationwideCatalog = activeCatalog?.nationwideShippingOnly == true;
     final body = switch (_selectedBottomTab) {
       0 =>
         _showNationwideCart
@@ -2676,15 +2686,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 title: activeCatalog.title,
                 serviceType: activeCatalog.serviceType,
                 shopIdFilter: activeCatalog.shopIdFilter,
-                nationwideShippingOnly: activeCatalog.nationwideShippingOnly,
                 customerLatitude: _userLocation.latitude,
                 customerLongitude: _userLocation.longitude,
-                onConfirmOrder: isNationwideCatalog
-                    ? _addToNationwideCart
-                    : _addToCart,
-                onNavigateToCart: isNationwideCatalog
-                    ? _openNationwideCart
-                    : _openCartTab,
+                onConfirmOrder: _addToCart,
+                onNavigateToCart: _openCartTab,
                 embedded: true,
                 onBack: () => setState(() => _activeCatalog = null),
               ),
@@ -3103,13 +3108,11 @@ class _ActiveCatalog {
     required this.title,
     this.serviceType = '',
     this.shopIdFilter,
-    this.nationwideShippingOnly = false,
   });
 
   final String title;
   final String serviceType;
   final String? shopIdFilter;
-  final bool nationwideShippingOnly;
 }
 
 class _CartNavIcon extends StatelessWidget {

@@ -162,7 +162,7 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
                   enabled: !_isProcessing,
                   onTap: () => _run(
                     () => widget.onOmisePayment(channel),
-                    closeBeforeAction: true,
+                    closeBeforeAction: false,
                   ),
                 ),
               if (_isProcessing) ...<Widget>[

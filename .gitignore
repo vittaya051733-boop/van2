@@ -64,4 +64,5 @@ app.*.map.json
 scripts/deploy-backups/*.rules
 scripts/deploy-backups/LATEST.txt
 scripts/smoke-test-config.local.json
+scripts/web-build.secrets.ps1
 scripts/smoke-test/node_modules/

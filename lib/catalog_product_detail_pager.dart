@@ -422,56 +422,17 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
           ProductReactionBar(
             productId: product.id,
             shopId: product.shopId,
-            showCommentAction: false,
+            showShareAction: true,
+            onCommentTap: () {
+              showProductCommentsSheet(
+                context: context,
+                productId: product.id,
+                shopId: product.shopId,
+              );
+            },
+            onShareTap: () => shareCatalogProduct(product, context: context),
           ),
           const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    showProductCommentsSheet(
-                      context: context,
-                      productId: product.id,
-                      shopId: product.shopId,
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF2563EB),
-                    side: const BorderSide(color: Color(0xFFBFDBFE)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.chat_bubble_outline, size: 20),
-                  label: const Text(
-                    'แสดงความคิดเห็น',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => shareCatalogProduct(product, context: context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFF57C00),
-                    side: const BorderSide(color: Color(0xFFFED7AA)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  icon: const Icon(Icons.share_outlined, size: 20),
-                  label: const Text(
-                    'แชร์',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-            ],
-          ),
           if (description.isNotEmpty) ...<Widget>[
             const SizedBox(height: 6),
             Text(

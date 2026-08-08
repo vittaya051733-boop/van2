@@ -57,7 +57,7 @@ class HomeProductShelfSection extends StatelessWidget {
 
   static const double _catalogSpacing = 12;
 
-  static const double _compactRowHeight = 172;
+  static const double _compactRowHeight = 180;
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +66,7 @@ class HomeProductShelfSection extends StatelessWidget {
     }
 
     if (useCatalogCardStyle) {
-      final cardSize = catalogGridProductCardSize(context);
+      final cardSize = catalogHomeShelfCardSize(context);
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -158,6 +158,7 @@ class HomeProductShelfSection extends StatelessWidget {
                           onConfirmOrder: onConfirmOrder,
 
                           onNavigateToCart: onNavigateToCart,
+                          pinPriceToBottom: true,
                         ),
                       );
                     },

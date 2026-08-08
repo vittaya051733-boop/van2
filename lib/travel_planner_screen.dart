@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'models/omise_payment_channel.dart';
@@ -15,7 +16,10 @@ import 'travel_vehicle_type.dart';
 import 'utils/customer_location.dart';
 import 'utils/customer_location_gate.dart';
 import 'utils/driving_route_service.dart';
+import 'utils/google_maps_web_directions_route.dart';
+import 'utils/google_maps_web_resize.dart';
 import 'utils/places_autocomplete_service.dart';
+import 'utils/travel_planner_map_marker.dart';
 import 'widgets/online_rider_slider.dart';
 
 enum _TravelActivePin { pickup, destination }
@@ -113,15 +117,28 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   double? _routeDistanceKm;
   bool _isLoadingRoute = false;
   Timer? _routeRefreshDebounce;
+  Timer? _cameraFitDebounce;
   int _routeRequestId = 0;
   List<PlaceSuggestion> _placeSuggestions = const <PlaceSuggestion>[];
   bool _isLoadingSuggestions = false;
   bool _showSuggestions = false;
   Timer? _suggestionRefreshDebounce;
   bool _mapReady = !kIsWeb;
+  bool _routeOverlayReady = !kIsWeb;
+  bool _webMapMountReady = !kIsWeb;
   int _suggestionsRequestId = 0;
   bool _isSubmittingOrder = false;
   String? _activeIdempotencyKey;
+  BitmapDescriptor? _pickupMarkerIcon;
+  BitmapDescriptor? _destinationMarkerIcon;
+  bool _hasInitializedPickupGps = false;
+  String? _lastRouteOverlaySignature;
+
+  static const double _pickupGpsMinMoveMeters = 40;
+
+  static const double _minBoundsSpanDegrees = 0.003;
+  static const double _minCameraZoom = 11;
+  static const double _maxCameraZoom = 16;
 
   @override
   void initState() {
@@ -142,10 +159,35 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         return;
       }
       _destinationFocusNode.requestFocus();
+      if (kIsWeb) {
+        scheduleGoogleMapsWebResize(delay: const Duration(milliseconds: 50));
+        Future<void>.delayed(const Duration(milliseconds: 150), () {
+          if (!mounted) {
+            return;
+          }
+          setState(() => _webMapMountReady = true);
+          scheduleGoogleMapsWebResize(delay: const Duration(milliseconds: 200));
+        });
+      }
       unawaited(_refreshPickupFromGps(forceGate: true));
       if (_hasDestination) {
         _scheduleDrivingRouteRefresh();
       }
+      unawaited(_loadTravelPlannerMarkerIcons());
+    });
+  }
+
+  Future<void> _loadTravelPlannerMarkerIcons() async {
+    final results = await Future.wait<BitmapDescriptor>(<Future<BitmapDescriptor>>[
+      travelPlannerPickupMarker(),
+      travelPlannerDestinationMarker(),
+    ]);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _pickupMarkerIcon = results[0];
+      _destinationMarkerIcon = results[1];
     });
   }
 
@@ -153,7 +195,12 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _routeRefreshDebounce?.cancel();
+    _cameraFitDebounce?.cancel();
     _suggestionRefreshDebounce?.cancel();
+    if (kIsWeb) {
+      clearGoogleMapsWebDirectionsRoute();
+      _lastRouteOverlaySignature = null;
+    }
     _destinationSearchController.dispose();
     _destinationFocusNode.dispose();
     super.dispose();
@@ -198,7 +245,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         markerId: const MarkerId('pickup'),
         position: LatLng(_pickup.latitude, _pickup.longitude),
         draggable: true,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        icon: _pickupMarkerIcon ??
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         onDragEnd: (position) {
           unawaited(_updatePickupFromLatLng(position));
         },
@@ -217,7 +265,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
             _destination!.longitude,
           ),
           draggable: true,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+          icon: _destinationMarkerIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
           onDragEnd: (position) {
             unawaited(_updateDestinationFromLatLng(position));
           },
@@ -232,23 +281,99 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   }
 
   Set<Polyline> get _polylines {
-    if (kIsWeb && !_mapReady) {
+    if (kIsWeb) {
       return const <Polyline>{};
     }
-    if (_routePoints.length < 2) {
+    if (!_mapReady || !_routeOverlayReady) {
+      return const <Polyline>{};
+    }
+    final displayPoints = _displayRoutePoints;
+    if (displayPoints.length < 2) {
       return const <Polyline>{};
     }
 
     return <Polyline>{
       Polyline(
         polylineId: const PolylineId('route'),
-        points: _routePoints,
+        points: displayPoints,
         color: const Color(0xFFF57C00),
         width: 5,
-        // geodesic on web triggers stripe artifacts when Maps JS tiles lag (Safari).
         geodesic: !kIsWeb,
       ),
     };
+  }
+
+  List<LatLng> get _displayRoutePoints {
+    if (!kIsWeb || _routePoints.length <= 64) {
+      return _routePoints;
+    }
+    return _simplifyRoutePointsForWeb(_routePoints, maxPoints: 64);
+  }
+
+  static List<LatLng> _simplifyRoutePointsForWeb(
+    List<LatLng> points, {
+    required int maxPoints,
+  }) {
+    if (points.length <= maxPoints) {
+      return points;
+    }
+
+    final simplified = <LatLng>[];
+    final step = (points.length - 1) / (maxPoints - 1);
+    for (var index = 0; index < maxPoints; index++) {
+      simplified.add(points[(index * step).round()]);
+    }
+    if (simplified.last != points.last) {
+      simplified[simplified.length - 1] = points.last;
+    }
+    return simplified;
+  }
+
+  Future<void> _syncWebRouteOverlay() async {
+    if (!kIsWeb || !_mapReady || !_hasDestination || _routePoints.length < 2) {
+      return;
+    }
+
+    final signature =
+        '${_pickup.latitude.toStringAsFixed(5)},${_pickup.longitude.toStringAsFixed(5)},'
+        '${_destination!.latitude.toStringAsFixed(5)},${_destination!.longitude.toStringAsFixed(5)},'
+        '${_routePoints.length}';
+    if (_lastRouteOverlaySignature == signature) {
+      return;
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) {
+      return;
+    }
+
+    final drawn = await showGoogleMapsWebRoute(
+      originLat: _pickup.latitude,
+      originLng: _pickup.longitude,
+      destinationLat: _destination!.latitude,
+      destinationLng: _destination!.longitude,
+      routePoints: _routePoints,
+    );
+    if (drawn && mounted) {
+      _lastRouteOverlaySignature = signature;
+    }
+  }
+
+  Future<void> _refreshWebMapLayout({GoogleMapController? controller}) async {
+    if (!kIsWeb) {
+      return;
+    }
+    scheduleGoogleMapsWebResize();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    scheduleGoogleMapsWebResize();
+    final mapController = controller ?? _mapController;
+    if (mapController != null && mounted && !_hasDestination) {
+      try {
+        await mapController.moveCamera(
+          CameraUpdate.newLatLng(_mapCenter),
+        );
+      } catch (_) {}
+    }
   }
 
   void _scheduleDrivingRouteRefresh() {
@@ -262,6 +387,10 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     if (!_hasDestination) {
       if (!mounted) {
         return;
+      }
+      if (kIsWeb) {
+        clearGoogleMapsWebDirectionsRoute();
+        _lastRouteOverlaySignature = null;
       }
       setState(() {
         _routePoints = const <LatLng>[];
@@ -296,8 +425,12 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         _isLoadingRoute = false;
       });
 
-      if (_routePoints.length >= 2) {
-        await _fitRouteBounds();
+      if (_routePoints.length >= 2 || _hasDestination) {
+        _scheduleMapCameraFit(
+          delay: kIsWeb
+              ? const Duration(milliseconds: 450)
+              : const Duration(milliseconds: 200),
+        );
       } else if (fetchResult.failureMessage != null) {
         _showSnackBar(fetchResult.failureMessage!);
       }
@@ -340,62 +473,222 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     );
   }
 
-  Future<void> _fitRouteBounds() async {
-    if (!_hasDestination || _mapController == null) {
-      return;
+  EdgeInsets _mapOverlayPadding(BuildContext context) {
+    if (kIsWeb) {
+      return EdgeInsets.zero;
     }
-
-    if (_routePoints.length >= 2) {
-      var minLat = _routePoints.first.latitude;
-      var maxLat = _routePoints.first.latitude;
-      var minLng = _routePoints.first.longitude;
-      var maxLng = _routePoints.first.longitude;
-
-      for (final point in _routePoints) {
-        minLat = minLat < point.latitude ? minLat : point.latitude;
-        maxLat = maxLat > point.latitude ? maxLat : point.latitude;
-        minLng = minLng < point.longitude ? minLng : point.longitude;
-        maxLng = maxLng > point.longitude ? maxLng : point.longitude;
-      }
-
-      await _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(
-          LatLngBounds(
-            southwest: LatLng(minLat, minLng),
-            northeast: LatLng(maxLat, maxLng),
-          ),
-          80,
-        ),
-      );
-      return;
-    }
-
-    final bounds = LatLngBounds(
-      southwest: LatLng(
-        _pickup.latitude < _destination!.latitude
-            ? _pickup.latitude
-            : _destination!.latitude,
-        _pickup.longitude < _destination!.longitude
-            ? _pickup.longitude
-            : _destination!.longitude,
-      ),
-      northeast: LatLng(
-        _pickup.latitude > _destination!.latitude
-            ? _pickup.latitude
-            : _destination!.latitude,
-        _pickup.longitude > _destination!.longitude
-            ? _pickup.longitude
-            : _destination!.longitude,
-      ),
-    );
-
-    await _mapController!.animateCamera(
-      CameraUpdate.newLatLngBounds(bounds, 80),
+    final media = MediaQuery.of(context);
+    return EdgeInsets.fromLTRB(
+      32,
+      media.padding.top + 196,
+      32,
+      media.padding.bottom + 152,
     );
   }
 
+  void _scheduleMapCameraFit({
+    Duration delay = const Duration(milliseconds: 400),
+  }) {
+    _cameraFitDebounce?.cancel();
+    _cameraFitDebounce = Timer(delay, () {
+      unawaited(_fitRouteBounds());
+    });
+  }
+
+  LatLngBounds _pickupDestinationBounds() {
+    final destination = _destination!;
+    var minLat = _pickup.latitude < destination.latitude
+        ? _pickup.latitude
+        : destination.latitude;
+    var maxLat = _pickup.latitude > destination.latitude
+        ? _pickup.latitude
+        : destination.latitude;
+    var minLng = _pickup.longitude < destination.longitude
+        ? _pickup.longitude
+        : destination.longitude;
+    var maxLng = _pickup.longitude > destination.longitude
+        ? _pickup.longitude
+        : destination.longitude;
+
+    final latSpan = maxLat - minLat;
+    if (latSpan < _minBoundsSpanDegrees) {
+      final pad = (_minBoundsSpanDegrees - latSpan) / 2;
+      minLat -= pad;
+      maxLat += pad;
+    }
+
+    final lngSpan = maxLng - minLng;
+    if (lngSpan < _minBoundsSpanDegrees) {
+      final pad = (_minBoundsSpanDegrees - lngSpan) / 2;
+      minLng -= pad;
+      maxLng += pad;
+    }
+
+    return LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+  }
+
+  LatLngBounds? _routePointsBounds() {
+    if (_routePoints.length < 2) {
+      return null;
+    }
+
+    var minLat = _routePoints.first.latitude;
+    var maxLat = _routePoints.first.latitude;
+    var minLng = _routePoints.first.longitude;
+    var maxLng = _routePoints.first.longitude;
+
+    for (final point in _routePoints) {
+      minLat = minLat < point.latitude ? minLat : point.latitude;
+      maxLat = maxLat > point.latitude ? maxLat : point.latitude;
+      minLng = minLng < point.longitude ? minLng : point.longitude;
+      maxLng = maxLng > point.longitude ? maxLng : point.longitude;
+    }
+
+    return LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+  }
+
+  LatLngBounds _unionBounds(LatLngBounds a, LatLngBounds b) {
+    return LatLngBounds(
+      southwest: LatLng(
+        a.southwest.latitude < b.southwest.latitude
+            ? a.southwest.latitude
+            : b.southwest.latitude,
+        a.southwest.longitude < b.southwest.longitude
+            ? a.southwest.longitude
+            : b.southwest.longitude,
+      ),
+      northeast: LatLng(
+        a.northeast.latitude > b.northeast.latitude
+            ? a.northeast.latitude
+            : b.northeast.latitude,
+        a.northeast.longitude > b.northeast.longitude
+            ? a.northeast.longitude
+            : b.northeast.longitude,
+      ),
+    );
+  }
+
+  Future<void> _clampCameraZoom() async {
+    final controller = _mapController;
+    if (controller == null) {
+      return;
+    }
+
+    try {
+      final zoom = await controller.getZoomLevel();
+      if (zoom > _maxCameraZoom) {
+        await controller.animateCamera(
+          CameraUpdate.zoomTo(_maxCameraZoom),
+        );
+      } else if (zoom < _minCameraZoom) {
+        await controller.animateCamera(
+          CameraUpdate.zoomTo(_minCameraZoom),
+        );
+      }
+    } catch (_) {}
+  }
+
+  double _zoomForBoundsSpan(double spanDegrees) {
+    if (spanDegrees <= 0.004) {
+      return 15;
+    }
+    if (spanDegrees <= 0.01) {
+      return 14;
+    }
+    if (spanDegrees <= 0.025) {
+      return 13;
+    }
+    if (spanDegrees <= 0.06) {
+      return 12;
+    }
+    return _minCameraZoom;
+  }
+
+  double _zoomForDistanceKm(double distanceKm) {
+    if (distanceKm <= 0.8) {
+      return 15;
+    }
+    if (distanceKm <= 1.5) {
+      return 14;
+    }
+    if (distanceKm <= 3) {
+      return 13;
+    }
+    if (distanceKm <= 6) {
+      return 12;
+    }
+    return _minCameraZoom;
+  }
+
+  Future<void> _fitRouteCameraWeb() async {
+    final bounds = _pickupDestinationBounds();
+    final center = LatLng(
+      (bounds.northeast.latitude + bounds.southwest.latitude) / 2,
+      (bounds.northeast.longitude + bounds.southwest.longitude) / 2,
+    );
+    final latSpan = bounds.northeast.latitude - bounds.southwest.latitude;
+    final lngSpan = bounds.northeast.longitude - bounds.southwest.longitude;
+    final span = latSpan > lngSpan ? latSpan : lngSpan;
+
+    var zoom = _zoomForBoundsSpan(span);
+    final distanceKm = _routeDistanceKm ?? _distanceKm;
+    if (distanceKm != null) {
+      final distanceZoom = _zoomForDistanceKm(distanceKm);
+      if (distanceZoom < zoom) {
+        zoom = distanceZoom;
+      }
+    }
+    zoom = zoom.clamp(_minCameraZoom, _maxCameraZoom);
+
+    await _mapController!.animateCamera(
+      CameraUpdate.newLatLngZoom(center, zoom),
+    );
+  }
+
+  Future<void> _fitRouteBounds() async {
+    if (!_hasDestination || _mapController == null || !_mapReady) {
+      return;
+    }
+
+    if (kIsWeb) {
+      await _fitRouteCameraWeb();
+      if (_routePoints.length >= 2) {
+        await _syncWebRouteOverlay();
+      }
+      return;
+    }
+
+    var bounds = _pickupDestinationBounds();
+    final routeBounds = _routePointsBounds();
+    if (routeBounds != null) {
+      bounds = _unionBounds(bounds, routeBounds);
+    }
+
+    try {
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(bounds, 64),
+      );
+      await _clampCameraZoom();
+    } catch (_) {
+      final destination = _destination!;
+      final center = LatLng(
+        (_pickup.latitude + destination.latitude) / 2,
+        (_pickup.longitude + destination.longitude) / 2,
+      );
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(center, 14),
+      );
+    }
+  }
+
   Future<void> _refreshPickupFromGps({required bool forceGate}) async {
-    if (_isLoadingPickup || _isRequestingLocationGate) {
+    if (_locationsConfirmed || _isLoadingPickup || _isRequestingLocationGate) {
       return;
     }
 
@@ -433,15 +726,31 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         return;
       }
 
+      if (_hasInitializedPickupGps) {
+        final movedMeters = Geolocator.distanceBetween(
+          _pickup.latitude,
+          _pickup.longitude,
+          location.latitude,
+          location.longitude,
+        );
+        if (movedMeters < _pickupGpsMinMoveMeters) {
+          setState(() => _pickupReady = true);
+          return;
+        }
+      } else {
+        _hasInitializedPickupGps = true;
+      }
+
       setState(() {
         _pickup = location;
         _pickupReady = true;
         _locationsConfirmed = false;
       });
 
-      await _moveCamera(LatLng(location.latitude, location.longitude));
       if (_hasDestination) {
         _scheduleDrivingRouteRefresh();
+      } else {
+        await _moveCamera(LatLng(location.latitude, location.longitude));
       }
     } finally {
       if (mounted) {
@@ -469,6 +778,10 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       _locationsConfirmed = false;
     });
 
+    if (kIsWeb) {
+      _lastRouteOverlaySignature = null;
+    }
+
     if (_hasDestination) {
       _scheduleDrivingRouteRefresh();
     }
@@ -491,6 +804,9 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       _locationsConfirmed = false;
     });
 
+    if (kIsWeb) {
+      _lastRouteOverlaySignature = null;
+    }
     _scheduleDrivingRouteRefresh();
   }
 
@@ -624,7 +940,6 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       _placeSuggestions = const <PlaceSuggestion>[];
     });
 
-    await _moveCamera(LatLng(resolved.latitude, resolved.longitude));
     _scheduleDrivingRouteRefresh();
   }
 
@@ -717,7 +1032,6 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       _placeSuggestions = const <PlaceSuggestion>[];
     });
 
-    await _moveCamera(target);
     _scheduleDrivingRouteRefresh();
   }
 
@@ -1293,66 +1607,110 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     );
   }
 
+  Widget _buildMapSearchOverlay() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Material(
+                  color: Colors.white,
+                  shape: const CircleBorder(),
+                  elevation: 4,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _buildSearchCard(),
+            if (_showSuggestions || _isLoadingSuggestions)
+              _buildPlaceSuggestionsList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGoogleMap() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SizedBox(
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          child: GoogleMap(
+            padding: _mapOverlayPadding(context),
+            initialCameraPosition: CameraPosition(
+              target: _mapCenter,
+              zoom: 15,
+            ),
+            onMapCreated: (controller) async {
+              _mapController = controller;
+              if (kIsWeb) {
+                await _refreshWebMapLayout(controller: controller);
+                await Future<void>.delayed(
+                  const Duration(milliseconds: 300),
+                );
+                if (!mounted) {
+                  return;
+                }
+                setState(() => _mapReady = true);
+                await _refreshWebMapLayout(controller: controller);
+              } else {
+                setState(() => _mapReady = true);
+              }
+            },
+            onCameraIdle: () {
+              if (!_routeOverlayReady) {
+                setState(() => _routeOverlayReady = true);
+              }
+            },
+            markers: _markers,
+            polylines: _polylines,
+            myLocationEnabled: _pickupReady,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            onTap: _onMapTap,
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb && !_webMapMountReady) {
+      return Scaffold(
+        body: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            const ColoredBox(
+              color: Color(0xFFE5E7EB),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            _buildMapSearchOverlay(),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildBottomSheet(),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       body: Stack(
+        fit: StackFit.expand,
         children: <Widget>[
-          Positioned.fill(
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(
-                target: _mapCenter,
-                zoom: 15,
-              ),
-              onMapCreated: (controller) async {
-                _mapController = controller;
-                if (kIsWeb) {
-                  // Web-only: wait for Maps JS tiles before route overlays.
-                  await Future<void>.delayed(const Duration(milliseconds: 400));
-                  if (!mounted) {
-                    return;
-                  }
-                  setState(() => _mapReady = true);
-                }
-                if (_hasDestination) {
-                  unawaited(_fitRouteBounds());
-                }
-              },
-              markers: _markers,
-              polylines: _polylines,
-              myLocationEnabled: _pickupReady,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              onTap: _onMapTap,
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Material(
-                        color: Colors.white,
-                        shape: const CircleBorder(),
-                        elevation: 4,
-                        child: IconButton(
-                          icon: const Icon(Icons.arrow_back),
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _buildSearchCard(),
-                  if (_showSuggestions || _isLoadingSuggestions)
-                    _buildPlaceSuggestionsList(),
-                ],
-              ),
-            ),
-          ),
+          Positioned.fill(child: _buildGoogleMap()),
+          _buildMapSearchOverlay(),
           Positioned(
             left: 0,
             right: 0,

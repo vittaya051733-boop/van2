@@ -474,6 +474,19 @@ service cloud.firestore {
           && request.resource.data.likeCount >= 0
           && request.resource.data.dislikeCount >= 0
           && request.resource.data.loveCount >= 0
+          && (!('shareCount' in request.resource.data)
+              || (request.resource.data.shareCount is int
+                  && request.resource.data.shareCount >= 0))
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canCreateProductReactionStatsForShare(productId) {
+      return request.resource.data.productId == productId
+          && request.resource.data.shopId is string
+          && request.resource.data.likeCount == 0
+          && request.resource.data.dislikeCount == 0
+          && request.resource.data.loveCount == 0
+          && request.resource.data.shareCount == 1
           && request.resource.data.updatedAt == request.time;
     }
 
@@ -487,6 +500,19 @@ service cloud.firestore {
             'loveCount',
             'updatedAt',
           ])
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canIncrementProductShareCount() {
+      return request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'shareCount',
+            'updatedAt',
+          ])
+          && request.resource.data.shareCount is int
+          && request.resource.data.shareCount
+              == resource.data.get('shareCount', 0) + 1
           && request.resource.data.updatedAt == request.time;
     }
 
@@ -742,8 +768,10 @@ service cloud.firestore {
 
     match /product_reaction_stats/{productId} {
       allow get, list: if true;
-      allow create: if canCreateProductReactionStats(productId);
+      allow create: if canCreateProductReactionStats(productId)
+          || canCreateProductReactionStatsForShare(productId);
       allow update: if canUpdateProductReactionStats()
+          || canIncrementProductShareCount()
           || isPrivilegedAdmin();
       allow delete: if isPrivilegedAdmin();
 

@@ -1,4 +1,6 @@
 {
+  "dart.flutterSdkPath": "C:\\flutter",
+  "dart.openDevTools": "never",
   "java.import.gradle.enabled": false,
   "java.import.exclusions": [
     "**/android/**",

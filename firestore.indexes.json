@@ -17,6 +17,38 @@
       ]
     },
     {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "riderCreditReleaseStatus", "order": "ASCENDING" },
+        { "fieldPath": "riderCreditReleaseAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "shopCreditReleaseStatus", "order": "ASCENDING" },
+        { "fieldPath": "shopCreditReleaseAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "riderPayoutStatus", "order": "ASCENDING" },
+        { "fieldPath": "riderPayoutReleaseAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "shopPayoutStatus", "order": "ASCENDING" },
+        { "fieldPath": "shopPayoutReleaseAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "product_comments",
       "queryScope": "COLLECTION",
       "fields": [

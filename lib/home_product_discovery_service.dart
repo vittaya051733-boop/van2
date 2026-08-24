@@ -5,20 +5,91 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'models/home_quick_action_config.dart';
 import 'services/home_catalog_bootstrap.dart';
 import 'services/home_product_image_prefetch.dart';
+import 'services/home_quick_action_config_service.dart';
+import 'services/promotion_catalog_service.dart';
 import 'public_catalog_service.dart';
+import 'models/promotion_models.dart';
+import 'models/product_variant.dart';
+import 'widgets/product_discount_display.dart';
 
 class HomeProductDiscoveryService {
   HomeProductDiscoveryService._();
 
   static const int shelfLimit = 12;
+  static const int discountFeedScanLimit = 300;
+
+  static HomeQuickActionConfig get _homeActions =>
+      HomeQuickActionConfigService.instance.currentQuickActions;
+
+  static List<PublicCatalogProduct> _filterHomeProducts(
+    List<PublicCatalogProduct> products,
+  ) {
+    return PublicCatalogService.filterHomeRetailProducts(
+      products,
+      enabledServiceTypes: _homeActions.enabledRetailServiceTypes,
+      nationwideEnabled: _homeActions.nationwideEnabled,
+    );
+  }
+
+  static Future<List<PublicCatalogProduct>> loadDiscountFeed() async {
+    List<PromotionOffer> promotions = const <PromotionOffer>[];
+    try {
+      promotions = await PromotionCatalogService.instance
+          .watchActivePromotions()
+          .first
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      promotions = const <PromotionOffer>[];
+    }
+
+    final candidates = _filterHomeProducts(
+      await PublicCatalogService.listRecentActiveProducts(
+        limit: discountFeedScanLimit,
+      ),
+    );
+
+    final scored = <({PublicCatalogProduct product, double discount})>[];
+    for (final product in candidates) {
+      final pricingData = ProductVariantSupport.catalogListPricingData(
+        product.data,
+      );
+      final promotion = PromotionCatalogService.instance.promotionForProduct(
+        promotions,
+        productId: product.id,
+        shopId: product.shopId,
+      );
+      final display = ProductDiscountDisplay.resolve(
+        productData: pricingData,
+        promotion: promotion,
+      );
+      final discount = ProductDiscountDisplay.effectiveDiscountPercent(display);
+      if (discount <= 0) {
+        continue;
+      }
+      scored.add((product: product, discount: discount));
+    }
+
+    scored.sort((left, right) {
+      final byDiscount = right.discount.compareTo(left.discount);
+      if (byDiscount != 0) {
+        return byDiscount;
+      }
+      return left.product.id.compareTo(right.product.id);
+    });
+
+    return scored.map((entry) => entry.product).toList(growable: false);
+  }
 
   static Stream<List<PublicCatalogProduct>> streamFeaturedShelf({
     Set<String> excludeIds = const <String>{},
   }) async* {
-    final cached = HomeCatalogBootstrap.peekFeaturedShelf();
-    if (cached != null && cached.isNotEmpty) {
+    final cached = _filterHomeProducts(
+      HomeCatalogBootstrap.peekFeaturedShelf() ?? const <PublicCatalogProduct>[],
+    );
+    if (cached.isNotEmpty) {
       yield cached;
     }
 
@@ -27,20 +98,14 @@ class HomeProductDiscoveryService {
         featuredIds,
         excludeIds: excludeIds,
       );
-      if (fresh.isEmpty) {
-        continue;
-      }
       HomeCatalogBootstrap.updateFeaturedShelf(fresh);
-      HomeProductImagePrefetch.scheduleShelfPrefetch(
-        fresh,
-        limit: shelfLimit,
-      );
-      final cachedIds =
-          cached?.map((product) => product.id).join(',') ?? '';
-      final freshIds = fresh.map((product) => product.id).join(',');
-      if (cachedIds != freshIds) {
-        yield fresh;
+      if (fresh.isNotEmpty) {
+        HomeProductImagePrefetch.scheduleShelfPrefetch(
+          fresh,
+          limit: shelfLimit,
+        );
       }
+      yield fresh;
     }
   }
 
@@ -52,7 +117,7 @@ class HomeProductDiscoveryService {
       excludeIds: excludeIds,
     );
     return _ensureRetailShelfProducts(
-      PublicCatalogService.filterHomeRetailProducts(products),
+      _filterHomeProducts(products),
       excludeIds: excludeIds,
     );
   }
@@ -78,7 +143,7 @@ class HomeProductDiscoveryService {
     }
 
     return _ensureRetailShelfProducts(
-      PublicCatalogService.filterHomeRetailProducts(products),
+      _filterHomeProducts(products),
       excludeIds: excludeIds,
     );
   }
@@ -95,7 +160,7 @@ class HomeProductDiscoveryService {
       ...excludeIds,
       ...products.map((product) => product.id),
     };
-    final filler = PublicCatalogService.filterHomeRetailProducts(
+    final filler = _filterHomeProducts(
       await PublicCatalogService.listRecentActiveProducts(
         limit: shelfLimit * 4,
         excludeIds: usedIds,
@@ -112,9 +177,11 @@ class HomeProductDiscoveryService {
     List<String> featuredIds, {
     Set<String> excludeIds = const <String>{},
   }) async {
-    final resolved = await PublicCatalogService.resolveProductsByIds(
-      featuredIds,
-      excludeIds: excludeIds,
+    final resolved = _filterHomeProducts(
+      await PublicCatalogService.resolveProductsByIds(
+        featuredIds,
+        excludeIds: excludeIds,
+      ),
     );
 
     if (resolved.length >= PublicCatalogService.homeShelfTargetCount) {
@@ -125,9 +192,11 @@ class HomeProductDiscoveryService {
       ...excludeIds,
       ...resolved.map((product) => product.id),
     };
-    final filler = await PublicCatalogService.listRecentActiveProducts(
-      limit: shelfLimit - resolved.length,
-      excludeIds: usedIds,
+    final filler = _filterHomeProducts(
+      await PublicCatalogService.listRecentActiveProducts(
+        limit: shelfLimit * 3,
+        excludeIds: usedIds,
+      ),
     );
 
     return <PublicCatalogProduct>[

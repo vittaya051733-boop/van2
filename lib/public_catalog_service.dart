@@ -761,15 +761,36 @@ class PublicCatalogService {
     'ร้านขายยา',
   };
 
-  static bool isHomeRetailCatalogProduct(PublicCatalogProduct product) {
+  static bool isHomeRetailCatalogProduct(
+    PublicCatalogProduct product, {
+    Set<String>? enabledServiceTypes,
+    bool nationwideEnabled = true,
+  }) {
     final normalized = _normalizeServiceType(_readServiceType(product.data));
-    return homeRetailServiceTypes.contains(normalized);
+    final allowed = enabledServiceTypes ?? homeRetailServiceTypes;
+    if (!allowed.contains(normalized)) {
+      return false;
+    }
+    if (!nationwideEnabled && _isEligibleForNationwideShipping(product.data)) {
+      return false;
+    }
+    return true;
   }
 
   static List<PublicCatalogProduct> filterHomeRetailProducts(
-    List<PublicCatalogProduct> products,
-  ) {
-    return products.where(isHomeRetailCatalogProduct).toList(growable: false);
+    List<PublicCatalogProduct> products, {
+    Set<String>? enabledServiceTypes,
+    bool nationwideEnabled = true,
+  }) {
+    return products
+        .where(
+          (product) => isHomeRetailCatalogProduct(
+            product,
+            enabledServiceTypes: enabledServiceTypes,
+            nationwideEnabled: nationwideEnabled,
+          ),
+        )
+        .toList(growable: false);
   }
 
   static bool _productHasDisplayImage(Map<String, dynamic> data) {
@@ -989,6 +1010,46 @@ bool _isEligibleForNationwideShipping(Map<String, dynamic> data) {
 
 bool nationwideShippingEligibleForRegressionTest(Map<String, dynamic> data) {
   return _isEligibleForNationwideShipping(data);
+}
+
+bool catalogProductInStockForRegressionTest(Map<String, dynamic> data) {
+  return _isProductInStockForCatalog(data);
+}
+
+bool _isProductInStockForCatalog(Map<String, dynamic> data) {
+  if (data['hasVariants'] == true) {
+    final rawVariants = data['variants'];
+    if (rawVariants is! List || rawVariants.isEmpty) {
+      return true;
+    }
+
+    final activeVariants = rawVariants
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .where((variant) => variant['isActive'] != false);
+    if (activeVariants.isEmpty) {
+      return true;
+    }
+
+    return activeVariants.any((variant) {
+      final stock = variant['stock'];
+      if (stock is! num) {
+        return true;
+      }
+      return stock > 0;
+    });
+  }
+
+  if (!data.containsKey('stock')) {
+    return true;
+  }
+
+  final stock = data['stock'];
+  if (stock is num) {
+    return stock > 0;
+  }
+
+  return true;
 }
 
 bool _isPositiveNationwideShippingReason(String reason) {

@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'cart_screen.dart';
 import 'catalog_product_search_screen.dart';
 import 'category_catalog_screen.dart';
+import 'config/payment_gateway_config.dart';
 import 'favorites_screen.dart';
 import 'firebase_options.dart';
 import 'home_product_discovery_service.dart';
@@ -34,19 +35,25 @@ import 'services/order_reorder_service.dart';
 import 'privacy_launch_gate.dart';
 import 'models/omise_payment_channel.dart';
 import 'models/promotion_models.dart';
+import 'models/home_page_lock_config.dart';
+import 'models/home_shelves_config.dart';
 import 'services/omise_payment_service.dart';
 import 'pricing_config_service.dart';
 import 'services/locale_service.dart';
 import 'services/promotion_catalog_service.dart';
 import 'services/promotion_display_config_service.dart';
+import 'services/home_quick_action_config_service.dart';
 import 'services/claimable_coupon_service.dart';
+import 'services/ecosystem_heartbeat_service.dart';
 import 'services/user_coupon_wallet_service.dart';
+import 'widgets/home_maintenance_overlay.dart';
 import 'widgets/home_promo_carousel.dart';
 import 'widgets/claimable_coupon_popup.dart';
 import 'widgets/claimable_coupon_strip.dart';
 import 'widgets/my_coupons_sheet.dart';
 import 'public_catalog_service.dart';
 import 'services/cart_session_service.dart';
+import 'storage_helper.dart';
 import 'services/favorites_service.dart';
 import 'services/notification_service.dart';
 import 'services/observability_service.dart';
@@ -973,48 +980,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   static const List<_QuickActionItem> _quickActions = <_QuickActionItem>[
     _QuickActionItem(
+      id: 'travel',
       label: 'เดินทาง',
       icon: Icons.directions_car_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'travel',
     ),
     _QuickActionItem(
+      id: 'restaurant',
       label: 'ร้านอาหาร',
       icon: Icons.restaurant_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านอาหาร',
     ),
     _QuickActionItem(
+      id: 'market',
       label: 'ตลาด',
       icon: Icons.storefront_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ตลาด',
     ),
     _QuickActionItem(
+      id: 'shop',
       label: 'ร้านค้า',
       icon: Icons.shopping_bag_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านค้า',
     ),
     _QuickActionItem(
+      id: 'pharmacy',
       label: 'ร้านขายยา',
       icon: Icons.local_pharmacy_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านขายยา',
     ),
     _QuickActionItem(
+      id: 'shop-map',
       label: 'แผนที่',
       icon: Icons.location_on_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'shop-map',
     ),
     _QuickActionItem(
+      id: 'nationwide-shipping',
       label: 'สินค้าส่งทั่วประเทศ',
       icon: Icons.inventory_2_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'nationwide-shipping',
     ),
     _QuickActionItem(
+      id: 'more',
       label: 'เพิ่มเติม',
       icon: Icons.grid_view_rounded,
       iconColor: Color(0xFFEF8A17),
@@ -1026,16 +1041,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _userLocation = widget.userLocation;
-    _authStateSubscription = FirebaseAuth.instance.authStateChanges().listen((_) {
+    _authStateSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
       _listenUnreadNotifications();
+      if (user != null) {
+        EcosystemHeartbeatService.instance.start();
+      } else {
+        EcosystemHeartbeatService.instance.stop();
+      }
     });
     _listenUnreadNotifications();
     unawaited(FavoritesService.instance.ensureLoaded());
     unawaited(_restorePersistedCart());
+    if (FirebaseAuth.instance.currentUser != null) {
+      EcosystemHeartbeatService.instance.start();
+    }
   }
 
   @override
   void dispose() {
+    EcosystemHeartbeatService.instance.stop();
     _cartSyncDebounce?.cancel();
     _cartExpiryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -1055,6 +1079,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
+      // Keep ecosystem heartbeat while paused so van4 does not mark van2
+      // stale/red when the user switches to another app on the same device.
+      if (state == AppLifecycleState.detached) {
+        EcosystemHeartbeatService.instance.stop();
+      }
       unawaited(
         CartSessionService.saveLocalCart(
           cartItems: List<CartLineItem>.from(_cartItems),
@@ -1064,6 +1093,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     if (state == AppLifecycleState.resumed) {
+      if (FirebaseAuth.instance.currentUser != null) {
+        EcosystemHeartbeatService.instance.start();
+      }
       unawaited(_restorePersistedCart());
     }
   }
@@ -1297,7 +1329,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           initialDestination: null,
           initialRideSelection: null,
           onConfirmCashOnDelivery: _confirmTravelCashOnDeliveryOrder,
-          onSubmitOmisePayment: _submitOmiseTravelOrder,
+          onSubmitOmisePayment: PaymentGatewayConfig.omiseGatewayEnabled
+              ? _submitOmiseTravelOrder
+              : null,
           onOpenOrderRoadmap: _openOrderRoadmap,
         ),
       ),
@@ -1386,7 +1420,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           initialDestination: _destinationLocation,
           initialRideSelection: _travelRideSelection,
           onConfirmCashOnDelivery: _confirmTravelCashOnDeliveryOrder,
-          onSubmitOmisePayment: _submitOmiseTravelOrder,
+          onSubmitOmisePayment: PaymentGatewayConfig.omiseGatewayEnabled
+              ? _submitOmiseTravelOrder
+              : null,
           onOpenOrderRoadmap: _openOrderRoadmap,
         ),
       ),
@@ -1968,6 +2004,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           parcelLengthCm: selection.parcelLengthCm,
           parcelWidthCm: selection.parcelWidthCm,
           parcelHeightCm: selection.parcelHeightCm,
+          variantId: selection.variantId,
+          selectedSize: selection.selectedSize,
+          selectedColor: selection.selectedColor,
         ),
       );
     });
@@ -1997,6 +2036,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           parcelLengthCm: selection.parcelLengthCm,
           parcelWidthCm: selection.parcelWidthCm,
           parcelHeightCm: selection.parcelHeightCm,
+          variantId: selection.variantId,
+          selectedSize: selection.selectedSize,
+          selectedColor: selection.selectedColor,
         ),
       );
     });
@@ -2237,6 +2279,111 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return creation.orderIds;
   }
 
+  Future<PaymentSlipSubmissionResult> _submitLocalCartPromptPaySlip(
+    PaymentSlipSubmissionRequest request,
+  ) async {
+    final user = await _requireCheckoutUser();
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
+    if (_cartItems.isEmpty) {
+      throw Exception('ไม่มีสินค้าในตะกร้า');
+    }
+    if (request.bytes.isEmpty) {
+      throw Exception('ไฟล์สลิปว่างเปล่า');
+    }
+
+    final checkoutContext = request.checkoutContext;
+    if (checkoutContext == null) {
+      throw Exception('ข้อมูล checkout ไม่ครบ');
+    }
+
+    final paymentGroupId = 'V2PAY-${DateTime.now().millisecondsSinceEpoch}';
+    final sanitizedFileName = _sanitizeCheckoutSlipFileName(request.fileName);
+    final storagePath =
+        'payment_slips/${user.uid}/$paymentGroupId/$sanitizedFileName';
+
+    final uploadTask = await StorageHelper.instance.ref(storagePath).putData(
+          request.bytes,
+          SettableMetadata(
+            contentType: request.contentType ?? 'image/jpeg',
+            customMetadata: <String, String>{
+              'uploadedBy': user.uid,
+              'paymentGroupId': paymentGroupId,
+              'checkoutType': 'local_cart',
+            },
+          ),
+        );
+    final downloadUrl = await uploadTask.ref.getDownloadURL();
+
+    final callable = FirebaseFunctions.instanceFor(
+      region: 'asia-southeast1',
+    ).httpsCallable('verifyStandalonePaymentSlip');
+    final response = await callable.call(<String, dynamic>{
+      'storagePath': storagePath,
+      'paymentGroupId': paymentGroupId,
+      'fileName': sanitizedFileName,
+      'expectedAmount': request.grandTotal,
+      if (request.contentType != null) 'contentType': request.contentType,
+    });
+    final payload = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : const <String, dynamic>{};
+    final status = (payload['status'] ?? 'submitted').toString().trim();
+    final message = (payload['message'] ?? '').toString().trim();
+
+    if (status != 'verified') {
+      return PaymentSlipSubmissionResult(
+        orderIds: const <String>[],
+        verificationStatus: status,
+        message: message.isEmpty ? 'สลิปยังไม่ผ่านการตรวจสอบ' : message,
+      );
+    }
+
+    if (!mounted) {
+      throw Exception('กรุณาลองใหม่อีกครั้ง');
+    }
+
+    final creation = await _createCheckoutOrders(
+      user: user,
+      paymentMethod: 'promptpay_qr',
+      paymentMethodLabel: 'สแกนจ่ายพร้อมเพย์',
+      paymentStatus: 'verified',
+      paymentStatusLabel: 'ชำระเงินแล้ว',
+      auditSource: 'promptpay_slip_dialog',
+      riderNotifyReady: true,
+      notifyRider: true,
+      createdEventLabel: 'ลูกค้าสแกนจ่ายพร้อมเพย์และสร้างออเดอร์แล้ว',
+      checkoutContext: checkoutContext,
+      verifiedSlip: _VerifiedSlipCheckout(
+        paymentGroupId: paymentGroupId,
+        storagePath: storagePath,
+        downloadUrl: downloadUrl,
+        fileName: sanitizedFileName,
+        sizeBytes: request.sizeBytes,
+        verificationFeedbackId: (payload['feedbackId'] ?? '').toString(),
+        verificationMessage: message,
+      ),
+    );
+
+    return PaymentSlipSubmissionResult(
+      orderIds: creation.orderIds,
+      verificationStatus: status,
+      message: message.isEmpty
+          ? 'ตรวจสลิปผ่านและสร้างออเดอร์แล้ว'
+          : '$message\nสร้างออเดอร์แล้ว ${creation.orderIds.length} รายการ',
+    );
+  }
+
+  String _sanitizeCheckoutSlipFileName(String fileName) {
+    final trimmed = fileName.trim();
+    final safe = trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    if (safe.isEmpty) {
+      return 'slip_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    }
+    return safe;
+  }
+
   Future<List<String>> _submitOmiseTravelOrder(
     TravelPlannerResult request,
     OmisePaymentChannel channel,
@@ -2376,6 +2523,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 'shopId': item.shopId,
                 'quantity': item.quantity,
                 'selectedToppings': item.selectedToppings,
+                if (item.variantId?.trim().isNotEmpty == true)
+                  'variantId': item.variantId!.trim(),
+                if (item.selectedSize?.trim().isNotEmpty == true)
+                  'selectedSize': item.selectedSize!.trim(),
+                if (item.selectedColor?.trim().isNotEmpty == true)
+                  'selectedColor': item.selectedColor!.trim(),
                 'shopLatitude': item.shopLatitude,
                 'shopLongitude': item.shopLongitude,
               },
@@ -2706,7 +2859,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           unawaited(_applySharedLocationToCart());
         },
         onConfirmCashOnDelivery: _confirmCashOnDeliveryOrder,
-        onSubmitOmisePayment: _submitOmiseCheckoutOrder,
+        onSubmitOmisePayment: PaymentGatewayConfig.omiseGatewayEnabled
+            ? _submitOmiseCheckoutOrder
+            : null,
+        onSubmitPromptPaySlip: PaymentGatewayConfig.embeddedPromptPayScanEnabled
+            ? _submitLocalCartPromptPaySlip
+            : null,
         onOpenOrderRoadmap: _openOrderRoadmap,
         initialCouponCode: _pendingCartCouponCode,
         onOpenMyCoupons: _openMyCouponsWallet,
@@ -2743,7 +2901,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     };
 
-    return PopScope(
+    final isHomeRootView =
+        _selectedBottomTab == 0 && activeCatalog == null && !_showNationwideCart;
+
+    return StreamBuilder<HomeShelvesConfig>(
+      stream: HomeQuickActionConfigService.instance.watch(),
+      builder: (context, snapshot) {
+        final homeLock = snapshot.hasError
+            ? HomePageLockConfig.defaults
+            : (snapshot.data ??
+                    HomeQuickActionConfigService.instance.current)
+                .homeLock;
+        final showHomeLock = homeLock.enabled && isHomeRootView;
+
+        return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) {
@@ -2847,13 +3018,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
           ),
           _buildClaimableCouponPopupOverlay(),
+          if (showHomeLock)
+            Positioned.fill(
+              child: HomeMaintenanceOverlay(message: homeLock.message),
+            ),
         ],
       ),
+    );
+      },
     );
   }
 
   Widget _buildHomeBody() {
-    return CustomScrollView(
+    return StreamBuilder<HomeShelvesConfig>(
+      stream: HomeQuickActionConfigService.instance.watch(),
+      builder: (context, snapshot) {
+        final shelvesConfig = snapshot.hasError
+            ? HomeShelvesConfig.defaults
+            : (snapshot.data ??
+                HomeQuickActionConfigService.instance.current);
+        final config = shelvesConfig.quickActions;
+        final visibleActions = _quickActions
+            .where((item) => config.isEnabled(item.id))
+            .toList(growable: false);
+        return CustomScrollView(
       slivers: <Widget>[
         SliverToBoxAdapter(
           child: Container(
@@ -3005,27 +3193,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
-          sliver: SliverGrid(
-            delegate: SliverChildBuilderDelegate((
-              BuildContext context,
-              int index,
-            ) {
-              final item = _quickActions[index];
-              return _DashboardTile(
-                item: item,
-                onTap: () => _handleQuickActionTap(item),
-              );
-            }, childCount: _quickActions.length),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 12,
-              childAspectRatio: 0.74,
+        if (visibleActions.isNotEmpty)
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
+            sliver: SliverGrid(
+              delegate: SliverChildBuilderDelegate((
+                BuildContext context,
+                int index,
+              ) {
+                final item = visibleActions[index];
+                return _DashboardTile(
+                  item: item,
+                  onTap: () => _handleQuickActionTap(item),
+                );
+              }, childCount: visibleActions.length),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 12,
+                childAspectRatio: 0.74,
+              ),
             ),
           ),
-        ),
         if (PromotionDisplayConfigService.instance.current.homePromoBanner)
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 0),
@@ -3076,6 +3265,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: _HomeProductShelves(
               customerLatitude: _userLocation.latitude,
               customerLongitude: _userLocation.longitude,
+              enabledServiceTypes: config.enabledRetailServiceTypes,
+              nationwideEnabled: config.nationwideEnabled,
               onProductTap: _openShopCatalogFromProduct,
               onConfirmOrder: _addToCart,
               onNavigateToCart: _openCartTab,
@@ -3084,11 +3275,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ],
     );
+      },
+    );
   }
 }
 
 class _QuickActionItem {
   const _QuickActionItem({
+    required this.id,
     required this.label,
     this.icon,
     this.iconColor,
@@ -3096,6 +3290,7 @@ class _QuickActionItem {
     this.actionKey,
   });
 
+  final String id;
   final String label;
   final IconData? icon;
   final Color? iconColor;
@@ -3305,6 +3500,8 @@ class _HomeProductShelves extends StatefulWidget {
   const _HomeProductShelves({
     required this.customerLatitude,
     required this.customerLongitude,
+    required this.enabledServiceTypes,
+    required this.nationwideEnabled,
     required this.onProductTap,
     required this.onConfirmOrder,
     required this.onNavigateToCart,
@@ -3312,6 +3509,8 @@ class _HomeProductShelves extends StatefulWidget {
 
   final double customerLatitude;
   final double customerLongitude;
+  final Set<String> enabledServiceTypes;
+  final bool nationwideEnabled;
   final ValueChanged<PublicCatalogProduct> onProductTap;
   final ValueChanged<CartProductSelection> onConfirmOrder;
   final VoidCallback onNavigateToCart;
@@ -3331,6 +3530,29 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
   _secondaryFuture;
   String? _secondaryFutureKey;
   String? _scheduledShelfPrefetchKey;
+
+  String get _configKey =>
+      '${widget.enabledServiceTypes.join('|')}|${widget.nationwideEnabled}';
+
+  List<PublicCatalogProduct> _filterHomeProducts(
+    List<PublicCatalogProduct> products,
+  ) {
+    return PublicCatalogService.filterHomeRetailProducts(
+      products,
+      enabledServiceTypes: widget.enabledServiceTypes,
+      nationwideEnabled: widget.nationwideEnabled,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeProductShelves oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabledServiceTypes != widget.enabledServiceTypes ||
+        oldWidget.nationwideEnabled != widget.nationwideEnabled) {
+      _secondaryFuture = null;
+      _secondaryFutureKey = null;
+    }
+  }
 
   @override
   void initState() {
@@ -3419,8 +3641,9 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
     return StreamBuilder<List<PublicCatalogProduct>>(
       stream: HomeProductDiscoveryService.streamFeaturedShelf(),
       builder: (context, featuredSnapshot) {
-        final featured =
-            featuredSnapshot.data ?? const <PublicCatalogProduct>[];
+        final featured = _filterHomeProducts(
+          featuredSnapshot.data ?? const <PublicCatalogProduct>[],
+        );
         final featuredIds = featured.map((product) => product.id).toSet();
         final loadingFeatured =
             featuredSnapshot.connectionState == ConnectionState.waiting &&
@@ -3432,7 +3655,7 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
             List<PublicCatalogProduct> personalized,
           })
         >(
-          key: ValueKey<String>(featuredIds.join(',')),
+          key: ValueKey<String>('$_configKey:${featuredIds.join(',')}'),
           future: loadingFeatured
               ? null
               : _secondaryFutureForKey(featuredIds),
@@ -3472,11 +3695,12 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
                   onConfirmOrder: widget.onConfirmOrder,
                   onNavigateToCart: widget.onNavigateToCart,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 4),
                 HomeProductShelfSection(
                   title: 'สินค้าขายดี',
-                  products:
-                      secondary?.bestSelling ?? const <PublicCatalogProduct>[],
+                  products: _filterHomeProducts(
+                    secondary?.bestSelling ?? const <PublicCatalogProduct>[],
+                  ),
                   isLoading: loadingFeatured || loadingSecondary,
                   onProductTap: widget.onProductTap,
                   useCatalogCardStyle: true,
@@ -3485,11 +3709,12 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
                   onConfirmOrder: widget.onConfirmOrder,
                   onNavigateToCart: widget.onNavigateToCart,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 4),
                 HomeProductShelfSection(
                   title: 'สินค้าที่คุณอาจรู้จัก',
-                  products:
-                      secondary?.personalized ?? const <PublicCatalogProduct>[],
+                  products: _filterHomeProducts(
+                    secondary?.personalized ?? const <PublicCatalogProduct>[],
+                  ),
                   isLoading: loadingFeatured || loadingSecondary,
                   onProductTap: widget.onProductTap,
                   useCatalogCardStyle: true,
@@ -3499,6 +3724,14 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
                   onNavigateToCart: widget.onNavigateToCart,
                   showWhenEmpty: true,
                   emptyMessage: 'ยังไม่มีสินค้าที่ตรงกับประวัติของคุณ',
+                ),
+                const SizedBox(height: 4),
+                HomeDiscountProductFeedSection(
+                  key: ValueKey<String>(_configKey),
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  onConfirmOrder: widget.onConfirmOrder,
+                  onNavigateToCart: widget.onNavigateToCart,
                 ),
               ],
             );

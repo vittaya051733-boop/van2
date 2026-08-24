@@ -5,10 +5,12 @@ class PaymentBrandStrip extends StatelessWidget {
     super.key,
     this.compact = false,
     this.showBanner = false,
+    this.promptPayOnly = false,
   });
 
   final bool compact;
   final bool showBanner;
+  final bool promptPayOnly;
 
   static const List<String> cardLogoAssets = <String>[
     'assets/payment_logos/visa.png',
@@ -28,7 +30,7 @@ class PaymentBrandStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (showBanner) {
+    if (showBanner && !promptPayOnly) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Image.asset(
@@ -37,20 +39,38 @@ class PaymentBrandStrip extends StatelessWidget {
           width: double.infinity,
           height: compact ? 56 : 72,
           errorBuilder: (context, error, stackTrace) {
-            return _LogoRow(compact: compact);
+            return _LogoRow(compact: compact, promptPayOnly: promptPayOnly);
           },
         ),
       );
     }
 
-    return _LogoRow(compact: compact);
+    return _LogoRow(compact: compact, promptPayOnly: promptPayOnly);
   }
 }
 
 class _LogoRow extends StatelessWidget {
-  const _LogoRow({required this.compact});
+  const _LogoRow({
+    required this.compact,
+    this.promptPayOnly = false,
+  });
 
   final bool compact;
+  final bool promptPayOnly;
+
+  List<String> get _logoAssets {
+    if (promptPayOnly) {
+      return const <String>['assets/payment_logos/promptpay.png'];
+    }
+    return PaymentBrandStrip._logoAssets;
+  }
+
+  String get _caption {
+    if (promptPayOnly) {
+      return 'สแกนจ่ายผ่าน PromptPay';
+    }
+    return 'รองรับ PromptPay, บัตร, Mobile Banking, TrueMoney';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -61,7 +81,7 @@ class _LogoRow extends StatelessWidget {
       children: <Widget>[
         if (!compact)
           Text(
-            'รองรับ PromptPay, บัตร, Mobile Banking, TrueMoney',
+            _caption,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: const Color(0xFF6B7280),
             ),
@@ -71,7 +91,7 @@ class _LogoRow extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           child: Row(
             children: <Widget>[
-              for (final asset in PaymentBrandStrip._logoAssets) ...<Widget>[
+              for (final asset in _logoAssets) ...<Widget>[
                 PaymentBrandLogo(asset: asset, height: logoHeight),
                 const SizedBox(width: 8),
               ],

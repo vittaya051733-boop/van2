@@ -78,5 +78,30 @@ void main() {
         'อื่นๆ',
       );
     });
+
+    test('approved catalog uses stored type without client override', () {
+      expect(
+        catalogTypeForProductDataForRegressionTest(<String, dynamic>{
+          'serviceType': 'ตลาด',
+          'name': 'แก้วมังกรสด',
+          'catalogType': 'ยาและเวชภัณฑ์',
+          'catalogReviewStatus': 'approved',
+        }),
+        'ยาและเวชภัณฑ์',
+      );
+    });
+
+    test('admin locked catalog keeps stored heading', () {
+      expect(
+        catalogHeadingForProductDataForRegressionTest(<String, dynamic>{
+          'serviceType': 'ตลาด',
+          'name': 'แก้วมังกรสด',
+          'catalogType': 'ผลไม้',
+          'catalogHeading': 'ผลไม้สด',
+          'catalogAdminLocked': true,
+        }),
+        'ผลไม้สด',
+      );
+    });
   });
 }

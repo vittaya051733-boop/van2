@@ -1,18 +1,21 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../config/payment_gateway_config.dart';
 import '../models/omise_payment_channel.dart';
 import '../services/omise_payment_service.dart';
 import 'payment_brand_strip.dart';
 
 typedef PaymentCashOnDeliveryHandler = Future<void> Function();
 typedef PaymentOmiseHandler = Future<void> Function(OmisePaymentChannel channel);
+typedef PaymentEmbeddedPromptPayHandler = Future<void> Function();
 
 Future<void> showPaymentCheckoutSheet({
   required BuildContext context,
   required double grandTotal,
   required PaymentCashOnDeliveryHandler? onCashOnDelivery,
-  required PaymentOmiseHandler onOmisePayment,
+  PaymentOmiseHandler? onOmisePayment,
+  PaymentEmbeddedPromptPayHandler? onEmbeddedPromptPayScan,
   String? subtitle,
 }) async {
   await showModalBottomSheet<void>(
@@ -25,6 +28,7 @@ Future<void> showPaymentCheckoutSheet({
         subtitle: subtitle,
         onCashOnDelivery: onCashOnDelivery,
         onOmisePayment: onOmisePayment,
+        onEmbeddedPromptPayScan: onEmbeddedPromptPayScan,
       );
     },
   );
@@ -36,12 +40,14 @@ class _PaymentCheckoutSheet extends StatefulWidget {
     required this.subtitle,
     required this.onCashOnDelivery,
     required this.onOmisePayment,
+    required this.onEmbeddedPromptPayScan,
   });
 
   final double grandTotal;
   final String? subtitle;
   final PaymentCashOnDeliveryHandler? onCashOnDelivery;
-  final PaymentOmiseHandler onOmisePayment;
+  final PaymentOmiseHandler? onOmisePayment;
+  final PaymentEmbeddedPromptPayHandler? onEmbeddedPromptPayScan;
 
   @override
   State<_PaymentCheckoutSheet> createState() => _PaymentCheckoutSheetState();
@@ -141,7 +147,10 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
                 ),
               ],
               const SizedBox(height: 16),
-              const PaymentBrandStrip(showBanner: true),
+              PaymentBrandStrip(
+                showBanner: true,
+                promptPayOnly: !PaymentGatewayConfig.omiseGatewayEnabled,
+              ),
               const SizedBox(height: 16),
               if (widget.onCashOnDelivery != null)
                 _PaymentOptionTile(
@@ -154,17 +163,33 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
                     closeBeforeAction: false,
                   ),
                 ),
-              for (final channel in OmisePaymentChannel.values)
+              if (PaymentGatewayConfig.embeddedPromptPayScanEnabled &&
+                  widget.onEmbeddedPromptPayScan != null)
                 _PaymentOptionTile(
-                  title: channel.label,
-                  subtitle: _channelSubtitle(channel),
-                  logoAssets: channel.tileLogoAssets,
+                  title: 'สแกนจ่ายพร้อมเพย์',
+                  subtitle: 'สแกน QR แล้วแนบสลิปเพื่อยืนยัน',
+                  logoAssets: const <String>[
+                    'assets/payment_logos/promptpay.png',
+                  ],
                   enabled: !_isProcessing,
                   onTap: () => _run(
-                    () => widget.onOmisePayment(channel),
+                    widget.onEmbeddedPromptPayScan!,
                     closeBeforeAction: false,
                   ),
                 ),
+              if (PaymentGatewayConfig.omiseGatewayEnabled &&
+                  widget.onOmisePayment != null)
+                for (final channel in OmisePaymentChannel.values)
+                  _PaymentOptionTile(
+                    title: channel.label,
+                    subtitle: _channelSubtitle(channel),
+                    logoAssets: channel.tileLogoAssets,
+                    enabled: !_isProcessing,
+                    onTap: () => _run(
+                      () => widget.onOmisePayment!(channel),
+                      closeBeforeAction: false,
+                    ),
+                  ),
               if (_isProcessing) ...<Widget>[
                 const SizedBox(height: 12),
                 const Center(

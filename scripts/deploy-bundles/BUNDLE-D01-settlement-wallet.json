@@ -1,0 +1,50 @@
+{
+  "id": "BUNDLE-D01",
+  "slug": "orders-settlement-wallet",
+  "titleTh": "ออเดอร์ / settlement / wallet",
+  "project": "van-merchant",
+  "scope": "CROSS-WRITE",
+  "crossWriteGroup": "D",
+  "writerApps": ["van4", "van2"],
+  "consumerApps": ["van1", "van2", "van3"],
+  "collections": ["orders", "withdraw_requests", "credits"],
+  "summaryTh": "ออเดอร์ settlement / ยกเลิก / withdraw → กระทบ wallet ร้าน van1 และไรเดอร์ van3",
+  "impactTh": [
+    "van4: cancel / credit release / อนุมัติถอน (ผ่าน CF)",
+    "van1: wallet ร้าน + ออเดอร์ร้าน",
+    "van3: wallet ไรเดอร์ + ออเดอร์ที่รับ",
+    "van2: สถานะออเดอร์ลูกค้า",
+    "Field settlement/shopPayout/riderPayout — ห้ามลบจนกว่า consumer deploy แล้ว",
+    "Functions ที่เกี่ยว: ใช้ BUNDLE-F01 (van2) แยกทีละชื่อ"
+  ],
+  "riskTh": "สูง — เงินผิด / ออเดอร์ค้าง = กระทบธุรกิจทันที",
+  "forbidden": [
+    "van2:firestore",
+    "van3:firestore",
+    "van1:firestore",
+    "van4:firestore-van4",
+    "van2:storage",
+    "van3:storage"
+  ],
+  "allowedPaths": [
+    "van4/lib/admin_settlement_support.dart",
+    "van1/my-flutter/lib/wallet_screen.dart",
+    "van1/my-flutter/lib/services/merchant_wallet_service.dart",
+    "van3/lib/wallet_screen.dart",
+    "van2/lib/services/"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    { "app": "van4", "noteTh": "Build van4 settlement/cancel" },
+    { "app": "van1", "noteTh": "Build van1 wallet" },
+    { "app": "van3", "noteTh": "Build van3 wallet" },
+    { "app": "van2", "noteTh": "Build van2 สถานะออเดอร์" }
+  ],
+  "smokeChecklistTh": [
+    "van1: wallet โหลดได้",
+    "van3: wallet/credits โหลดได้",
+    "van2: สถานะออเดอร์อัปเดต",
+    "van4: cancel/settlement ทำงาน (staging หรือระวัง production)"
+  ],
+  "relatedDocs": ["VAN_ECOSYSTEM_CROSS_WRITE.md", "VAN_ECOSYSTEM_SCHEMA_REGISTRY.md", "DEPLOY_RISK_MATRIX.md"]
+}

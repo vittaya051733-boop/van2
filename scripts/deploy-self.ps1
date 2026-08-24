@@ -32,7 +32,8 @@ param(
   [switch]$SkipReadiness,
   [switch]$SkipPostGuide,
   [switch]$SkipPreDeploySmoke,
-  [switch]$AllowSkipEmulatorSmoke
+  [switch]$AllowSkipEmulatorSmoke,
+  [switch]$SkipPreDeployBackup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,6 +57,25 @@ if (-not $SkipReadiness) {
 }
 
 $script:VanLastFirestoreBackupPath = $null
+$script:VanLastDeployBackupPath = $null
+$env:VAN_PREDEPLOY_BACKUP_DONE = $null
+
+function Invoke-VanPreDeployBackupForSelf {
+  param(
+    [Parameter(Mandatory)][ValidateSet('van1', 'van2', 'van3', 'van4')][string]$App,
+    [Parameter(Mandatory)][ValidateSet('storage', 'hosting', 'functions', 'firestore', 'firestore-van4')][string]$Target,
+    [string[]]$FunctionName = @()
+  )
+
+  $path = Invoke-VanPreDeployBackup -App $App -Target $Target -FunctionName $FunctionName -DryRun:$DryRun
+  if ($path) {
+    $script:VanLastDeployBackupPath = $path
+    if ($Target -eq 'firestore' -and $App -eq 'van2') {
+      $script:VanLastFirestoreBackupPath = $env:VAN_LAST_FIRESTORE_BACKUP
+    }
+  }
+  return $path
+}
 
 function Invoke-VanFirestoreSmokeGate {
   param(
@@ -177,6 +197,23 @@ if ($Target -eq 'firestore' -and $App -eq 'van2' -and -not $SkipPreDeploySmoke -
   Invoke-VanFirestoreSmokeGate -Phase PreDeploy
 }
 
+if (-not $SkipPreDeployBackup) {
+  Invoke-VanPreDeployBackupForSelf -App $App -Target $Target -FunctionName @($FunctionName)
+} elseif ($env:VAN_LAST_DEPLOY_BACKUP_DIR) {
+  $script:VanLastDeployBackupPath = $env:VAN_LAST_DEPLOY_BACKUP_DIR
+  if ($Target -eq 'firestore' -and $App -eq 'van2') {
+    $legacyLatest = Join-Path (Get-VanDeployBackupRoot) 'LATEST.txt'
+    if (Test-Path $legacyLatest) {
+      foreach ($line in Get-Content $legacyLatest) {
+        if ($line -match '^file=(.+)$') {
+          $script:VanLastFirestoreBackupPath = Join-Path (Get-VanDeployBackupRoot) $Matches[1].Trim()
+          break
+        }
+      }
+    }
+  }
+}
+
 Invoke-VanDeploySelfTarget
 $exitCode = $LASTEXITCODE
 
@@ -187,7 +224,7 @@ if (-not $SkipPostGuide -and -not $DryRun -and $exitCode -eq 0) {
       $postOk = Invoke-VanFirestoreSmokeGate -Phase PostDeploy
       if (-not $postOk) {
         Write-Host (Get-VanMsg 'selfPostSmokeFail') -ForegroundColor Red
-        Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $script:VanLastFirestoreBackupPath
+        Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $(if ($script:VanLastDeployBackupPath) { $script:VanLastDeployBackupPath } else { $script:VanLastFirestoreBackupPath })
         exit 1
       }
     }
@@ -202,7 +239,7 @@ if (-not $SkipPostGuide -and -not $DryRun -and $exitCode -eq 0) {
       }
     }
   }
-  Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $script:VanLastFirestoreBackupPath
+  Show-VanPostDeployConnectionGuide -App $App -Target $Target -BackupPath $(if ($script:VanLastDeployBackupPath) { $script:VanLastDeployBackupPath } else { $script:VanLastFirestoreBackupPath })
 }
 
 exit $exitCode

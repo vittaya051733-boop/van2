@@ -1,0 +1,55 @@
+{
+  "id": "BUNDLE-A01-RULES",
+  "slug": "promotions-firestore-rules",
+  "titleTh": "โปรโมชั่น — Firestore rules (SHARED)",
+  "project": "van-merchant",
+  "scope": "SHARED",
+  "crossWriteGroup": "A",
+  "writerApps": ["van2"],
+  "consumerApps": ["van1", "van2", "van3", "van4"],
+  "collections": [
+    "coupons",
+    "promotions",
+    "promotion_display_config"
+  ],
+  "summaryTh": "Deploy Firestore rules ที่เกี่ยวกับ coupons/promotions — กระทบทุกแอปที่ใช้ฐาน default",
+  "impactTh": [
+    "SHARED: van1, van2, van3, van4 ใช้ firestore.rules ชุดเดียวกัน",
+    "van3 ไรเดอร์: listener orders/riders จะหลุดทันทีถ้า rules ผิด (permission-denied)",
+    "van2: อ่าน coupons/promotions ต้องยัง allow ตามเดิม",
+    "van4 admin: เขียน coupons/promotions ต้องยัง allow ตามเดิม",
+    "สำรอง rules อัตโนมัติก่อน deploy + smoke emulator บังคับ"
+  ],
+  "riskTh": "สูง — deploy จาก van2 เท่านั้น, หลัง deploy ต้อง smoke van3 ทันที",
+  "forbidden": [
+    "van1:firestore",
+    "van3:firestore",
+    "van4:firestore",
+    "van1:storage",
+    "van3:storage",
+    "van4:storage",
+    "van2:storage",
+    "van2:hosting",
+    "van4:firestore-van4"
+  ],
+  "allowedPaths": [
+    "van2/firestore.rules",
+    "van2/shared_firebase_rules/firestore.rules"
+  ],
+  "firebaseSteps": [
+    "van2:firestore"
+  ],
+  "buildSteps": [],
+  "smokeChecklistTh": [
+    "van3: หน้างานไรเดอร์โหลดได้ — ไม่มี permission-denied",
+    "van3: สลับ online ได้",
+    "van2: หน้าแรกโหลด coupons/promotions ได้",
+    "van4: admin โปรโมชั่นบันทึกได้",
+    "van1: ออเดอร์ร้านโหลดได้"
+  ],
+  "confirmImpact": "SHARED:van1,van2,van3,van4",
+  "relatedDocs": [
+    "DEPLOY_RISK_MATRIX.md",
+    "VAN_ECOSYSTEM_CROSS_WRITE.md"
+  ]
+}

@@ -2,6 +2,21 @@
 
 ใช้หลัง deploy ทุกครั้ง โดยเฉพาะ target **SHARED** (Firestore rules, functions สำคัญ)
 
+## รันครั้งเดียว (แนะนำ)
+
+```powershell
+# แผนที่จุดเชื่อมต่อทั้งหมด (ไม่รัน smoke)
+van2\scripts\ecosystem-health.ps1 -MatrixOnly
+
+# ตรวจเต็ม: readiness + compile/emulator + checklist มือ
+van2\scripts\ecosystem-health.ps1
+
+# โฟกัสแอปเดียว
+van2\scripts\ecosystem-health.ps1 -App van3
+```
+
+รายการจุดเชื่อม: `ECOSYSTEM_HEALTH_CHECKLIST.json` · ชุด: `BUNDLE-H01`
+
 ## อาการในแอป
 
 | อาการ | ความหมาย | แอปที่มักเจอ |

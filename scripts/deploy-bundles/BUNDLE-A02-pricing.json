@@ -1,0 +1,39 @@
+{
+  "id": "BUNDLE-A02",
+  "slug": "pricing-config",
+  "titleTh": "ราคา / pricing_config",
+  "project": "van-merchant",
+  "scope": "CROSS-WRITE",
+  "crossWriteGroup": "A",
+  "writerApps": ["van4"],
+  "consumerApps": ["van2"],
+  "collections": ["pricing_config"],
+  "summaryTh": "van4 admin ตั้งค่าราคา platform → van2 ใช้คำนวณตะกร้า/ค่าส่ง",
+  "impactTh": [
+    "van4: หน้า pricing config admin",
+    "van2: pricing_config_service — ตะกร้าและ checkout",
+    "van1/van3: ไม่เกี่ยวโดยตรง (ยกเว้น field ใน orders ที่ cascade)"
+  ],
+  "riskTh": "ปานกลาง — ราคาผิดกระทบ checkout ทันที",
+  "forbidden": [
+    "van1:*",
+    "van3:*",
+    "van2:firestore",
+    "van2:storage",
+    "van4:firestore-van4"
+  ],
+  "allowedPaths": [
+    "van4/lib/admin_pricing_config_screen.dart",
+    "van2/lib/services/pricing_config_service.dart"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    { "app": "van4", "noteTh": "Build van4 admin pricing" },
+    { "app": "van2", "noteTh": "Build van2 — ทดสอบตะกร้า/ราคา" }
+  ],
+  "smokeChecklistTh": [
+    "van4: บันทึก pricing_config ได้",
+    "van2: ตะกร้าแสดงราคาถูกต้อง"
+  ],
+  "relatedDocs": ["VAN_ECOSYSTEM_CROSS_WRITE.md"]
+}

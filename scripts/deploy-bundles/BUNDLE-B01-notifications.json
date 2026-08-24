@@ -1,0 +1,45 @@
+{
+  "id": "BUNDLE-B01",
+  "slug": "app-notifications",
+  "titleTh": "แจ้งเตือน / ประกาศ (app_notifications)",
+  "project": "van-merchant",
+  "scope": "CROSS-WRITE",
+  "crossWriteGroup": "B",
+  "writerApps": ["van4"],
+  "consumerApps": ["van1", "van2", "van3"],
+  "collections": ["app_notifications", "platform_announcements"],
+  "summaryTh": "van4 ส่งประกาศ/แจ้งเตือน → inbox + FCM van1, van2, van3",
+  "impactTh": [
+    "van4: สร้างประกาศ / fan-out app_notifications",
+    "van1/van2/van3: inbox แจ้งเตือน + FCM (ถ้ามี token)",
+    "เปลี่ยน action string หรือ payload → ต้องเทสทั้ง 3 แอป",
+    "ถ้าแตะ pushAppNotification → ใช้ BUNDLE-F01 แยก"
+  ],
+  "riskTh": "ปานกลาง — แจ้งเตือนผิดรูปไม่ทำให้ orders listener พัง แต่ user สับสน",
+  "forbidden": [
+    "van2:firestore",
+    "van1:storage",
+    "van3:storage",
+    "van4:firestore-van4"
+  ],
+  "allowedPaths": [
+    "van4/lib/admin_announcement_support.dart",
+    "van4/lib/admin_repository.dart",
+    "van1/my-flutter/lib/services/notification_service.dart",
+    "van2/lib/services/notification_service.dart",
+    "van3/lib/services/notification_service.dart"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    { "app": "van4", "noteTh": "Build van4 admin ประกาศ" },
+    { "app": "van1", "noteTh": "Build van1 — inbox แจ้งเตือน" },
+    { "app": "van2", "noteTh": "Build van2 — inbox แจ้งเตือน" },
+    { "app": "van3", "noteTh": "Build van3 — inbox/FCM" }
+  ],
+  "smokeChecklistTh": [
+    "van4: ส่งประกาศทดสอบ",
+    "van1/van2/van3: เห็นใน inbox",
+    "van3: ถ้าคาด push — ตรวจ FCM (มือ)"
+  ],
+  "relatedDocs": ["VAN_ECOSYSTEM_CROSS_WRITE.md", "VAN_ECOSYSTEM_SCHEMA_REGISTRY.md"]
+}

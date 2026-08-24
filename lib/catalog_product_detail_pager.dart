@@ -287,20 +287,178 @@ class _CatalogProductDetailPage extends StatefulWidget {
 class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
   final Set<String> _selectedToppings = <String>{};
   int _quantity = 1;
+  String? _selectedColor;
+  String? _selectedSize;
+  String? _selectedVariantId;
+
+  List<ProductVariant> get _variants =>
+      ProductVariantSupport.parseList(widget.product.data['variants']);
+
+  bool get _hasVariants =>
+      ProductVariantSupport.productHasVariants(widget.product.data);
+
+  ProductVariant? get _resolvedVariant => _hasVariants
+      ? ProductVariantSupport.matchVariant(
+          _variants,
+          variantId: _selectedVariantId,
+          color: _selectedColor,
+          size: _selectedSize,
+        )
+      : null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_hasVariants && _variants.length == 1) {
+      final only = _variants.first;
+      _selectedVariantId = only.id;
+      _selectedColor = only.color.trim().isEmpty ? null : only.color.trim();
+      _selectedSize = only.size.trim().isEmpty ? null : only.size.trim();
+    }
+  }
+
+  Map<String, dynamic> _pricingData(Map<String, dynamic> data) {
+    final variant = _resolvedVariant;
+    if (variant == null) {
+      return data;
+    }
+    return <String, dynamic>{
+      ...data,
+      'price': variant.price,
+    };
+  }
+
+  Map<String, dynamic> _displayProductData(Map<String, dynamic> data) {
+    final variant = _resolvedVariant;
+    if (variant == null || variant.imageUrl.isEmpty) {
+      return data;
+    }
+    return <String, dynamic>{
+      ...data,
+      'imageUrls': <String>[variant.imageUrl],
+      'thumbnailUrls': <String>[
+        variant.thumbnailUrl.isNotEmpty
+            ? variant.thumbnailUrl
+            : variant.imageUrl,
+      ],
+    };
+  }
+
+  bool get _variantSelectionRequired =>
+      _hasVariants && _resolvedVariant == null;
+
+  Widget _buildVariantPickers(Map<String, dynamic> data) {
+    if (!_hasVariants) {
+      return const SizedBox.shrink();
+    }
+    final colors = ProductVariantSupport.uniqueOptionValues(
+      _variants,
+      colors: true,
+      selectedSize: _selectedSize,
+    );
+    final sizes = ProductVariantSupport.uniqueOptionValues(
+      _variants,
+      colors: false,
+      selectedColor: _selectedColor,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        if (colors.isNotEmpty) ...[
+          Text(
+            'สี',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: colors.map((color) {
+              final selected = _selectedColor == color;
+              return ProductVariantColorSwatch(
+                storedColor: color,
+                size: 34,
+                selected: selected,
+                onTap: () {
+                  setState(() {
+                    _selectedColor = color;
+                    _selectedVariantId = null;
+                    _quantity = 1;
+                  });
+                },
+              );
+            }).toList(growable: false),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (sizes.isNotEmpty) ...[
+          Text(
+            'ขนาด',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: sizes.map((size) {
+              final selected = _selectedSize == size;
+              return FilterChip(
+                label: Text(size),
+                selected: selected,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedSize = size;
+                    _selectedVariantId = null;
+                    _quantity = 1;
+                  });
+                },
+              );
+            }).toList(growable: false),
+          ),
+        ],
+        if (_variantSelectionRequired)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'กรุณาเลือกตัวเลือกสินค้า',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFFB45309),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final product = widget.product;
     final data = product.data;
+    final pricingData = _pricingData(data);
+    final displayData = _displayProductData(data);
 
     final String name = (data['name'] ?? '').toString();
     final String description = _cleanDescriptionWithoutToppings(
       (data['description'] ?? '').toString(),
     );
-    final num adjustedBasePrice = TaxPricingPolicy.resolveCustomerUnitPrice(data);
-    final String? imageUrl = readCatalogProductImageUrl(data);
+    final num adjustedBasePrice =
+        TaxPricingPolicy.resolveCustomerUnitPrice(pricingData);
+    final String? imageUrl = _resolvedVariant?.thumbnailUrl.isNotEmpty == true
+        ? _resolvedVariant!.thumbnailUrl
+        : (_resolvedVariant?.imageUrl.isNotEmpty == true
+              ? _resolvedVariant!.imageUrl
+              : readCatalogProductImageUrl(displayData));
     final List<_ToppingGroup> toppingGroups = _extractToppings(data);
-    final int? availableStock = _extractAvailableStock(data);
+    final int? availableStock = _hasVariants
+        ? _resolvedVariant?.stock
+        : _extractAvailableStock(data);
     final int preparationTimeMinutes = _extractPreparationTimeMinutes(data);
     final int parcelWeightGrams = _extractParcelWeightGrams(data);
     final shopDistanceKm = computeCatalogShopDistanceKm(
@@ -346,7 +504,8 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
       0,
       (sum, option) => sum + option.adjustedPrice,
     );
-    final merchantBasePrice = TaxPricingPolicy.parseNumber(data['price']);
+    final merchantBasePrice = _resolvedVariant?.price ??
+        TaxPricingPolicy.parseNumber(pricingData['price']);
     final discountPercent = TaxPricingPolicy.parseDiscountPercent(
       data['discountPercent'],
     );
@@ -393,7 +552,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               productId: product.id,
               shopId: product.shopId,
               child: CatalogProductMediaCarousel(
-                productData: data,
+                productData: displayData,
                 name: name,
                 enableVideo: true,
                 playbackActive: widget.isCurrentProduct,
@@ -413,10 +572,11 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
           ),
           const SizedBox(height: 6),
           ProductDiscountPrice(
-            productData: data,
+            productData: pricingData,
             productId: product.id,
             shopId: product.shopId,
           ),
+          _buildVariantPickers(data),
           _ProductRatingSummary(productId: product.id),
           const SizedBox(height: 10),
           ProductReactionBar(
@@ -667,12 +827,13 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
           ),
         ),
         _CatalogProductAddToCartBar(
-          outOfStock: outOfStock,
+          outOfStock: outOfStock || _variantSelectionRequired,
           extraBottomPadding: widget.bottomInset,
           onAddToCart: () {
             final selectedNames = selectedOptions
                 .map((option) => option.label)
                 .toList(growable: false);
+            final variant = _resolvedVariant;
             widget.onAddToCart(
               CartProductSelection(
                 productId: product.id,
@@ -700,6 +861,9 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                 parcelHeightCm: _parsePositiveDouble(
                   data['parcelHeightCm'],
                 ),
+                variantId: variant?.id,
+                selectedSize: variant?.size,
+                selectedColor: variant?.color,
               ),
             );
           },

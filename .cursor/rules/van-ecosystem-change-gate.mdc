@@ -1,0 +1,41 @@
+---
+description: ก่อนแก้ Firebase — จำแนก SHARED/SELF/CROSS-WRITE (van1–4)
+alwaysApply: true
+---
+
+# Van Ecosystem — Change Gate (บังคับก่อนแก้ Firebase)
+
+อ่าน: `scripts\DEPLOY_RISK_MATRIX.md` + `scripts\VAN_ECOSYSTEM_CROSS_WRITE.md`
+
+## 3 คำถาม (ตอบในใจหรือสรุปให้ user ก่อนแก้)
+
+1. **SHARED / SELF / CROSS-WRITE?**
+   - **SHARED** — rules, Auth, App Check, schema collection ร่วม → deploy **van2** + smoke **van3**
+   - **SELF** — storage/hosting/functions แอปเดียว
+   - **CROSS-WRITE** — van4 เขียน → van2/van1/van3 อ่าน → แก้ **ทั้ง writer + consumer**
+
+2. **แอปไหนต้องเทสหลัง deploy?**
+
+   | แก้อะไร | เทส |
+   |---------|-----|
+   | `firestore.rules` | van3 online → van2 order → van1 orders → van4 admin |
+   | `coupons` / `promotions` / `pricing_config` | **van2** หน้าแรก + ตะกร้า |
+   | `products` / catalog | **van2** catalog + **van1** ร้าน |
+   | `orders` / settlement | **van1** + **van3** wallet |
+   | boot / `firebase_options` / App Check | **แอปที่แก้เท่านั้น** — อย่า copy config ข้ามแอป |
+
+3. **Deploy อะไรบ้าง?** rules / function ชื่อ / APK van ไหน — ถ้าไม่ครบคู่จะพัง
+
+## ห้าม
+
+- `firebase deploy` แบบ raw หรือ deploy รวมหลาย target
+- van3/van1 deploy Firestore default; van4 deploy Firestore default
+- เปลี่ยน field ใน CROSS-WRITE โดยไม่เช็ค consumer (ดูตารางใน `VAN_ECOSYSTEM_CROSS_WRITE.md`)
+- ลบโค้ด production โดยไม่ผ่าน checkpoint (`van-code-removal-deploy-checkpoint.mdc`)
+
+## Deploy ที่ถูก
+
+```powershell
+scripts\deploy-readiness.ps1 -App van2 -Target firestore
+scripts\deploy-self.ps1 -App van2 -Target firestore -ConfirmDeploy "APPROVE:van2:van-merchant" -ConfirmImpact "SHARED:van1,van2,van3,van4" -FinalAcknowledge "YES I UNDERSTAND"
+```

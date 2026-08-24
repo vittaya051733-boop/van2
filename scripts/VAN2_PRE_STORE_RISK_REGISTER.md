@@ -1,7 +1,7 @@
 # van2 Pre-Store Risk Register
 
-> อัปเดต: 2026-07-31  
-> บันทึกหลัง deploy security fixes + re-audit  
+> อัปเดต: 2026-08-08  
+> บันทึกหลัง deploy security fixes + manual withdraw hardening  
 > อ่านคู่กับ `DEPLOY_GOVERNANCE.md`, `DEPLOY_RISK_MATRIX.md`
 
 ## สรุปสถานะ
@@ -10,8 +10,9 @@
 |------|--------|
 | 8 security fixes หลัก | deploy แล้ว (CF + Firestore rules) |
 | รอบที่ 2 (discount/travel/OTP/rules) | deploy แล้ว (2026-07-31) |
-| Client APK 1.0.2+5 | build แล้ว — **debug signing** (ยังไม่พร้อม Play Store) |
-| รายการด้านล่าง § C | **ยังไม่แก้** — แนะนำก่อน/หลังขึ้น Store |
+| Client APK 1.0.2+5 | van2: upload keystore + `key.properties` พร้อม — build ด้วย `build-android-release.ps1` |
+| van1 release signing | `android/key.properties.example` + gradle รองรับ upload keystore แล้ว |
+| รายการด้านล่าง § C | App Check Console + web reCAPTCHA ยังต้องยืนยัน |
 
 ### โค้ดที่ deploy แล้ว (รอบ 2)
 
@@ -90,26 +91,28 @@
 
 - retry 1 ครั้ง + SnackBar แจ้ง user
 
-### C5 — Maps API keys ใน client (MEDIUM — ค่าใช้จ่าย)
+### C5 — Maps API keys ใน client (MEDIUM — ค่าใช้จ่าย) — **แก้แล้ว (2026-08-08)**
 
-- Web fallback key ใน `google_maps_web_api_key_fallback_web.dart`
-- AndroidManifest Maps SDK key  
-→ restrict ตาม `GOOGLE_MAPS_KEY_RESTRICTIONS.md`
+- รัน `add-van2-upload-sha1-maps-key.ps1` (van2 Android key + upload SHA)
+- รัน `restrict-van1-maps-android-key.ps1` (van1 Maps key → van.merchant only)
+- รัน `fix-web-maps-browser-key.ps1` (web referrers + Maps JS API)
 
 ### C6 — Manual ops ก่อน Store
 
-- [x] `android/key.properties` + upload keystore
-- [ ] Firebase App Check: Play Integrity + SHA-256 upload cert (ยืนยันใน Console)
+- [x] `android/key.properties` + upload keystore (van2)
+- [x] van1 `android/key.properties.example` + release signing ใน gradle
+- [ ] Firebase App Check: Play Integrity + SHA-256 upload cert (ยืนยันใน Console) — รัน `print-upload-keystore-sha.ps1` แล้ว register
 - [ ] Web: `--dart-define=APP_CHECK_RECAPTCHA_SITE_KEY=...`
 
 ---
 
 ## Checklist ก่อนขึ้น Store
 
-- [x] Upload keystore + `key.properties`
-- [ ] Firebase App Check: Play Integrity + SHA-256
+- [x] Upload keystore + `key.properties` (van2)
+- [x] van1 release signing scaffold (`key.properties.example` + gradle)
+- [ ] Firebase App Check: Play Integrity + SHA-256 (Console — ใช้ `print-upload-keystore-sha.ps1`)
 - [ ] Release APK smoke: login OTP → cart → COD → Omise → travel Omise
-- [ ] GCP: restrict Maps keys (upload SHA-1)
+- [x] GCP: restrict Maps keys (upload SHA-1) — 2026-08-08
 - [ ] (Web) reCAPTCHA site key ใน build
 - [x] Deploy CF รอบ 2
 - [x] Deploy CF รอบ 3: `quoteTravelFare`, lookup/maps/sync CFs (2026-07-31)

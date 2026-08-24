@@ -1,0 +1,31 @@
+---
+description: Deploy ตามชุด BUNDLE — ทางเข้า deploy.ps1 เท่านั้น
+alwaysApply: true
+---
+
+# Deploy Bundle Gate (van-merchant)
+
+ทางเข้า: `van2\scripts\deploy.ps1`  
+สารบัญ: `van2\scripts\deploy-bundles\BUNDLE-CATALOG.th.md`
+
+```powershell
+van2\scripts\deploy.ps1 -List
+van2\scripts\deploy.ps1 -Bundle BUNDLE-A01 -ShowOnly
+van2\scripts\deploy.ps1 -Health
+van2\scripts\deploy.ps1 -Ledger
+```
+
+| รหัส | เรื่อง |
+|------|--------|
+| A01 / A01-RULES | โปรโมชั่น |
+| A02 | pricing |
+| B01 | แจ้งเตือน |
+| C01 | catalog |
+| D01 | settlement/wallet |
+| F01 / F02 | functions van2/van1 |
+| S01 | firestore SHARED |
+| ST1–ST4 | storage แยก van |
+| HOST | hosting คู่มือ |
+| H01 | health ตรวจอย่างเดียว |
+
+**ถ้าระบุ Bundle → ห้ามนอกชุด** · สรุปผลกระทบไทยก่อน Execute · ห้าม `firebase deploy` ดิบ

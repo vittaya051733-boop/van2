@@ -1,0 +1,29 @@
+---
+description: Expand-only default for CROSS-WRITE schema; delete needs checkpoint
+alwaysApply: true
+---
+
+# Expand-only (Van Ecosystem)
+
+## Default
+
+เมื่อแก้ Firestore field / API ที่แอปอื่นอ่าน (CROSS-WRITE):
+
+1. **Expand** — เพิ่ม field ใหม่ + consumer มี default
+2. **Migrate** — deploy APK/consumer ครบ
+3. **Contract** — ค่อยลบ/rename field เก่า (PR แยก + ยืนยันผู้ใช้)
+
+## ห้ามใน PR เดียว
+
+- rename หรือลบ field ที่ van อื่นยังอ่านอยู่
+- บังคับ field ใหม่โดยไม่มี default ใน consumer
+
+## เอกสาร
+
+- `van2/scripts/VAN_ECOSYSTEM_SCHEMA_REGISTRY.md`
+- `van2/scripts/VAN_ECOSYSTEM_CROSS_WRITE.md`
+- Checkpoint ลบโค้ด: `van-code-removal-deploy-checkpoint.mdc`
+
+## Deploy
+
+ใช้ `van2/scripts/deploy.ps1` หรือ Bundle — ห้าม `firebase deploy` ดิบ

@@ -1,0 +1,44 @@
+{
+  "id": "BUNDLE-F02",
+  "slug": "van1-functions",
+  "titleTh": "Cloud Functions van1 (ร้าน)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van1"],
+  "consumerApps": ["van1"],
+  "collections": [],
+  "summaryTh": "Deploy Cloud Functions ของ van1 ทีละชื่อ — ออเดอร์ร้าน / AI สินค้า / สลิป",
+  "impactTh": [
+    "onOrderStatusUpdate / checkPreparingOrders กระทบ flow ร้าน",
+    "verifyTopUpSlip กระทบเติมเงินร้าน",
+    "ห้าม deploy ฟังก์ชันที่เป็นของ van2",
+    "deploy ทีละชื่อ"
+  ],
+  "riskTh": "ปานกลาง-สูง — ออเดอร์ร้าน/สลิป",
+  "forbidden": [
+    "van2:functions",
+    "van1:firestore",
+    "van2:firestore",
+    "van3:*",
+    "van4:*"
+  ],
+  "allowedPaths": [
+    "van1/my-flutter/functions/index.js"
+  ],
+  "firebaseSteps": [
+    "van1:functions:onOrderStatusUpdate"
+  ],
+  "recommendedFunctionNames": [
+    "onOrderStatusUpdate",
+    "verifyTopUpSlip",
+    "checkPreparingOrders",
+    "analyzeProductWithAi",
+    "notifyNewChatMessage"
+  ],
+  "buildSteps": [],
+  "smokeChecklistTh": [
+    "van1: ออเดอร์สถานะอัปเดต",
+    "van1: เติมเงิน/สลิป (ถ้าแตะ verifyTopUpSlip)"
+  ],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md", "SLIPOK_BRANCH_SETUP.md"]
+}

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'category_catalog_screen.dart';
-
+import 'home_product_discovery_service.dart';
 import 'public_catalog_service.dart';
+import 'services/home_product_image_prefetch.dart';
 
 import 'widgets/product_discount_badge.dart';
 import 'widgets/product_discount_price.dart';
@@ -86,7 +87,7 @@ class HomeProductShelfSection extends StatelessWidget {
             ),
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
 
           SizedBox(
             height: cardSize.height,
@@ -137,28 +138,28 @@ class HomeProductShelfSection extends StatelessWidget {
                         shopLongitude: product.shopLongitude,
                       );
 
-                      return SizedBox(
-                        width: cardSize.width,
+                      return Align(
+                        alignment: Alignment.topCenter,
+                        child: SizedBox(
+                          width: cardSize.width,
+                          child: CatalogProductCard(
+                            product: product,
 
-                        height: cardSize.height,
+                            shopLatitude: product.shopLatitude,
 
-                        child: CatalogProductCard(
-                          product: product,
+                            shopLongitude: product.shopLongitude,
 
-                          shopLatitude: product.shopLatitude,
+                            shopDistanceKm: shopDistanceKm,
 
-                          shopLongitude: product.shopLongitude,
+                            customerLatitude: customerLatitude,
 
-                          shopDistanceKm: shopDistanceKm,
+                            customerLongitude: customerLongitude,
 
-                          customerLatitude: customerLatitude,
+                            onConfirmOrder: onConfirmOrder,
 
-                          customerLongitude: customerLongitude,
-
-                          onConfirmOrder: onConfirmOrder,
-
-                          onNavigateToCart: onNavigateToCart,
-                          pinPriceToBottom: true,
+                            onNavigateToCart: onNavigateToCart,
+                            pinPriceToBottom: true,
+                          ),
                         ),
                       );
                     },
@@ -186,7 +187,7 @@ class HomeProductShelfSection extends StatelessWidget {
           ),
         ),
 
-        const SizedBox(height: 10),
+        const SizedBox(height: 4),
 
         SizedBox(
           height: _compactRowHeight,
@@ -259,6 +260,149 @@ class _HomeShelfEmptyMessage extends StatelessWidget {
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
           color: const Color(0xFF92400E),
           fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class HomeDiscountProductFeedSection extends StatefulWidget {
+  const HomeDiscountProductFeedSection({
+    super.key,
+    this.customerLatitude,
+    this.customerLongitude,
+    this.onConfirmOrder,
+    this.onNavigateToCart,
+  });
+
+  final double? customerLatitude;
+  final double? customerLongitude;
+  final ValueChanged<CartProductSelection>? onConfirmOrder;
+  final VoidCallback? onNavigateToCart;
+
+  @override
+  State<HomeDiscountProductFeedSection> createState() =>
+      _HomeDiscountProductFeedSectionState();
+}
+
+class _HomeDiscountProductFeedSectionState
+    extends State<HomeDiscountProductFeedSection> {
+  late Future<List<PublicCatalogProduct>> _productsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _productsFuture = HomeProductDiscoveryService.loadDiscountFeed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<PublicCatalogProduct>>(
+      future: _productsFuture,
+      builder: (context, snapshot) {
+        final loading =
+            snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData;
+        final products = snapshot.data ?? const <PublicCatalogProduct>[];
+
+        if (!loading && products.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        if (!loading && products.isNotEmpty) {
+          HomeProductImagePrefetch.scheduleShelfPrefetch(
+            products,
+            limit: products.length,
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Text(
+                'สินค้าส่วนลด',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else
+              for (var index = 0; index < products.length; index++) ...<Widget>[
+                if (index > 0) const SizedBox(height: 4),
+                _HomeDiscountFeedCard(
+                  product: products[index],
+                  shopProducts: products,
+                  customerLatitude: widget.customerLatitude,
+                  customerLongitude: widget.customerLongitude,
+                  onConfirmOrder: widget.onConfirmOrder,
+                  onNavigateToCart: widget.onNavigateToCart,
+                ),
+              ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _HomeDiscountFeedCard extends StatelessWidget {
+  const _HomeDiscountFeedCard({
+    required this.product,
+    required this.shopProducts,
+    this.customerLatitude,
+    this.customerLongitude,
+    this.onConfirmOrder,
+    this.onNavigateToCart,
+  });
+
+  final PublicCatalogProduct product;
+  final List<PublicCatalogProduct> shopProducts;
+  final double? customerLatitude;
+  final double? customerLongitude;
+  final ValueChanged<CartProductSelection>? onConfirmOrder;
+  final VoidCallback? onNavigateToCart;
+
+  @override
+  Widget build(BuildContext context) {
+    final cardSize = catalogHomeShelfCardSize(context);
+    final shopDistanceKm = computeCatalogShopDistanceKm(
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
+      shopLatitude: product.shopLatitude,
+      shopLongitude: product.shopLongitude,
+    );
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SizedBox(
+        width: cardSize.width,
+        height: cardSize.height,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: cardSize.width,
+            child: CatalogProductCard(
+              product: product,
+              shopProducts: shopProducts,
+              shopLatitude: product.shopLatitude,
+              shopLongitude: product.shopLongitude,
+              shopDistanceKm: shopDistanceKm,
+              customerLatitude: customerLatitude,
+              customerLongitude: customerLongitude,
+              onConfirmOrder: onConfirmOrder,
+              onNavigateToCart: onNavigateToCart,
+              pinPriceToBottom: true,
+            ),
+          ),
         ),
       ),
     );

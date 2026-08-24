@@ -9,11 +9,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:promptpay_qrcode_generate/promptpay_qrcode_generate.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/payment_collection_config.dart';
+import 'config/payment_gateway_config.dart';
 import 'services/catalog_share.dart';
 import 'services/favorites_service.dart';
 import 'services/payment_qr_service.dart';
@@ -52,6 +52,9 @@ class CartLineItem {
     this.parcelLengthCm,
     this.parcelWidthCm,
     this.parcelHeightCm,
+    this.variantId,
+    this.selectedSize,
+    this.selectedColor,
   });
 
   final String productId;
@@ -73,6 +76,9 @@ class CartLineItem {
   final double? parcelLengthCm;
   final double? parcelWidthCm;
   final double? parcelHeightCm;
+  final String? variantId;
+  final String? selectedSize;
+  final String? selectedColor;
 }
 
 class PaymentSlipSubmissionRequest {
@@ -117,6 +123,7 @@ class CartScreen extends StatefulWidget {
     required this.onApplySharedLocation,
     this.onConfirmCashOnDelivery,
     this.onSubmitOmisePayment,
+    this.onSubmitPromptPaySlip,
     this.onOpenOrderRoadmap,
     this.initialCouponCode,
     this.onOpenMyCoupons,
@@ -136,6 +143,9 @@ class CartScreen extends StatefulWidget {
     CartCheckoutContext context,
     double grandTotal,
   )? onSubmitOmisePayment;
+  final Future<PaymentSlipSubmissionResult> Function(
+    PaymentSlipSubmissionRequest request,
+  )? onSubmitPromptPaySlip;
   final Future<void> Function(List<String> orderIds)? onOpenOrderRoadmap;
   final String? initialCouponCode;
   final VoidCallback? onOpenMyCoupons;
@@ -869,7 +879,10 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           ),
                         ],
                         const SizedBox(height: 12),
-                        const PaymentBrandStrip(compact: true),
+                        PaymentBrandStrip(
+                          compact: true,
+                          promptPayOnly: !PaymentGatewayConfig.omiseGatewayEnabled,
+                        ),
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,
@@ -1378,23 +1391,113 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 discounts: discounts,
                 checkoutQuoteId: checkoutQuoteId,
               ),
-      onOmisePayment: (channel) async {
-        final callback = widget.onSubmitOmisePayment;
-        if (callback == null) {
-          throw Exception('ระบบชำระเงิน Omise ยังไม่พร้อม');
-        }
-        final orderIds = await callback(
-          channel,
-          checkoutContext,
-          grandTotal,
+      onEmbeddedPromptPayScan:
+          PaymentGatewayConfig.embeddedPromptPayScanEnabled &&
+                  widget.onSubmitPromptPaySlip != null
+              ? () => _showEmbeddedPromptPayDialog(
+                    grandTotal: grandTotal,
+                    checkoutContext: checkoutContext,
+                  )
+              : null,
+      onOmisePayment: PaymentGatewayConfig.omiseGatewayEnabled &&
+              widget.onSubmitOmisePayment != null
+          ? (channel) async {
+              final callback = widget.onSubmitOmisePayment!;
+              final orderIds = await callback(
+                channel,
+                checkoutContext,
+                grandTotal,
+              );
+              if (orderIds.isEmpty) {
+                throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+              }
+              final openRoadmap = widget.onOpenOrderRoadmap;
+              if (openRoadmap != null) {
+                await openRoadmap(orderIds);
+              }
+            }
+          : null,
+    );
+  }
+
+  Future<void> _showEmbeddedPromptPayDialog({
+    required double grandTotal,
+    required CartCheckoutContext checkoutContext,
+  }) async {
+    if (widget.onSubmitPromptPaySlip == null) {
+      throw Exception('ระบบสแกนจ่ายพร้อมเพย์ยังไม่พร้อม');
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        final viewport = MediaQuery.of(dialogContext).size;
+        return PopScope(
+          canPop: false,
+          child: Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 420,
+                maxHeight: viewport.height * 0.78,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'สแกนจ่ายพร้อมเพย์',
+                      style: Theme.of(dialogContext).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'สแกน QR ชำระเงิน แล้วแนบสลิปเพื่อยืนยันก่อนสร้างออเดอร์',
+                      style: TextStyle(
+                        color: Color(0xFF6B7280),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: viewport.height * 0.56,
+                      child: TrueMoneyQrDialogContent(
+                        grandTotal: grandTotal,
+                        checkoutContext: checkoutContext,
+                        initialAttachedSlip: null,
+                        onAttachedSlipChanged: (_) {},
+                        onCloseRequested: () =>
+                            Navigator.of(dialogContext).pop(),
+                        onSubmitPromptPaySlip: widget.onSubmitPromptPaySlip,
+                        onSubmissionCompleted: (orderIds) async {
+                          final openRoadmap = widget.onOpenOrderRoadmap;
+                          if (openRoadmap != null) {
+                            await openRoadmap(orderIds);
+                          }
+                        },
+                        onSubmissionSucceeded: () {},
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(),
+                        child: const Text('ปิด'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         );
-        if (orderIds.isEmpty) {
-          throw Exception('ไม่สามารถสร้างออเดอร์ได้');
-        }
-        final openRoadmap = widget.onOpenOrderRoadmap;
-        if (openRoadmap != null) {
-          await openRoadmap(orderIds);
-        }
       },
     );
   }
@@ -2191,18 +2294,45 @@ class _TrueMoneyQrCard extends StatelessWidget {
   final double amount;
   final PaymentCollectionSettings settings;
 
+  String? _resolvePromptPayId() {
+    final nationalId = settings.promptPayNationalIdOrTaxId?.trim();
+    if (nationalId != null && nationalId.isNotEmpty) {
+      return nationalId;
+    }
+    final phone = settings.promptPayPhoneNumber?.trim();
+    if (phone != null && phone.isNotEmpty) {
+      return phone;
+    }
+    return null;
+  }
+
+  String? _buildQrPayload() {
+    final promptPayId = _resolvePromptPayId();
+    if (promptPayId != null) {
+      return PromptPayQrPayload.build(
+        promptPayId: promptPayId,
+        amount: amount,
+      );
+    }
+    final merchantPayload = channel.qrPayload?.trim();
+    if (merchantPayload != null && merchantPayload.isNotEmpty) {
+      return merchantPayload;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hasQr =
-        channel.qrPayload != null && channel.qrPayload!.trim().isNotEmpty;
-    final promptPayId = channel.type == PaymentChannelType.promptPayPhone
-        ? settings.promptPayPhoneNumber?.trim()
-        : channel.type == PaymentChannelType.promptPayNationalId
-        ? settings.promptPayNationalIdOrTaxId?.trim()
-        : null;
-    final hasPromptPayLibraryQr = promptPayId != null && promptPayId.isNotEmpty;
+    final qrPayload = _buildQrPayload();
+    final promptPayId = _resolvePromptPayId();
+    final recipientName = settings.recipientDisplayName.trim().isNotEmpty
+        ? settings.recipientDisplayName.trim()
+        : 'วิทยา ทนหงษา';
+    final maskedPromptPay = promptPayId == null
+        ? 'PromptPay'
+        : PromptPayQrPayload.maskedDisplayLabel(promptPayId);
     final amountLabel = amount.toStringAsFixed(
-      amount.truncateToDouble() == amount ? 0 : 1,
+      amount.truncateToDouble() == amount ? 0 : 2,
     );
 
     return Container(
@@ -2222,114 +2352,150 @@ class _TrueMoneyQrCard extends StatelessWidget {
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
-          if (channel.destinationLabel != null) ...<Widget>[
-            const SizedBox(height: 4),
-            Text(
-              channel.destinationLabel!,
-              style: const TextStyle(
-                color: Color(0xFF6B7280),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
           const SizedBox(height: 12),
           RepaintBoundary(
             key: qrBoundaryKey,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final qrSize = constraints.maxWidth >= 260
-                    ? 220.0
+                    ? 180.0
                     : (constraints.maxWidth - 32)
-                          .clamp(160.0, 220.0)
+                          .clamp(140.0, 180.0)
                           .toDouble();
+                final logoSize = (qrSize * 0.12).clamp(18.0, 28.0);
+
+                if (qrPayload == null || qrPayload.isEmpty) {
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FAFB),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Icon(
+                          Icons.qr_code_2_rounded,
+                          size: 42,
+                          color: Color(0xFF9CA3AF),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'ยังไม่สามารถสร้างคิวอาร์โค้ดได้',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  );
+                }
 
                 return Center(
-                  child: hasPromptPayLibraryQr
-                      ? Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF9FAFB),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: QRCodeGenerate(
-                                promptPayId: promptPayId,
-                                amount: amount,
-                                width: qrSize,
-                                height: qrSize,
-                              ),
+                  child: Container(
+                    width: qrSize + 28,
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFE5E7EB)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Container(
+                          height: 28,
+                          width: double.infinity,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF0E55AA),
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(4),
                             ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'สแกนเพื่อชำระ ฿$amountLabel',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'PromptPay ผูกกับเลข $promptPayId',
-                              style: const TextStyle(
-                                color: Color(0xFF6B7280),
-                                fontWeight: FontWeight.w600,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        )
-                      : hasQr
-                      ? Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF9FAFB),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: QrImageView(
-                                data: channel.qrPayload!,
-                                size: qrSize,
+                          ),
+                          alignment: Alignment.center,
+                          child: Image.asset(
+                            'assets/images/thai_qr_payment.png',
+                            package: 'promptpay_qrcode_generate',
+                            height: 22,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Image.asset(
+                          'assets/images/prompt_pay_logo.png',
+                          package: 'promptpay_qrcode_generate',
+                          height: 28,
+                          fit: BoxFit.contain,
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: qrSize,
+                          height: qrSize,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: <Widget>[
+                              QrImageView(
+                                data: qrPayload,
+                                errorCorrectionLevel: QrErrorCorrectLevel.H,
                                 backgroundColor: Colors.white,
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'สแกนเพื่อชำระ ฿$amountLabel',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        )
-                      : Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF9FAFB),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              Icon(
-                                Icons.qr_code_2_rounded,
-                                size: 42,
-                                color: Color(0xFF9CA3AF),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                'ยังไม่สามารถสร้างคิวอาร์โค้ดได้',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontWeight: FontWeight.w700),
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: Align(
+                                    alignment: const Alignment(0, -0.06),
+                                    child: Container(
+                                      width: logoSize,
+                                      height: logoSize,
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Image.asset(
+                                        'assets/app_logo.png',
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ],
                           ),
                         ),
+                        const SizedBox(height: 10),
+                        Text(
+                          recipientName,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          maskedPromptPay,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF6B7280),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'ยอดชำระ ฿$amountLabel',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFFE55A00),
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),

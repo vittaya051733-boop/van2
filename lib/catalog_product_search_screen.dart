@@ -136,7 +136,7 @@ class _CatalogProductSearchScreenState
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
-                    mainAxisSpacing: 12,
+                    mainAxisSpacing: 8,
                     crossAxisSpacing: 12,
                     mainAxisExtent: cardSize.height,
                   ),
@@ -159,6 +159,7 @@ class _CatalogProductSearchScreenState
                       customerLongitude: widget.customerLongitude,
                       onConfirmOrder: widget.onConfirmOrder,
                       onNavigateToCart: widget.onNavigateToCart,
+                      pinPriceToBottom: true,
                     );
                   },
                 );

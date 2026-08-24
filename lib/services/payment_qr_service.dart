@@ -31,6 +31,36 @@ class PromptPayQrPayload {
     return _buildPayload(proxyType: '02', proxyValue: digits, amount: amount);
   }
 
+  static String? build({
+    required String promptPayId,
+    required double amount,
+  }) {
+    final digits = _digitsOnly(promptPayId);
+    if (digits.length == 13) {
+      return fromNationalIdOrTaxId(nationalIdOrTaxId: digits, amount: amount);
+    }
+    if (digits.length >= 9 && digits.length <= 10) {
+      return fromPhoneNumber(phoneNumber: digits, amount: amount);
+    }
+    return null;
+  }
+
+  static String maskedLastFour(String promptPayId) {
+    final digits = _digitsOnly(promptPayId);
+    if (digits.length >= 4) {
+      return digits.substring(digits.length - 4);
+    }
+    return '';
+  }
+
+  static String maskedDisplayLabel(String promptPayId) {
+    final suffix = maskedLastFour(promptPayId);
+    if (suffix.isEmpty) {
+      return 'PromptPay';
+    }
+    return 'PromptPay ••••$suffix';
+  }
+
   static String _buildPayload({
     required String proxyType,
     required String proxyValue,
@@ -90,14 +120,10 @@ class PaymentQrService {
   static PaymentCollectionSettings resolveSettingsForQr(
     PaymentCollectionSettings config,
   ) {
-    final normalized =
-        PaymentCollectionSettings.normalizePromptPayFields(config);
-    final merchantQrPayload =
-        _normalizedMerchantPayload(normalized.merchantQrPayload);
-    final promptPayPhoneNumber =
-        _normalizedPhoneNumber(normalized.promptPayPhoneNumber);
+    final merchantQrPayload = _normalizedMerchantPayload(config.merchantQrPayload);
+    final promptPayPhoneNumber = _normalizedPhoneNumber(config.promptPayPhoneNumber);
     final promptPayNationalIdOrTaxId = _normalizedNationalId(
-      normalized.promptPayNationalIdOrTaxId,
+      config.promptPayNationalIdOrTaxId,
     );
 
     final hasValidConfiguredQr =
@@ -179,10 +205,8 @@ class PaymentQrService {
         type: PaymentChannelType.bankTransfer,
         title: '4. โอนเข้าบัญชีแล้วแนบสลิป',
         description: 'ใช้เลขบัญชีธนาคารโดยตรง และส่งสลิปให้ระบบตรวจภายหลัง',
-        isConfigured: config.isConfigured,
-        destinationLabel: config.isConfigured
-            ? '${config.bankName} ${config.bankAccountNumber}'
-            : 'กำลังโหลดข้อมูลบัญชีรับเงิน',
+        isConfigured: true,
+        destinationLabel: '${config.bankName} ${config.bankAccountNumber}',
       ),
     ];
 

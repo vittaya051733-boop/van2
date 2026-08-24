@@ -1,0 +1,19 @@
+{
+  "id": "BUNDLE-ST2",
+  "slug": "van2-storage",
+  "titleTh": "Storage rules van2 (ลูกค้า)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van2"],
+  "consumerApps": ["van2"],
+  "collections": [],
+  "summaryTh": "Deploy storage.rules ของ van2 เท่านั้น",
+  "impactTh": ["กระทบเฉพาะ bucket van2", "ไม่กระทบ van3 Firestore"],
+  "riskTh": "ต่ำ (SELF)",
+  "forbidden": ["van1:*", "van3:*", "van4:*", "van2:firestore", "van2:functions", "van2:hosting"],
+  "allowedPaths": ["van2/storage.rules"],
+  "firebaseSteps": ["van2:storage"],
+  "buildSteps": [],
+  "smokeChecklistTh": ["van2: อัปโหลดไฟล์ที่เกี่ยวกับลูกค้าได้"],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md"]
+}

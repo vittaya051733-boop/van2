@@ -45,7 +45,7 @@ if (-not $DryRunOnly -and -not $Execute) {
   Write-Host ''
   Write-Host 'deploy-plan.ps1 — เลือกโหมด:' -ForegroundColor Cyan
   Write-Host '  -DryRunOnly   ข้อ 5: ตรวจ impact + readiness + dry-run (ไม่ deploy จริง)'
-  Write-Host '  -Execute      deploy จริงผ่าน deploy-self.ps1 (backup อัตโนมัติถ้า firestore)'
+  Write-Host '  -Execute      deploy จริงผ่าน deploy-self.ps1 (backup อัตโนมัติทุก target)'
   Write-Host ''
   Write-Host 'Example:'
   Write-Host '  .\deploy-plan.ps1 -App van2 -Target firestore -DryRunOnly'

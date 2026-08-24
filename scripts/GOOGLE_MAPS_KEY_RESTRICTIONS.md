@@ -4,14 +4,14 @@
 
 ## Android Maps SDK (AndroidManifest)
 
-- Key ใน `android/app/src/main/AndroidManifest.xml` ต้อง restrict ใน GCP
-- รัน: `scripts/configure-van2-google-maps-sdk.ps1`
-- เพิ่ม package `Van2.com` + SHA-1 **upload keystore** (ไม่ใช่แค่ debug) ก่อนขึ้น Play Store
+- **van2** key ใน `android/app/src/main/AndroidManifest.xml` — รัน: `scripts/add-van2-upload-sha1-maps-key.ps1`
+- **van1** key (API key 4, ...GsU) — รัน: `scripts/restrict-van1-maps-android-key.ps1`
+- เพิ่ม package + SHA-1 **upload keystore** (ไม่ใช่แค่ debug) ก่อนขึ้น Play Store
 
 ## Web Maps JS
 
 - Fallback key: `lib/config/google_maps_web_api_key_fallback_web.dart`
-- Restrict ด้วย HTTP referrer (domain van2 hosting เท่านั้น)
+- รัน: `scripts/fix-web-maps-browser-key.ps1` (HTTP referrer van*.web.app + Maps JS API)
 
 ## Server Directions (Cloud Functions)
 

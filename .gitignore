@@ -63,6 +63,10 @@ app.*.map.json
 # Firestore rules deploy backups (local rollback only)
 scripts/deploy-backups/*.rules
 scripts/deploy-backups/LATEST.txt
+scripts/deploy-backups/LATEST-SESSION.txt
+scripts/deploy-backups/sessions/
+scripts/deploy-backups/health-reports/
+scripts/deploy-backups/LEDGER.jsonl
 scripts/smoke-test-config.local.json
 scripts/web-build.secrets.ps1
 scripts/smoke-test/node_modules/

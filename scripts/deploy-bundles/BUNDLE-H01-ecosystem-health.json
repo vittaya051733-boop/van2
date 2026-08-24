@@ -1,0 +1,51 @@
+{
+  "id": "BUNDLE-H01",
+  "slug": "ecosystem-health",
+  "titleTh": "ตรวจสุขภาพ Ecosystem ทั้งระบบ",
+  "project": "van-merchant",
+  "scope": "SHARED",
+  "writerApps": [],
+  "consumerApps": ["van1", "van2", "van3", "van4"],
+  "collections": ["*"],
+  "summaryTh": "รัน checklist ครั้งเดียว — บอกว่า van ไหน / collection ไหนน่าจะหลุด (readiness + smoke + checklist มือ)",
+  "impactTh": [
+    "ไม่ deploy อะไร — เป็นการตรวจเท่านั้น",
+    "รัน readiness van1-4 + Firestore compile/emulator smoke",
+    "ถ้า FAIL → สงสัย L1-FS-RULES และ van3 orders/riders เป็นอันดับแรก",
+    "รายงานบันทึกที่ scripts/deploy-backups/health-reports/",
+    "จุด MANUAL (FCM/โปรโมชั่น/flow สั่งซื้อ) ต้องเทสมือ 2-3 นาที"
+  ],
+  "riskTh": "ไม่มี — ไม่แก้ production",
+  "forbidden": [
+    "van1:firestore",
+    "van2:firestore",
+    "van3:firestore",
+    "van4:firestore",
+    "van1:storage",
+    "van2:storage",
+    "van3:storage",
+    "van4:storage",
+    "van1:functions",
+    "van2:functions",
+    "van4:firestore-van4"
+  ],
+  "allowedPaths": [
+    "van2/scripts/ECOSYSTEM_HEALTH_CHECKLIST.json",
+    "van2/scripts/ecosystem-health.ps1",
+    "van2/scripts/deploy-smoke-test.ps1",
+    "van2/scripts/smoke-test/"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [],
+  "smokeChecklistTh": [
+    "รัน: van2\\scripts\\ecosystem-health.ps1",
+    "หรือดูแผนที่อย่างเดียว: ecosystem-health.ps1 -MatrixOnly",
+    "ถ้า FAIL → deploy-restore-firestore-rules.ps1 แล้ว smoke van3",
+    "หลัง PASS auto → เทสมือ van3 online → van2 ตะกร้า → van1 ออเดอร์ → van4 admin"
+  ],
+  "relatedDocs": [
+    "ECOSYSTEM_HEALTH_CHECKLIST.json",
+    "DEPLOY_CONNECTION_SIGNALS.md",
+    "VAN_ECOSYSTEM_CROSS_WRITE.md"
+  ]
+}

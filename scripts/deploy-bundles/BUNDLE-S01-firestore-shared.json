@@ -1,0 +1,36 @@
+{
+  "id": "BUNDLE-S01",
+  "slug": "firestore-shared-default",
+  "titleTh": "Firestore rules ฐาน default (SHARED)",
+  "project": "van-merchant",
+  "scope": "SHARED",
+  "writerApps": ["van2"],
+  "consumerApps": ["van1", "van2", "van3", "van4"],
+  "collections": ["*"],
+  "summaryTh": "Deploy Firestore rules ฐาน (default) จาก van2 — กระทบทุกแอป",
+  "impactTh": [
+    "SHARED ทุกแอป — เปลี่ยน permission ทั้งระบบ",
+    "van3 ไรเดอร์: อ่อนไหวสุด — listener real-time",
+    "สำรอง + smoke emulator บังคับก่อน deploy"
+  ],
+  "riskTh": "สูงมาก",
+  "forbidden": [
+    "van1:firestore",
+    "van3:firestore",
+    "van4:firestore"
+  ],
+  "allowedPaths": [
+    "van2/firestore.rules",
+    "van2/shared_firebase_rules/firestore.rules"
+  ],
+  "firebaseSteps": ["van2:firestore"],
+  "buildSteps": [],
+  "smokeChecklistTh": [
+    "van3: orders/riders listener",
+    "van2: cart/orders",
+    "van1: shop orders",
+    "van4: admin read/write ตาม role"
+  ],
+  "confirmImpact": "SHARED:van1,van2,van3,van4",
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md"]
+}

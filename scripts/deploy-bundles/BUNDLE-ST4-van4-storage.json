@@ -1,0 +1,19 @@
+{
+  "id": "BUNDLE-ST4",
+  "slug": "van4-storage",
+  "titleTh": "Storage rules van4 (แอดมิน)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van4"],
+  "consumerApps": ["van4"],
+  "collections": [],
+  "summaryTh": "Deploy storage.rules ของ van4 เท่านั้น",
+  "impactTh": ["SELF van4 — รูปโปรโมชั่น/แอดมิน", "ไม่กระทบ van3 listener"],
+  "riskTh": "ต่ำ (SELF)",
+  "forbidden": ["van1:*", "van2:*", "van3:*", "van4:firestore", "van4:firestore-van4", "van4:hosting"],
+  "allowedPaths": ["van4/storage.rules"],
+  "firebaseSteps": ["van4:storage"],
+  "buildSteps": [],
+  "smokeChecklistTh": ["van4: อัปโหลดรูปโปรโมชั่นได้"],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md"]
+}

@@ -12,6 +12,10 @@ const {
   RIDER_AVAILABILITY_DOC_PATH,
   snapshotFromPool,
 } = require('./rider_availability');
+const {
+  EMBEDDED_PROMPTPAY_CHECKOUT_ENABLED,
+  OMISE_GATEWAY_ENABLED,
+} = require('./payment_gateway_config');
 
 const VAN2_CART_SESSION_COLLECTION = 'van2_cart_sessions';
 const SLIPOK_FEEDBACK_COLLECTION = 'slipok_feedback';
@@ -113,6 +117,45 @@ function buildHoldMapFromCheckoutItems(items) {
     holds[productId] = (holds[productId] || 0) + quantity;
   }
   return holds;
+}
+
+async function validateCheckoutStockAvailable(db, HttpsError, uid, items) {
+  const holdMap = buildHoldMapFromCheckoutItems(items);
+  const productIds = Object.keys(holdMap);
+  if (productIds.length === 0) {
+    return;
+  }
+
+  const sessionRef = db.collection(VAN2_CART_SESSION_COLLECTION).doc(uid);
+  const sessionSnap = await sessionRef.get();
+  const sessionHolds = sessionSnap.exists ? sessionSnap.data()?.holds || {} : {};
+
+  for (const productId of productIds) {
+    const requiredQty = holdMap[productId] || 0;
+    const heldQty = Math.max(0, Math.floor(Number(sessionHolds[productId] || 0)));
+    const productSnap = await db.collection('products').doc(productId).get();
+
+    if (!productSnap.exists) {
+      throw new HttpsError('not-found', `ไม่พบสินค้า ${productId}`);
+    }
+
+    const trackedStock = readFiniteProductStock(productSnap.data()?.stock);
+    if (trackedStock === null) {
+      continue;
+    }
+
+    if (heldQty >= requiredQty) {
+      continue;
+    }
+
+    const extraNeeded = requiredQty - heldQty;
+    if (trackedStock < extraNeeded) {
+      throw new HttpsError(
+        'failed-precondition',
+        `สต๊อกไม่พอสำหรับสินค้า ${productId}`,
+      );
+    }
+  }
 }
 
 async function assertCheckoutStockReady(db, FieldValue, HttpsError, uid, items) {
@@ -370,6 +413,37 @@ async function loadPublicShopProfileMap(db, shopIds) {
   return profileMap;
 }
 
+function resolveProductVariant(product, item) {
+  if (product?.hasVariants !== true) {
+    return null;
+  }
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  const variantId = String(item?.variantId || '').trim();
+  if (variantId) {
+    const matched = variants.find(
+      (entry) => String(entry?.id || '').trim() === variantId && entry?.isActive !== false,
+    );
+    if (matched) {
+      return matched;
+    }
+  }
+
+  const selectedColor = String(item?.selectedColor || '').trim();
+  const selectedSize = String(item?.selectedSize || '').trim();
+  const active = variants.filter((entry) => entry?.isActive !== false);
+  const matchedByOptions = active.find((entry) => {
+    const color = String(entry?.color || '').trim();
+    const size = String(entry?.size || '').trim();
+    const colorMatch = !selectedColor || color === selectedColor;
+    const sizeMatch = !selectedSize || size === selectedSize;
+    return colorMatch && sizeMatch;
+  });
+  if (matchedByOptions) {
+    return matchedByOptions;
+  }
+  return active.length === 1 ? active[0] : null;
+}
+
 function buildResolvedLineItem(item, product, helpers) {
   const {
     parseNumber,
@@ -386,7 +460,14 @@ function buildResolvedLineItem(item, product, helpers) {
     : 1;
 
   const taxable = isTaxableProduct(product);
-  const basePrice = parseNumber(product.price);
+  const variant = resolveProductVariant(product, item);
+  if (product?.hasVariants === true && !variant) {
+    throw new Error('กรุณาเลือกตัวเลือกสินค้าให้ครบ');
+  }
+  const variantPrice = variant ? parseNumber(variant.price) : null;
+  const basePrice = variantPrice != null && variantPrice > 0
+    ? variantPrice
+    : parseNumber(product.price);
   const adjustedBasePrice = applyProductMarkupWithRates(basePrice, taxable, pricingRates);
   const discountedBase = applyMerchantDiscount(
     basePrice,
@@ -425,11 +506,13 @@ function buildResolvedLineItem(item, product, helpers) {
   }
 
   const unitPrice = customerBase + toppingTotal;
-  const merchantBasePrice = parseNumber(product.price);
+  const merchantBasePrice = basePrice;
   const merchantUnitPayout = resolveMerchantUnitPayout(product, parseNumber) + toppingMerchantPayout;
   const shopId = String(item?.shopId || product.ownerUid || '').trim();
   const shopName = String(product.shopName || item?.shopName || 'ร้านค้า').trim() || 'ร้านค้า';
-  const imageUrl = resolveProductImageUrl(product, item);
+  const imageUrl = variant?.imageUrl
+    ? String(variant.imageUrl).trim()
+    : resolveProductImageUrl(product, item);
   const shopImageUrl = resolveShopImageUrlFromProduct(product, item);
 
   return {
@@ -446,6 +529,13 @@ function buildResolvedLineItem(item, product, helpers) {
     merchantUnitPayout,
     imageUrl: imageUrl || null,
     selectedToppings,
+    variantId: variant?.id ? String(variant.id).trim() : null,
+    selectedSize: variant?.size
+      ? String(variant.size).trim()
+      : String(item?.selectedSize || '').trim() || null,
+    selectedColor: variant?.color
+      ? String(variant.color).trim()
+      : String(item?.selectedColor || '').trim() || null,
     quantity,
     preparationTimeMinutes: Math.max(
       1,
@@ -595,6 +685,9 @@ async function persistCheckoutQuote(db, FieldValue, uid, totals, items) {
         quantity: Number(item?.quantity) || 1,
         shopId: String(item?.shopId || '').trim(),
         selectedToppings: Array.isArray(item?.selectedToppings) ? item.selectedToppings : [],
+        variantId: String(item?.variantId || '').trim(),
+        selectedSize: String(item?.selectedSize || '').trim(),
+        selectedColor: String(item?.selectedColor || '').trim(),
       })),
     ),
     consumed: false,
@@ -1015,6 +1108,9 @@ function buildProductsPayload(lines) {
       preparationTimeMinutes: line.preparationTimeMinutes,
       preparingDuration: line.preparationTimeMinutes * 60 * 1000,
       selectedToppings: line.selectedToppings,
+      ...(line.variantId ? { variantId: line.variantId } : {}),
+      ...(line.selectedSize ? { selectedSize: line.selectedSize } : {}),
+      ...(line.selectedColor ? { selectedColor: line.selectedColor } : {}),
       lineTotal: line.unitPrice * line.quantity,
       ...(imageUrl ? { imageUrl, productImage: imageUrl } : {}),
       ...(line.shopImageUrl ? { shopImageUrl: line.shopImageUrl } : {}),
@@ -1085,10 +1181,24 @@ async function createCheckoutOrdersHandler(request, deps) {
   if (!allowedPaymentStatuses.includes(paymentStatus)) {
     throw new HttpsError('invalid-argument', 'สถานะชำระเงินไม่รองรับ');
   }
-  if (paymentStatus === 'verified' && paymentMethod === 'promptpay_qr') {
+  if (
+    paymentStatus === 'verified'
+    && paymentMethod === 'promptpay_qr'
+    && !EMBEDDED_PROMPTPAY_CHECKOUT_ENABLED
+  ) {
     throw new HttpsError(
       'failed-precondition',
       'ระบบสแกนจ่าย+สลิp ถูกยกเลิกแล้ว กรุณาใช้ Omise',
+    );
+  }
+  if (
+    paymentStatus === 'verified'
+    && OMISE_PAYMENT_METHODS.has(paymentMethod)
+    && !OMISE_GATEWAY_ENABLED
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'ระบบชำระเงิน Omise ยังไม่เปิดใช้งาน กรุณาใช้สแกนจ่ายพร้อมเพย์',
     );
   }
   let omisePaymentSession = null;
@@ -1162,8 +1272,13 @@ async function createCheckoutOrdersHandler(request, deps) {
       quantity: Number(item?.quantity) || 1,
       shopId: String(item?.shopId || '').trim(),
       selectedToppings: Array.isArray(item?.selectedToppings) ? item.selectedToppings : [],
+      variantId: String(item?.variantId || '').trim(),
+      selectedSize: String(item?.selectedSize || '').trim(),
+      selectedColor: String(item?.selectedColor || '').trim(),
     })),
   );
+
+  await validateCheckoutStockAvailable(db, HttpsError, uid, items);
 
   let quoteRef = null;
   try {

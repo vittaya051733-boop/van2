@@ -1,4 +1,5 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
+const { assertApprovedRiderOutsideTransaction } = require('./rider_guard');
 
 let db;
 let DEFAULT_REGION;
@@ -30,7 +31,7 @@ function serializeFirestoreValue(value) {
 
 function registerHandlers() {
   const listRiderOrders = onCall(
-    { region: DEFAULT_REGION },
+    { region: DEFAULT_REGION, enforceAppCheck: true },
     async (request) => {
       if (!request.auth?.uid) {
         throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
@@ -40,6 +41,8 @@ function registerHandlers() {
       if (!uid) {
         throw new HttpsError('invalid-argument', 'ไม่พบ uid');
       }
+
+      await assertApprovedRiderOutsideTransaction(uid);
 
       const snapshot = await db
         .collection('orders')

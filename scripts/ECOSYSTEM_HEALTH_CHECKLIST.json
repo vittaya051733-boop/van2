@@ -1,0 +1,346 @@
+{
+  "id": "ECOSYSTEM-HEALTH",
+  "titleTh": "ตรวจสุขภาพ Ecosystem ทั้งระบบ (รันครั้งเดียว)",
+  "project": "van-merchant",
+  "updated": "2026-08-13",
+  "howToRun": "van2\\scripts\\ecosystem-health.ps1",
+  "layers": [
+    {
+      "id": "L1",
+      "titleTh": "โครงสร้างแชร์ (ถ้าพัง = ทุกแอป)",
+      "points": [
+        {
+          "id": "L1-AUTH",
+          "van": ["van1", "van2", "van3", "van4"],
+          "resource": "Firebase Auth",
+          "symptomTh": "login ไม่ได้ / token หมดอายุ",
+          "auto": "manual"
+        },
+        {
+          "id": "L1-FS-RULES",
+          "van": ["van1", "van2", "van3", "van4"],
+          "resource": "Firestore rules (default)",
+          "symptomTh": "permission-denied ทุก listener",
+          "auto": "compile+emulator"
+        },
+        {
+          "id": "L1-FCM",
+          "van": ["van1", "van2", "van3"],
+          "resource": "FCM / push",
+          "symptomTh": "แจ้งเตือนไม่มา แต่เปิดแอปเห็นข้อมูล",
+          "auto": "manual"
+        },
+        {
+          "id": "L1-APPCHECK",
+          "van": ["van1", "van2", "van3", "van4"],
+          "resource": "App Check",
+          "symptomTh": "callable / Firestore ถูกบล็อก (app check)",
+          "auto": "manual"
+        },
+        {
+          "id": "L1-CF-VAN2",
+          "van": ["van2", "van3", "van4"],
+          "resource": "Cloud Functions (van2)",
+          "symptomTh": "checkout / push / withdraw ล้ม",
+          "auto": "manual"
+        }
+      ]
+    },
+    {
+      "id": "L2-VAN3",
+      "titleTh": "van3 ไรเดอร์ — อ่อนไหวสุด",
+      "app": "van3",
+      "points": [
+        {
+          "id": "V3-ORDERS",
+          "collection": "orders",
+          "query": "driverId == uid",
+          "screenTh": "หน้ารับงาน / งานที่รับแล้ว",
+          "auto": "emulator+live",
+          "priority": 1
+        },
+        {
+          "id": "V3-RIDERS",
+          "collection": "riders/{uid}",
+          "query": "get/update own doc",
+          "screenTh": "เปิด online / FCM token",
+          "auto": "emulator+live",
+          "priority": 1
+        },
+        {
+          "id": "V3-CREDITS",
+          "collection": "credits/{uid}",
+          "query": "get own",
+          "screenTh": "กระเป๋า/เครดิตก่อนรับงาน",
+          "auto": "emulator+live",
+          "priority": 1
+        },
+        {
+          "id": "V3-PAYMENT",
+          "collection": "payment_config/collection",
+          "query": "get",
+          "screenTh": "QR เติมเงิน",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V3-CHAT",
+          "collection": "chats / call_sessions",
+          "query": "participant",
+          "screenTh": "แชท/โทร",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V3-REVIEWS",
+          "collection": "rider_reviews",
+          "query": "get",
+          "screenTh": "รีวิวจากลูกค้า",
+          "auto": "emulator",
+          "priority": 3
+        },
+        {
+          "id": "V3-FCM",
+          "collection": "FCM via pushAppNotification",
+          "query": "n/a",
+          "screenTh": "popup งานใหม่เมื่อแอปปิด",
+          "auto": "manual",
+          "priority": 1
+        }
+      ]
+    },
+    {
+      "id": "L2-VAN2",
+      "titleTh": "van2 ลูกค้า",
+      "app": "van2",
+      "points": [
+        {
+          "id": "V2-ORDERS",
+          "collection": "orders",
+          "query": "customerId == uid",
+          "screenTh": "สถานะออเดอร์ / roadmap",
+          "auto": "emulator+live",
+          "priority": 1
+        },
+        {
+          "id": "V2-RIDERS",
+          "collection": "riders",
+          "query": "onlineReady",
+          "screenTh": "หาไรเดอร์ในตะกร้า",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V2-CATALOG",
+          "collection": "products / public_shops",
+          "query": "listen catalog",
+          "screenTh": "หน้าแรก / ร้าน",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V2-COUPONS",
+          "collection": "coupons / promotions / promotion_display_config",
+          "query": "listen",
+          "screenTh": "popup คูปอง / โปรโมชั่น",
+          "auto": "manual",
+          "priority": 2,
+          "bundle": "BUNDLE-A01"
+        },
+        {
+          "id": "V2-PRICING",
+          "collection": "pricing_config/global",
+          "query": "listen",
+          "screenTh": "ตะกร้า / ค่าส่ง",
+          "auto": "manual",
+          "priority": 2,
+          "bundle": "BUNDLE-A02"
+        },
+        {
+          "id": "V2-NOTIF",
+          "collection": "app_notifications",
+          "query": "user inbox",
+          "screenTh": "แท็บแจ้งเตือน",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V2-CHAT",
+          "collection": "chats + messages",
+          "query": "participant",
+          "screenTh": "แชทร้าน",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V2-SUPPORT",
+          "collection": "admin_support_tickets",
+          "query": "create",
+          "screenTh": "ติดต่อแอดมิน",
+          "auto": "emulator",
+          "priority": 3
+        }
+      ]
+    },
+    {
+      "id": "L2-VAN1",
+      "titleTh": "van1 ร้านค้า",
+      "app": "van1",
+      "points": [
+        {
+          "id": "V1-ORDERS",
+          "collection": "orders",
+          "query": "shopOwnerId == uid",
+          "screenTh": "รายการออเดอร์ร้าน",
+          "auto": "emulator+live",
+          "priority": 1
+        },
+        {
+          "id": "V1-PRODUCTS",
+          "collection": "products",
+          "query": "ownerUid == uid",
+          "screenTh": "จัดการสินค้า",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V1-SHOPOPS",
+          "collection": "shop_operations/{uid}",
+          "query": "get/update",
+          "screenTh": "เปิด/ปิดร้าน",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V1-NOTIF",
+          "collection": "app_notifications",
+          "query": "user inbox",
+          "screenTh": "แจ้งออเดอร์ใหม่",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V1-CREDITS",
+          "collection": "credits/{uid}",
+          "query": "get own",
+          "screenTh": "กระเป๋าร้าน / wallet",
+          "auto": "emulator",
+          "priority": 2
+        },
+        {
+          "id": "V1-REVIEWS",
+          "collection": "product_reviews / shop_reviews",
+          "query": "get",
+          "screenTh": "รีวิวลูกค้า",
+          "auto": "emulator",
+          "priority": 3
+        },
+        {
+          "id": "V1-SUPPORT",
+          "collection": "admin_support_tickets",
+          "query": "create",
+          "screenTh": "ติดต่อแอดมิน",
+          "auto": "emulator",
+          "priority": 3
+        }
+      ]
+    },
+    {
+      "id": "L2-VAN4",
+      "titleTh": "van4 แอดมิน",
+      "app": "van4",
+      "points": [
+        {
+          "id": "V4-SUPPORT",
+          "collection": "admin_support_tickets",
+          "query": "list+update",
+          "screenTh": "inbox ติดต่อแอดมิน",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V4-ORDERS",
+          "collection": "orders / riders",
+          "query": "admin list",
+          "screenTh": "dashboard ออเดอร์/ไรเดอร์",
+          "auto": "emulator",
+          "priority": 1
+        },
+        {
+          "id": "V4-ADMINS",
+          "collection": "admins/{email}",
+          "query": "get",
+          "screenTh": "login แอดมิน",
+          "auto": "manual",
+          "priority": 1
+        },
+        {
+          "id": "V4-PROMO",
+          "collection": "coupons / promotions",
+          "query": "write",
+          "screenTh": "หน้าโปรโมชั่น",
+          "auto": "manual",
+          "priority": 2,
+          "bundle": "BUNDLE-A01"
+        },
+        {
+          "id": "V4-CHAT",
+          "collection": "admin_internal_threads",
+          "query": "listen",
+          "screenTh": "แชทภายในแอดมิน",
+          "auto": "manual",
+          "priority": 2
+        }
+      ]
+    },
+    {
+      "id": "L3-FLOW",
+      "titleTh": "Flow ธุรกิจข้ามแอป (เทสมือหลัง SHARED deploy)",
+      "points": [
+        {
+          "id": "FLOW-ORDER",
+          "apps": ["van2", "van1", "van3"],
+          "titleTh": "สั่งซื้อ → ร้านรับ → ไรเดอร์รับงาน",
+          "auto": "manual",
+          "priority": 1
+        },
+        {
+          "id": "FLOW-PROMO",
+          "apps": ["van4", "van2"],
+          "titleTh": "สร้างคูปอง van4 → เห็นหน้าแรก van2",
+          "auto": "manual",
+          "priority": 2,
+          "bundle": "BUNDLE-A01"
+        },
+        {
+          "id": "FLOW-PUSH",
+          "apps": ["van2", "van3"],
+          "titleTh": "ออเดอร์ใหม่ → push popup ไรเดอร์",
+          "auto": "manual",
+          "priority": 1
+        },
+        {
+          "id": "FLOW-WALLET",
+          "apps": ["van4", "van1", "van3"],
+          "titleTh": "settlement / withdraw → wallet ร้าน+ไรเดอร์",
+          "auto": "manual",
+          "priority": 2
+        },
+        {
+          "id": "FLOW-PRICING",
+          "apps": ["van4", "van2"],
+          "titleTh": "pricing_config → ตะกร้า van2",
+          "auto": "manual",
+          "priority": 2,
+          "bundle": "BUNDLE-A02"
+        }
+      ]
+    }
+  ],
+  "symptomMapTh": {
+    "permission-denied": "Firestore rules บล็อก — ตรวจ L1-FS-RULES + collection ของแอปนั้น",
+    "spinner": "listener error หรือเน็ต — ดู log ของแอป",
+    "stale-data": "realtime หลุด — มักเป็น van3 orders/riders",
+    "no-push": "FCM/Functions — ไม่ใช่ rules (ดู L1-FCM, V3-FCM, FLOW-PUSH)"
+  }
+}

@@ -143,6 +143,59 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
     }
 
     final coupon = _visibleCoupon!;
+    final imageOnlyPopup =
+        coupon.transparentImage && coupon.imageUrl.isNotEmpty;
+
+    if (imageOnlyPopup) {
+      return Stack(
+        children: <Widget>[
+          ModalBarrier(
+            color: Colors.black.withValues(alpha: 0.45),
+            dismissible: false,
+          ),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 360),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  GestureDetector(
+                    onTap: _claiming ? null : _claim,
+                    child: Image.network(
+                      coupon.imageUrl,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => _imageFallback(),
+                    ),
+                  ),
+                  Positioned(
+                    top: -8,
+                    right: -8,
+                    child: IconButton(
+                      onPressed: _dismiss,
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black.withValues(alpha: 0.55),
+                        foregroundColor: Colors.white,
+                      ),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ),
+                  if (_claiming)
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Color(0x44000000),
+                        child: Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Stack(
       children: <Widget>[
         ModalBarrier(

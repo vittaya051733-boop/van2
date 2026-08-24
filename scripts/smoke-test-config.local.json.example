@@ -3,5 +3,7 @@
   "webApiKey": "AIzaSyB6Q5DE_VkpqO3qTn3bqPBawQjxzGEngxY",
   "riderUid": "PASTE_RIDER_FIREBASE_AUTH_UID",
   "customerUid": "OPTIONAL_CUSTOMER_UID",
-  "shopUid": "OPTIONAL_SHOP_UID"
+  "shopUid": "OPTIONAL_SHOP_UID",
+  "adminUid": "OPTIONAL_ADMIN_AUTH_UID",
+  "_comment": "ใส่ UID จริงแล้วรัน: deploy.ps1 -Health (live smoke จะลึกขึ้น). ต้องมี ADC: gcloud auth application-default login"
 }

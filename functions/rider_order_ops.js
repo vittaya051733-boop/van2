@@ -1,6 +1,10 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const { createSettlementConfigLoader } = require('./settlement_config');
 const {
+  assertApprovedRider,
+  assertApprovedRiderOutsideTransaction,
+} = require('./rider_guard');
+const {
   buildSettlementPatchOnComplete,
   enqueueCreditReleaseScheduledNotifications,
   estimateShopNetAmountWithGp,
@@ -93,10 +97,7 @@ function isPayAtDestinationOrder(orderData) {
   );
 }
 
-function resolveOrderShippingFee(orderData, fallbackGrossShippingFee) {
-  if (fallbackGrossShippingFee != null && fallbackGrossShippingFee > 0) {
-    return fallbackGrossShippingFee;
-  }
+function resolveOrderShippingFee(orderData) {
   if (isTravelPassengerOrder(orderData)) {
     const travelFare = resolveTravelFareGross(orderData);
     if (travelFare > 0) {
@@ -191,11 +192,10 @@ function estimateShopNetAmount(orderData) {
 
 function buildDeliveryFinancialSnapshot({
   orderData,
-  grossShippingFee,
   completedSource,
   deductionRate = DEFAULT_RIDER_PLATFORM_DEDUCTION_RATE,
 }) {
-  const safeGross = roundMoney(resolveOrderShippingFee(orderData, grossShippingFee));
+  const safeGross = roundMoney(resolveOrderShippingFee(orderData));
   const safeRate =
     typeof deductionRate === 'number' && deductionRate >= 0 && deductionRate <= 1
       ? deductionRate
@@ -255,7 +255,9 @@ function buildDeliveryFinancialSnapshot({
 }
 
 function registerHandlers() {
-  const rejectRiderOrder = onCall({ region: DEFAULT_REGION }, async (request) => {
+  const riderCallOptions = { region: DEFAULT_REGION, enforceAppCheck: true };
+
+  const rejectRiderOrder = onCall(riderCallOptions, async (request) => {
     if (!request.auth?.uid) {
       throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
     }
@@ -270,6 +272,8 @@ function registerHandlers() {
     const rejectableStatuses = new Set(['pending', 'awaiting_rider', 'accepted']);
 
     await db.runTransaction(async (tx) => {
+      await assertApprovedRider(tx, uid);
+
       const orderSnap = await tx.get(orderRef);
       if (!orderSnap.exists) {
         throw new HttpsError('not-found', 'ไม่พบออเดอร์');
@@ -317,15 +321,16 @@ function registerHandlers() {
     return { success: true, orderId };
   });
 
-  const completeRiderDelivery = onCall({ region: DEFAULT_REGION }, async (request) => {
+  const completeRiderDelivery = onCall(riderCallOptions, async (request) => {
     if (!request.auth?.uid) {
       throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
     }
 
+    await assertApprovedRiderOutsideTransaction(request.auth.uid);
+
     const uid = String(request.auth.uid).trim();
     const orderId = String(request.data?.orderId || '').trim();
     const completedSource = String(request.data?.completedSource || 'photo_proof').trim();
-    const grossShippingFee = readDouble(request.data?.grossShippingFee);
     const deliveryProofImageUrl = String(request.data?.deliveryProofImageUrl || '').trim() || null;
     const deliveryProofStoragePath =
       String(request.data?.deliveryProofStoragePath || '').trim() || null;
@@ -361,7 +366,6 @@ function registerHandlers() {
     const isCod = isPayAtDestinationOrder(order);
     const deliverySnapshot = buildDeliveryFinancialSnapshot({
       orderData: order,
-      grossShippingFee,
       completedSource,
       deductionRate,
     });
@@ -419,10 +423,12 @@ function registerHandlers() {
     };
   });
 
-  const releaseRiderOrdersOnOffline = onCall({ region: DEFAULT_REGION }, async (request) => {
+  const releaseRiderOrdersOnOffline = onCall(riderCallOptions, async (request) => {
     if (!request.auth?.uid) {
       throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
     }
+
+    await assertApprovedRiderOutsideTransaction(request.auth.uid);
 
     const uid = String(request.auth.uid).trim();
     const isPassengerMode = request.data?.isPassengerMode === true;

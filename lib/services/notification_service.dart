@@ -9,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../utils/app_check_guard.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/user_profile.dart';
@@ -990,6 +991,7 @@ class NotificationService {
     required String calleeFCMToken,
     required String callType, // 'voice' หรือ 'video'
   }) async {
+    await AppCheckGuard.ensureAuthReady();
     final callable = FirebaseFunctions.instanceFor(
       region: 'asia-southeast1',
     ).httpsCallable('callUser');
@@ -1009,6 +1011,7 @@ class NotificationService {
     required String calleeId,
   }) async {
     try {
+      await AppCheckGuard.ensureAuthReady();
       final callable = FirebaseFunctions.instanceFor(
         region: 'asia-southeast1',
       ).httpsCallable('cancelCallInvite');
@@ -1028,6 +1031,7 @@ class NotificationService {
     required UserProfile callee,
     required bool isVideo,
   }) async {
+    await AppCheckGuard.ensureAuthReady();
     const List<String> preferredRegions = <String>[
       'asia-southeast1',
       'us-central1',

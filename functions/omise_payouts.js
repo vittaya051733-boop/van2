@@ -4,6 +4,13 @@ const MIN_WITHDRAW_BAHT = 30;
 const ACTIVE_WITHDRAW_STATUSES = ['pending', 'processing', 'submitted'];
 const STALE_WITHDRAW_MS = 15 * 60 * 1000;
 const MERCHANT_WALLETS_COLLECTION = 'merchant_wallets';
+const MERCHANT_SHOP_REGISTRATION_COLLECTIONS = [
+  'shop_registrations',
+  'market_registrations',
+  'restaurant_registrations',
+  'pharmacy_registrations',
+  'other_registrations',
+];
 
 function readMoney(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -83,16 +90,117 @@ function maskAccountNumber(accountNumber) {
   return `••••${digits.slice(-4)}`;
 }
 
-function isContractCancelled(contractData, userData) {
-  const contract = contractData && typeof contractData === 'object' ? contractData : {};
-  const user = userData && typeof userData === 'object' ? userData : {};
+function readBankFieldsFromData(data) {
+  const source = data && typeof data === 'object' ? data : {};
+  return {
+    bankName: String(source.bankName || source.bank || '').trim(),
+    accountNumber: String(
+      source.accountNumber || source.bankAccountNumber || source.accountNo || '',
+    ).replace(/\D/g, ''),
+    accountName: String(
+      source.accountName ||
+        source.accountOwner ||
+        source.ownerName ||
+        source.accountHolder ||
+        source.accountHolderName ||
+        source.shopName ||
+        source.displayName ||
+        source.name ||
+        '',
+    ).trim(),
+    email: String(source.email || source.contactEmail || '').trim(),
+    omiseRecipientId: String(source.omiseRecipientId || '').trim() || null,
+  };
+}
 
-  if (user.contractCancelledAt != null) {
-    return true;
+function mapServiceTypeToRegistrationCollection(serviceType) {
+  const normalized = String(serviceType || '').trim().toLowerCase();
+  if (normalized === 'ตลาด' || normalized === 'market') {
+    return 'market_registrations';
   }
-  if (String(user.contractStatus || '').trim().toLowerCase() === 'cancelled') {
-    return true;
+  if (
+    normalized === 'ร้านค้า' ||
+    normalized === 'shop' ||
+    normalized === 'store'
+  ) {
+    return 'shop_registrations';
   }
+  if (
+    normalized === 'ร้านอาหาร' ||
+    normalized === 'restaurant' ||
+    normalized === 'food'
+  ) {
+    return 'restaurant_registrations';
+  }
+  if (normalized === 'ร้านขายยา' || normalized === 'pharmacy') {
+    return 'pharmacy_registrations';
+  }
+  if (
+    normalized === 'อื่นๆ' ||
+    normalized === 'อื่น' ||
+    normalized === 'other' ||
+    normalized === 'others'
+  ) {
+    return 'other_registrations';
+  }
+  return null;
+}
+
+async function findMerchantShopRegistrationDoc(db, collection, uid) {
+  const ref = db.collection(collection);
+  const directDoc = await ref.doc(uid).get();
+  if (directDoc.exists) {
+    return directDoc.data() || {};
+  }
+
+  const ownerQuery = await ref.where('ownerId', '==', uid).limit(1).get();
+  if (!ownerQuery.empty) {
+    return ownerQuery.docs[0].data() || {};
+  }
+
+  return null;
+}
+
+async function loadMerchantShopRegistration(db, uid) {
+  const trimmedUid = String(uid || '').trim();
+  let preferredCollection = null;
+
+  try {
+    const contractDoc = await db.collection('contracts').doc(trimmedUid).get();
+    if (contractDoc.exists) {
+      preferredCollection = mapServiceTypeToRegistrationCollection(
+        contractDoc.data()?.serviceType,
+      );
+      if (preferredCollection) {
+        const preferredData = await findMerchantShopRegistrationDoc(
+          db,
+          preferredCollection,
+          trimmedUid,
+        );
+        if (preferredData) {
+          return { collection: preferredCollection, data: preferredData };
+        }
+      }
+    }
+  } catch (error) {
+    // Contract lookup is best-effort; fall back to scanning registration collections.
+  }
+
+  for (const collection of MERCHANT_SHOP_REGISTRATION_COLLECTIONS) {
+    if (collection === preferredCollection) {
+      continue;
+    }
+    const data = await findMerchantShopRegistrationDoc(db, collection, trimmedUid);
+    if (data) {
+      return { collection, data };
+    }
+  }
+
+  return null;
+}
+
+function isContractCancelled(contractData) {
+  const contract = contractData && typeof contractData === 'object' ? contractData : {};
 
   const contractStatus = String(contract.status || '').trim().toLowerCase();
   if (contractStatus === 'cancelled' || contractStatus === 'terminated') {
@@ -104,8 +212,8 @@ function isContractCancelled(contractData, userData) {
   return false;
 }
 
-function buildMerchantWithdrawable(totalCredit, contractData, userData, walletData = {}) {
-  const isCancelled = isContractCancelled(contractData, userData);
+function buildMerchantWithdrawable(totalCredit, contractData, walletData = {}) {
+  const isCancelled = isContractCancelled(contractData);
   const omiseWithdrawable = readMoney(walletData.omiseWithdrawableCredit);
 
   if (isCancelled) {
@@ -179,24 +287,41 @@ function createOmisePayoutHandlers(deps) {
     }
 
     if (actorType === 'merchant') {
-      const doc = await db.collection('users').doc(trimmedUid).get();
-      if (!doc.exists) {
+      const userDoc = await db.collection('users').doc(trimmedUid).get();
+      const userData = userDoc.exists ? userDoc.data() || {} : {};
+      const userBank = readBankFieldsFromData(userData);
+
+      let shopReg = null;
+      let shopBank = readBankFieldsFromData({});
+      const needsShopLookup =
+        !userBank.bankName || !userBank.accountNumber || !userBank.accountName;
+      if (needsShopLookup) {
+        shopReg = await loadMerchantShopRegistration(db, trimmedUid);
+        if (shopReg) {
+          shopBank = readBankFieldsFromData(shopReg.data);
+        }
+      }
+
+      const bankName = userBank.bankName || shopBank.bankName;
+      const accountNumber = userBank.accountNumber || shopBank.accountNumber;
+      const accountName = userBank.accountName || shopBank.accountName;
+      const email = userBank.email || shopBank.email;
+      const omiseRecipientId =
+        userBank.omiseRecipientId || shopBank.omiseRecipientId;
+
+      if (!userDoc.exists && !shopReg) {
         throw new HttpsError('failed-precondition', 'ไม่พบข้อมูลร้านค้า');
       }
-      const data = doc.data() || {};
+
       return {
         collection: 'users',
-        docRef: doc.ref,
-        data,
-        bankName: String(data.bankName || '').trim(),
-        accountNumber: String(
-          data.accountNumber || data.bankAccountNumber || '',
-        ).replace(/\D/g, ''),
-        accountName: String(
-          data.accountName || data.shopName || data.displayName || data.name || '',
-        ).trim(),
-        email: String(data.email || '').trim(),
-        omiseRecipientId: String(data.omiseRecipientId || '').trim() || null,
+        docRef: db.collection('users').doc(trimmedUid),
+        data: { ...(shopReg?.data || {}), ...userData },
+        bankName,
+        accountNumber,
+        accountName,
+        email,
+        omiseRecipientId,
       };
     }
 
@@ -296,7 +421,6 @@ function createOmisePayoutHandlers(deps) {
     const withdrawable = buildMerchantWithdrawable(
       roundMoney(totalCredit),
       contractDoc.exists ? contractDoc.data() || {} : {},
-      userDoc.exists ? userDoc.data() || {} : {},
       walletDoc.exists ? walletDoc.data() || {} : {},
     );
 
@@ -307,7 +431,6 @@ function createOmisePayoutHandlers(deps) {
       withdrawableBeforePending: withdrawable,
       isContractCancelled: isContractCancelled(
         contractDoc.exists ? contractDoc.data() || {} : {},
-        userDoc.exists ? userDoc.data() || {} : {},
       ),
     };
   }
@@ -352,13 +475,11 @@ function createOmisePayoutHandlers(deps) {
     const omiseWithdrawable = readMoney(walletData.omiseWithdrawableCredit);
     const isCancelled = isContractCancelled(
       contractDoc.exists ? contractDoc.data() || {} : {},
-      userDoc.exists ? userDoc.data() || {} : {},
     );
 
     const withdrawable = buildMerchantWithdrawable(
       roundMoney(totalCredit),
       contractDoc.exists ? contractDoc.data() || {} : {},
-      userDoc.exists ? userDoc.data() || {} : {},
       walletData,
     );
 
@@ -586,29 +707,7 @@ function createOmisePayoutHandlers(deps) {
         return outcome;
       }
 
-      const submittedAt =
-        readTimestampMillis(data.submittedAt) || readTimestampMillis(data.timestamp);
-      const ageMs = submittedAt ? Date.now() - submittedAt : 0;
-      if (ageMs > STALE_WITHDRAW_MS) {
-        logger.warn('stale withdraw transfer still pending; rolling back reservation', {
-          withdrawRequestId: withdrawDoc.id,
-          transferId,
-          omiseState: transfer?.state,
-          ageMs,
-        });
-        const freshDoc = await withdrawDoc.ref.get();
-        await freshDoc.ref.set(
-          {
-            failureMessage:
-              'Omise transfer did not complete in time; reservation released for retry',
-          },
-          { merge: true },
-        );
-        await rollbackWithdrawReservation(freshDoc);
-        return 'failed';
-      }
-
-      return outcome;
+      return status;
     } catch (error) {
       logger.warn('syncWithdrawRequestWithOmise failed', {
         withdrawRequestId: withdrawDoc.id,
@@ -674,7 +773,7 @@ function createOmisePayoutHandlers(deps) {
     }
 
     const currentStatus = String(withdrawDoc.data()?.status || '').trim();
-    if (currentStatus === 'paid' || currentStatus === 'failed') {
+    if (currentStatus === 'paid') {
       return true;
     }
 
@@ -686,6 +785,17 @@ function createOmisePayoutHandlers(deps) {
       eventType === 'transfer.failed' ||
       transferData?.state === 'failed' ||
       Boolean(transferData?.failure_code);
+
+    if (currentStatus === 'failed') {
+      if (isPaid) {
+        logger.error('transfer paid after withdraw marked failed; manual reconciliation required', {
+          withdrawRequestId: withdrawDoc.id,
+          transferId,
+          eventType,
+        });
+      }
+      return true;
+    }
 
     if (isPaid) {
       await finalizeWithdrawPaid(withdrawDoc, transferData);
@@ -766,162 +876,10 @@ function createOmisePayoutHandlers(deps) {
       secrets: [OMISE_SECRET_KEY],
     },
     async (request) => {
-      if (!request.auth?.uid) {
-        throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
-      }
-
-      const uid = String(request.auth.uid).trim();
-      const actorType = String(request.data?.actorType || 'rider').trim();
-      const amount = roundMoney(request.data?.amount);
-
-      if (actorType !== 'rider' && actorType !== 'merchant') {
-        throw new HttpsError('invalid-argument', 'actorType ไม่ถูกต้อง');
-      }
-      if (!Number.isFinite(amount) || amount < MIN_WITHDRAW_BAHT) {
-        throw new HttpsError(
-          'invalid-argument',
-          `ยอดถอนขั้นต่ำ ${MIN_WITHDRAW_BAHT} บาท`,
-        );
-      }
-
-      const profile = await loadPayoutProfile(uid, actorType);
-      const brand = validateBankProfile(profile);
-      const secretKey = OMISE_SECRET_KEY.value();
-
-      await reconcileActiveWithdrawRequests(uid, secretKey);
-
-      const reservation = await db.runTransaction(async (tx) => {
-        const balanceInfo = await computeWithdrawableBalance(uid, actorType, tx);
-        if (amount > balanceInfo.availableBalance + 0.001) {
-          throw new HttpsError(
-            'failed-precondition',
-            `ยอดถอนเกินที่ถอนได้ (ถอนได้ ${balanceInfo.availableBalance.toFixed(2)} บาท)`,
-          );
-        }
-
-        const pendingQuery = db
-          .collection('withdraw_requests')
-          .where('uid', '==', uid)
-          .where('status', 'in', ACTIVE_WITHDRAW_STATUSES);
-        const pendingSnap = await tx.get(pendingQuery);
-        if (!pendingSnap.empty) {
-          throw new HttpsError(
-            'already-exists',
-            'มีคำขอถอนเงินที่กำลังดำเนินการอยู่แล้ว',
-          );
-        }
-
-        const withdrawRef = db.collection('withdraw_requests').doc();
-        const ledger = await reserveWithdrawLedger(tx, {
-          uid,
-          actorType,
-          amount,
-          withdrawRef,
-          withdrawRequestId: withdrawRef.id,
-        });
-
-        tx.set(withdrawRef, {
-          uid,
-          actorType,
-          amount,
-          status: 'processing',
-          timestamp: FieldValue.serverTimestamp(),
-          requestedByCloudFunction: true,
-          bankSnapshot: {
-            brand,
-            bankName: profile.bankName,
-            last4: profile.accountNumber.slice(-4),
-            accountName: profile.accountName,
-          },
-          reservedCreditIds: ledger.reservedCreditIds,
-          omiseDebit: ledger.omiseDebit,
-          creditDebit: ledger.creditDebit,
-        });
-
-        return {
-          withdrawRequestId: withdrawRef.id,
-          withdrawRef,
-        };
-      });
-
-      const emailFallback = String(request.auth.token?.email || '').trim();
-
-      try {
-        const recipientId = await getOrCreateOmiseRecipient(
-          secretKey,
-          profile,
-          brand,
-          emailFallback,
-        );
-
-        const amountSatang = Math.round(amount * 100);
-        const transfer = await omiseRequest(secretKey, 'POST', '/transfers', {
-          amount: amountSatang,
-          recipient: recipientId,
-          metadata: {
-            withdrawRequestId: reservation.withdrawRequestId,
-            uid,
-            actorType,
-          },
-        });
-
-        const transferId = String(transfer?.id || '').trim();
-        await reservation.withdrawRef.set(
-          {
-            status: 'submitted',
-            omiseTransferId: transferId || null,
-            omiseRecipientId: recipientId,
-            omiseTransferStatus: transfer?.state || 'pending',
-            submittedAt: FieldValue.serverTimestamp(),
-            updatedAt: FieldValue.serverTimestamp(),
-          },
-          { merge: true },
-        );
-
-        let finalStatus = 'submitted';
-        if (transferId) {
-          const latestTransfer = await omiseRequest(
-            secretKey,
-            'GET',
-            `/transfers/${transferId}`,
-          );
-          finalStatus = await applyTransferOutcome(
-            reservation.withdrawRef,
-            latestTransfer,
-          );
-        } else if (isOmiseTransferPaid(transfer)) {
-          const paidDoc = await reservation.withdrawRef.get();
-          await finalizeWithdrawPaid(paidDoc, transfer);
-          finalStatus = 'paid';
-        }
-
-        return {
-          success: true,
-          withdrawRequestId: reservation.withdrawRequestId,
-          amount,
-          omiseTransferId: transferId || null,
-          status: finalStatus === 'paid' ? 'paid' : 'submitted',
-        };
-      } catch (error) {
-        logger.error('requestOmiseWithdraw omise failed', {
-          uid,
-          actorType,
-          amount,
-          withdrawRequestId: reservation.withdrawRequestId,
-          error: String(error?.message || error),
-        });
-
-        const failedDoc = await reservation.withdrawRef.get();
-        await reservation.withdrawRef.set(
-          {
-            failureMessage: String(error?.message || error),
-          },
-          { merge: true },
-        );
-        await rollbackWithdrawReservation(failedDoc);
-
-        throw toHttpsErrorFromOmise(error, 'ไม่สามารถถอนเงินผ่าน Omise ได้', HttpsError);
-      }
+      throw new HttpsError(
+        'failed-precondition',
+        'ระบบถอนเงินเปลี่ยนเป็นแบบแมนนวลแล้ว กรุณาอัปเดตแอปเป็นเวอร์ชันล่าสุด',
+      );
     },
   );
 

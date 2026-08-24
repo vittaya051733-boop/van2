@@ -92,6 +92,17 @@ class PublicCatalogLocalCache {
     _scheduleProductsPersist();
   }
 
+  /// Replaces the entire product cache from a full query read/listener snapshot.
+  static void replaceProductSnapshot(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    _productsById = {
+      for (final doc in snapshot.docs)
+        doc.id: _encodeFirestoreMap(doc.data()),
+    };
+    _scheduleProductsPersist();
+  }
+
   static void applyProductDoc(String id, Map<String, dynamic> data) {
     _productsById[id] = _encodeFirestoreMap(data);
     _scheduleProductsPersist();

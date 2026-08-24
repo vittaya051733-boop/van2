@@ -46,6 +46,17 @@ class ProductDiscountDisplay {
     );
   }
 
+  /// Percent off original customer price — used to rank discount feeds.
+  static double effectiveDiscountPercent(ProductDiscountDisplay display) {
+    if (!display.hasDiscount || display.originalPrice <= 0) {
+      return 0;
+    }
+    return ((display.originalPrice - display.salePrice) /
+            display.originalPrice *
+            100)
+        .toDouble();
+  }
+
   static double? _promotionPercent(PromotionOffer? promotion) {
     if (promotion == null) {
       return null;

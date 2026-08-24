@@ -13,6 +13,8 @@ import 'services/favorites_service.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/catalog_product_media_prefetch.dart';
 import 'tax_pricing_policy.dart';
+import 'models/product_variant.dart';
+import 'utils/product_variant_color.dart';
 import 'utils/catalog_product_image_url.dart';
 import 'utils/delivery_eta_policy.dart';
 import 'widgets/cached_app_image.dart';
@@ -46,6 +48,9 @@ class CartProductSelection {
     this.parcelLengthCm,
     this.parcelWidthCm,
     this.parcelHeightCm,
+    this.variantId,
+    this.selectedSize,
+    this.selectedColor,
   });
 
   final String productId;
@@ -67,6 +72,9 @@ class CartProductSelection {
   final double? parcelLengthCm;
   final double? parcelWidthCm;
   final double? parcelHeightCm;
+  final String? variantId;
+  final String? selectedSize;
+  final String? selectedColor;
 }
 
 class _ToppingOption {
@@ -459,6 +467,7 @@ class CatalogProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final data = product.data;
+    final pricingData = ProductVariantSupport.catalogListPricingData(data);
     final String name = (data['name'] ?? '').toString();
     final String description = (data['description'] ?? '').toString();
     final String cleanDescription = _cleanDescriptionWithoutToppings(
@@ -475,7 +484,7 @@ class CatalogProductCard extends StatelessWidget {
         unawaited(_openProductDetailPager(context, shopProducts: shopProducts));
 
     final Widget imageTile = wrapCatalogImageWithDiscountBadge(
-      productData: data,
+      productData: pricingData,
       productId: product.id,
       shopId: product.shopId,
       compact: compact,
@@ -494,7 +503,7 @@ class CatalogProductCard extends StatelessWidget {
       children: <Widget>[
         Expanded(
           child: ProductDiscountPrice(
-            productData: data,
+            productData: pricingData,
             productId: product.id,
             shopId: product.shopId,
             compact: compact,
@@ -551,10 +560,11 @@ class CatalogProductCard extends StatelessWidget {
     if (pinPriceToBottom) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           imageTile,
           Padding(
-            padding: EdgeInsets.fromLTRB(0, compact ? 6 : 6, 0, compact ? 2 : 4),
+            padding: EdgeInsets.fromLTRB(0, compact ? 6 : 6, 0, compact ? 2 : 2),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -630,7 +640,7 @@ class CatalogProductCard extends StatelessWidget {
                     ],
                   ),
                 ],
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 priceRow,
               ],
             ),
@@ -1505,17 +1515,17 @@ String? _formatDistanceKm(double? distanceKm) {
   const catalogHorizontalPadding = 40.0;
   const columnGap = 8.0;
   final width = (screenWidth - catalogHorizontalPadding - columnGap) / 2;
-  const textAndActionsHeight = 174.0;
+  // Must fit pinPriceToBottom stack: name(2) + reactions + desc + distance + price.
+  const textAndActionsHeight = 132.0;
   final height = width / 1.05 + textAndActionsHeight;
   return (width: width, height: height);
 }
 
-/// Tighter card height for home shelf — price sits directly under metadata.
+/// Tighter card height for home shelf — matches catalog pinPriceToBottom layout.
 ({double width, double height}) catalogHomeShelfCardSize(
   BuildContext context,
 ) {
   final grid = catalogGridProductCardSize(context);
-  const homeTextAndActionsHeight = 162.0;
-  final height = grid.width / 1.05 + homeTextAndActionsHeight;
+  final height = grid.width / 1.05 + 132.0;
   return (width: grid.width, height: height);
 }

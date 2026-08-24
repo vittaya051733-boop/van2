@@ -1,4 +1,5 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
+const { assertApprovedRider } = require('./rider_guard');
 
 let db;
 let FieldValue;
@@ -111,7 +112,10 @@ async function sumCreditBalance(tx, uid) {
 
 function registerHandlers() {
   const acceptRiderOrder = onCall(
-    { region: DEFAULT_REGION },
+    {
+      region: DEFAULT_REGION,
+      enforceAppCheck: true,
+    },
     async (request) => {
       if (!request.auth?.uid) {
         throw new HttpsError('unauthenticated', 'กรุณาเข้าสู่ระบบ');
@@ -127,6 +131,8 @@ function registerHandlers() {
       let holdAmount = 0;
 
       await db.runTransaction(async (tx) => {
+        await assertApprovedRider(tx, uid);
+
         const orderSnap = await tx.get(orderRef);
         if (!orderSnap.exists) {
           throw new HttpsError('not-found', 'ไม่พบออเดอร์');

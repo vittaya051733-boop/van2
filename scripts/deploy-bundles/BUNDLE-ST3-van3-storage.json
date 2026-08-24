@@ -1,0 +1,19 @@
+{
+  "id": "BUNDLE-ST3",
+  "slug": "van3-storage",
+  "titleTh": "Storage rules van3 (ไรเดอร์)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van3"],
+  "consumerApps": ["van3"],
+  "collections": [],
+  "summaryTh": "Deploy storage.rules ของ van3 เท่านั้น — ไม่กระทบ orders listener",
+  "impactTh": ["SELF van3 เท่านั้น", "ปลอดภัยกว่า firestore มาก"],
+  "riskTh": "ต่ำ (SELF)",
+  "forbidden": ["van1:*", "van2:*", "van4:*", "van3:firestore", "van3:hosting"],
+  "allowedPaths": ["van3/storage.rules"],
+  "firebaseSteps": ["van3:storage"],
+  "buildSteps": [],
+  "smokeChecklistTh": ["van3: อัปโหลดที่เกี่ยวข้องไรเดอร์ได้"],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md"]
+}

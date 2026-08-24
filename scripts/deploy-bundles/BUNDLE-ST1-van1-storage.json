@@ -1,0 +1,23 @@
+{
+  "id": "BUNDLE-ST1",
+  "slug": "van1-storage",
+  "titleTh": "Storage rules van1 (ร้าน)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van1"],
+  "consumerApps": ["van1"],
+  "collections": [],
+  "summaryTh": "Deploy storage.rules ของ van1 เท่านั้น — รูปสินค้า/สลิป",
+  "impactTh": [
+    "กระทบเฉพาะ bucket van1",
+    "ไม่กระทบ Firestore listener van3",
+    "อัปโหลดรูป/สลิปร้านอาจพังถ้า rules ผิด"
+  ],
+  "riskTh": "ต่ำ-ปานกลาง (SELF)",
+  "forbidden": ["van2:*", "van3:*", "van4:*", "van1:firestore", "van1:functions", "van1:hosting"],
+  "allowedPaths": ["van1/my-flutter/storage.rules"],
+  "firebaseSteps": ["van1:storage"],
+  "buildSteps": [],
+  "smokeChecklistTh": ["van1: อัปโหลดรูปสินค้าหรือสลิปได้"],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md"]
+}

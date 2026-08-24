@@ -1,7 +1,19 @@
 # Van Ecosystem — คู่มือ Deploy ปลอดภัย
 
+> **ทางเข้าเดียว:** `deploy.ps1`  
 > Manifest: `deploy-governance.ps1`  
-> จุดเสี่ยง: `DEPLOY_RISK_MATRIX.md` | สัญญาณหลุด: `DEPLOY_CONNECTION_SIGNALS.md`
+> จุดเสี่ยง: `DEPLOY_RISK_MATRIX.md` | สัญญาณหลุด: `DEPLOY_CONNECTION_SIGNALS.md` | CROSS-WRITE: `VAN_ECOSYSTEM_CROSS_WRITE.md` | Schema: `VAN_ECOSYSTEM_SCHEMA_REGISTRY.md` | Bundle: `deploy-bundles/BUNDLE-CATALOG.th.md`
+
+## ทางเข้าเดียว (แนะนำ)
+
+```powershell
+van2\scripts\deploy.ps1 -List
+van2\scripts\deploy.ps1 -Bundle BUNDLE-A01 -ShowOnly
+van2\scripts\deploy.ps1 -Health
+van2\scripts\deploy.ps1 -Ledger
+```
+
+**ห้าม** `firebase deploy` ดิบ
 
 ## Workflow แนะนำ (ข้อ 1–6)
 
@@ -24,7 +36,7 @@ van2\scripts\deploy-plan.ps1 -App van2 -Target firestore -Execute `
 | 3b | emulator ครอบ van1/van2/van3/van4 | `scripts/smoke-test/rules-emulator-test.js` |
 | 4 | รู้สัญญาณหลุด | `DEPLOY_CONNECTION_SIGNALS.md` (checklist ตาม collection) |
 | 5 | dry-run ก่อน deploy ใหญ่ | `deploy-plan.ps1 -DryRunOnly` |
-| 6 | backup rules ก่อน firestore | อัตโนมัติ → `scripts/deploy-backups/` |
+| 6 | backup ก่อน deploy ทุก target | อัตโนมัติ → `scripts/deploy-backups/sessions/` |
 | 7 | **checkpoint ก่อนลบโค้ด** | แจ้งผลกระทบ → รอยืนยัน → ค่อย deploy (ดูด้านล่าง) |
 
 ## Checkpoint ก่อนลบโค้ด (ข้อ 7 — บังคับสำหรับ Agent)
@@ -76,12 +88,73 @@ van2\scripts\deploy-smoke-test.ps1 -AfterTarget firestore -Phase PostDeploy
 2. **Rules emulator** — van3 rider, van1 shop, van2 customer, van4 admin (+ แชท/แจ้งเตือน/รีวิว/support)
 3. **Live production** (ถ้ามี config) — **ไม่บล็อก rollback**
 
-## Rollback rules
+## Rollback
 
 ```powershell
+# restore จาก step backup ล่าสุด (ไฟล์ local)
+van2\scripts\deploy-restore-backup.ps1
+
+# restore แล้ว deploy กลับ
+van2\scripts\deploy-restore-backup.ps1 -DeployAfterRestore
+
+# restore firestore shared (legacy)
 van2\scripts\deploy-restore-firestore-rules.ps1
 van2\scripts\deploy-restore-firestore-rules.ps1 -DeployAfterRestore
 ```
+
+## Deploy หลาย target (batch)
+
+เมื่อ deploy หลายแอปพร้อมกัน — **สำรองทุก step ก่อน deploy ใดๆ**:
+
+```powershell
+# dry-run
+van2\scripts\deploy-batch.ps1 -Step van2:firestore,van4:firestore-van4,van4:storage -DryRunOnly
+
+# deploy จริง
+van2\scripts\deploy-batch.ps1 -Step van2:firestore,van4:firestore-van4 -Execute `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" `
+  -ConfirmImpact "SHARED:van1,van2,van3,van4" `
+  -FinalAcknowledge "YES I UNDERSTAND"
+```
+
+Session backup อยู่ที่ `scripts/deploy-backups/sessions/{timestamp}/manifest.json`
+
+## ตรวจสุขภาพ Ecosystem (รันครั้งเดียว)
+
+```powershell
+van2\scripts\ecosystem-health.ps1 -MatrixOnly   # ดูจุดเชื่อมทั้งหมด
+van2\scripts\ecosystem-health.ps1               # readiness + smoke + สรุป van/collection ที่น่าจะหลุด
+```
+
+รายการจุด: `ECOSYSTEM_HEALTH_CHECKLIST.json` · ชุด `BUNDLE-H01`
+
+## Deploy ตามชุด (Bundle) — โฟกัสเรื่องเดียว
+
+สารบัญ: `scripts/deploy-bundles/BUNDLE-CATALOG.th.md`
+
+```powershell
+# ดูรายการชุด + รหัส + หัวข้อ
+van2\scripts\deploy-bundle.ps1 -List
+
+# อ่านผลกระทบภาษาไทยก่อน (ไม่ deploy) — AI ต้องทำก่อนเสมอ
+van2\scripts\deploy-bundle.ps1 -Bundle BUNDLE-A01 -ShowOnly
+
+# โปรโมชั่น — แก้ rules (SHARED + backup + smoke)
+van2\scripts\deploy-bundle.ps1 -Bundle BUNDLE-A01-RULES -DryRunOnly
+van2\scripts\deploy-bundle.ps1 -Bundle BUNDLE-A01-RULES -Execute `
+  -ConfirmDeploy "APPROVE:van2:van-merchant" `
+  -ConfirmImpact "SHARED:van1,van2,van3,van4" `
+  -FinalAcknowledge "YES I UNDERSTAND"
+```
+
+| รหัส | หัวข้อ |
+|------|--------|
+| BUNDLE-A01 | โปรโมชั่น/คูปอง (build van4+van2) |
+| BUNDLE-A01-RULES | โปรโมชั่น + firestore rules |
+| BUNDLE-A02 | pricing_config |
+| BUNDLE-S01 | firestore SHARED ทั่วไป |
+
+**กฎ:** ถ้าระบุ Bundle → ห้าม deploy/แก้ไฟล์นอกชุด (ดู `forbidden` + `allowedPaths` ใน JSON)
 
 ## คำสั่งอื่น
 

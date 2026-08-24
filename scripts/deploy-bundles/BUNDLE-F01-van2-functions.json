@@ -1,0 +1,46 @@
+{
+  "id": "BUNDLE-F01",
+  "slug": "van2-functions-critical",
+  "titleTh": "Cloud Functions van2 (สำคัญ — push/checkout)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van2"],
+  "consumerApps": ["van2", "van3", "van4"],
+  "collections": [],
+  "summaryTh": "Deploy Cloud Functions ของ van2 ทีละชื่อ — ชุดนี้โฟกัส pushAppNotification (กระทบไรเดอร์)",
+  "impactTh": [
+    "pushAppNotification พัง = van3 ไม่ได้ popup งานใหม่",
+    "checkout functions พัง = van2 สั่งซื้อไม่ได้",
+    "deploy ทีละชื่อเท่านั้น — ห้าม deploy functions ทั้ง codebase",
+    "หลัง deploy: smoke van3 push มือ + ecosystem-health"
+  ],
+  "riskTh": "สูงสำหรับ pushAppNotification — ไรเดอร์ไม่รับงาน",
+  "forbidden": [
+    "van1:functions",
+    "van2:firestore",
+    "van2:storage",
+    "van2:hosting",
+    "van3:*",
+    "van4:firestore-van4"
+  ],
+  "allowedPaths": [
+    "van2/functions/index.js"
+  ],
+  "firebaseSteps": [
+    "van2:functions:pushAppNotification"
+  ],
+  "recommendedFunctionNames": [
+    "pushAppNotification",
+    "createCheckoutOrders",
+    "recordCheckoutDiscounts",
+    "calculateCartTotals",
+    "sendAnnouncementEmails"
+  ],
+  "buildSteps": [],
+  "smokeChecklistTh": [
+    "สร้างออเดอร์ van2 → van3 ได้ push/popup",
+    "checkout van2 ทำงาน",
+    "รัน ecosystem-health.ps1 -App van3"
+  ],
+  "relatedDocs": ["DEPLOY_RISK_MATRIX.md", "OMISE_WITHDRAW_SETUP.md"]
+}

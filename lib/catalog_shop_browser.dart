@@ -1,5 +1,8 @@
 part of 'category_catalog_screen.dart';
 
+const double _catalogProductGroupGap = 4;
+const double _catalogHeadingBottomGap = 4;
+
 class _CatalogHeadingGroup {
   const _CatalogHeadingGroup({
     required this.heading,
@@ -266,7 +269,7 @@ class _CatalogShopsFeedState extends State<_CatalogShopsFeed> {
                   for (var index = 0; index < widget.sections.length; index++) ...<Widget>[
                     if (index > 0)
                       const Padding(
-                        padding: EdgeInsets.fromLTRB(0, 8, 0, 20),
+                        padding: EdgeInsets.fromLTRB(0, 4, 0, 8),
                         child: Divider(
                           height: 1,
                           thickness: 1,
@@ -359,7 +362,7 @@ class _ShopCatalogSection extends StatelessWidget {
           shopDescription: section.shopDescription,
           isNew: _isRecentlyUpdatedShop(section.shopUpdatedAt),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         _ShopProductsPanel(
           section: section,
           shopDistanceKm: shopDistanceKm,
@@ -595,12 +598,12 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
         ],
         for (final typeGroup in visibleTypeGroups) ...<Widget>[
           if (_selectedTypeKey == null && showTypeFilters)
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(top: 2, bottom: _catalogHeadingBottomGap),
               child: Text(
                 typeGroup.type,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
@@ -613,7 +616,7 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
             if (headingGroup.heading != 'อื่นๆ' ||
                 typeGroup.headings.length > 1)
               Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 8),
+                padding: const EdgeInsets.only(bottom: _catalogHeadingBottomGap),
                 child: Text(
                   headingGroup.heading,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -632,25 +635,28 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
                 separatorBuilder: (_, __) => const SizedBox(width: spacing),
                 itemBuilder: (context, index) {
                   final product = headingGroup.products[index];
-                  return SizedBox(
-                    width: cardSize.width,
-                    height: cardSize.height,
-                    child: CatalogProductCard(
-                      product: product,
-                      shopProducts: widget.section.products,
-                      shopLatitude: widget.section.shopLatitude,
-                      shopLongitude: widget.section.shopLongitude,
-                      shopDistanceKm: widget.shopDistanceKm,
-                      customerLatitude: widget.customerLatitude,
-                      customerLongitude: widget.customerLongitude,
-                      onConfirmOrder: widget.onConfirmOrder,
-                      onNavigateToCart: widget.onNavigateToCart,
+                  return Align(
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: cardSize.width,
+                      child: CatalogProductCard(
+                        product: product,
+                        shopProducts: widget.section.products,
+                        shopLatitude: widget.section.shopLatitude,
+                        shopLongitude: widget.section.shopLongitude,
+                        shopDistanceKm: widget.shopDistanceKm,
+                        customerLatitude: widget.customerLatitude,
+                        customerLongitude: widget.customerLongitude,
+                        onConfirmOrder: widget.onConfirmOrder,
+                        onNavigateToCart: widget.onNavigateToCart,
+                        pinPriceToBottom: true,
+                      ),
                     ),
                   );
                 },
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: _catalogProductGroupGap),
           ],
         ],
       ],
@@ -794,13 +800,13 @@ class _NationwideMixedProductsFeedState extends State<NationwideMixedProductsFee
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
         ],
         for (final headingGroup in visibleHeadingGroups) ...<Widget>[
           if (headingGroup.heading != fallbackHeading ||
               headingGroups.length > 1)
             Padding(
-              padding: const EdgeInsets.only(top: 4, bottom: 8),
+              padding: const EdgeInsets.only(bottom: _catalogHeadingBottomGap),
               child: Text(
                 headingGroup.heading,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -828,25 +834,28 @@ class _NationwideMixedProductsFeedState extends State<NationwideMixedProductsFee
                   shopLongitude: product.shopLongitude,
                 );
 
-                return SizedBox(
-                  width: cardSize.width,
-                  height: cardSize.height,
-                  child: CatalogProductCard(
-                    product: product,
-                    shopProducts: shopProducts,
-                    shopLatitude: product.shopLatitude,
-                    shopLongitude: product.shopLongitude,
-                    shopDistanceKm: shopDistanceKm,
-                    customerLatitude: widget.customerLatitude,
-                    customerLongitude: widget.customerLongitude,
-                    onConfirmOrder: widget.onConfirmOrder,
-                    onNavigateToCart: widget.onNavigateToCart,
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: cardSize.width,
+                    child: CatalogProductCard(
+                      product: product,
+                      shopProducts: shopProducts,
+                      shopLatitude: product.shopLatitude,
+                      shopLongitude: product.shopLongitude,
+                      shopDistanceKm: shopDistanceKm,
+                      customerLatitude: widget.customerLatitude,
+                      customerLongitude: widget.customerLongitude,
+                      onConfirmOrder: widget.onConfirmOrder,
+                      onNavigateToCart: widget.onNavigateToCart,
+                      pinPriceToBottom: true,
+                    ),
                   ),
                 );
               },
             ),
-          ),
-          const SizedBox(height: 16),
+            ),
+          const SizedBox(height: _catalogProductGroupGap),
         ],
       ],
     );
@@ -957,6 +966,12 @@ List<_CatalogHeadingGroup> _groupProductsByCatalogHeading(
 
 String _readProductTypeLabel(Map<String, dynamic> data) {
   const fallbackType = 'อื่นๆ';
+  if (_usesStoredCatalogClassification(data)) {
+    final storedType = data['catalogType']?.toString().trim();
+    if (storedType != null && storedType.isNotEmpty) {
+      return storedType;
+    }
+  }
   final serviceType = _readCatalogServiceTypeLabel(data);
   final source = [
     data['name'],
@@ -1033,6 +1048,12 @@ String _readProductHeadingLabel(
   Map<String, dynamic> data,
   String fallbackHeading,
 ) {
+  if (_usesStoredCatalogClassification(data)) {
+    final storedHeading = data['catalogHeading']?.toString().trim();
+    if (storedHeading != null && storedHeading.isNotEmpty) {
+      return storedHeading;
+    }
+  }
   final serviceType = _readCatalogServiceTypeLabel(data);
   final source = [
     data['name'],
@@ -1477,6 +1498,16 @@ String? _readMarketCatalogHeadingLabel(String source) {
   if (_containsAny(source, const <String>['กาแฟ'])) {
     return 'กาแฟ';
   }
+  if (_containsAny(source, const <String>[
+    'แก้วมังกร',
+    'มะม่วง',
+    'กล้วย',
+    'ส้ม',
+    'ทุเรียน',
+    'ผลไม้สด',
+  ])) {
+    return 'ผลไม้สด';
+  }
   if (_containsAny(source, const <String>['ผงซักฟอก', 'น้ำยาปรับผ้านุ่ม'])) {
     return 'ซักผ้า';
   }
@@ -1835,6 +1866,13 @@ int _defaultCatalogHeadingSort(String label) {
 
 bool _containsAny(String source, List<String> values) {
   return values.any((value) => source.contains(value));
+}
+
+bool _usesStoredCatalogClassification(Map<String, dynamic> data) {
+  if (data['catalogAdminLocked'] == true) {
+    return true;
+  }
+  return data['catalogReviewStatus']?.toString().trim() == 'approved';
 }
 
 String _readCatalogSlug(Object? slugValue, String fallbackLabel) {

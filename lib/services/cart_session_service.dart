@@ -181,6 +181,12 @@ class CartSessionService {
       'parcelLengthCm': item.parcelLengthCm,
       'parcelWidthCm': item.parcelWidthCm,
       'parcelHeightCm': item.parcelHeightCm,
+      if (item.variantId?.trim().isNotEmpty == true)
+        'variantId': item.variantId!.trim(),
+      if (item.selectedSize?.trim().isNotEmpty == true)
+        'selectedSize': item.selectedSize!.trim(),
+      if (item.selectedColor?.trim().isNotEmpty == true)
+        'selectedColor': item.selectedColor!.trim(),
     };
   }
 
@@ -229,6 +235,9 @@ class CartSessionService {
           parcelLengthCm: (map['parcelLengthCm'] as num?)?.toDouble(),
           parcelWidthCm: (map['parcelWidthCm'] as num?)?.toDouble(),
           parcelHeightCm: (map['parcelHeightCm'] as num?)?.toDouble(),
+          variantId: map['variantId']?.toString(),
+          selectedSize: map['selectedSize']?.toString(),
+          selectedColor: map['selectedColor']?.toString(),
         ),
       );
     }

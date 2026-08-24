@@ -53,6 +53,7 @@ class ClaimableCouponOffer {
     required this.priority,
     required this.claimCount,
     required this.maxClaimsTotal,
+    required this.transparentImage,
     this.startAt,
     this.endAt,
   });
@@ -71,6 +72,7 @@ class ClaimableCouponOffer {
   final int priority;
   final int claimCount;
   final int maxClaimsTotal;
+  final bool transparentImage;
   final DateTime? startAt;
   final DateTime? endAt;
 
@@ -132,6 +134,7 @@ class ClaimableCouponOffer {
       priority: (data['priority'] as num?)?.toInt() ?? 0,
       claimCount: (data['claimCount'] as num?)?.toInt() ?? 0,
       maxClaimsTotal: (conditions['maxClaimsTotal'] as num?)?.toInt() ?? 0,
+      transparentImage: display['transparentImage'] == true,
       startAt: _parseFirestoreDate(conditions['startAt']),
       endAt: _parseFirestoreDate(conditions['endAt']),
     );

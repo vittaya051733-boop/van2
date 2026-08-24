@@ -2,14 +2,19 @@
 
 ## Before ANY Firebase deploy
 
-1. Read `scripts\DEPLOY_GOVERNANCE.md`
-2. Read `scripts\DEPLOY_RISK_MATRIX.md`
-3. Run `scripts\deploy-readiness.ps1 -App van2 -Target <target>`
-4. Deploy ONE target: `scripts\deploy-self.ps1 -App van2 -Target <target> ...`
+1. Read `scripts\DEPLOY_GOVERNANCE.md` + `scripts\deploy-bundles\BUNDLE-CATALOG.th.md`
+2. Prefer single entry: `scripts\deploy.ps1 -Bundle BUNDLE-xxx -ShowOnly` then `-Execute`
+3. Or: `scripts\deploy.ps1 -App van2 -Target <target> ...`
+4. After SHARED: `scripts\deploy.ps1 -Health` (or at least smoke van3)
+5. Never: raw `firebase deploy`
 
 ## Before removing production code
 
 See `DEPLOY_GOVERNANCE.md` § **Checkpoint ก่อนลบโค้ด**: report impact (which vans, SHARED/SELF, deploy targets) and wait for user confirmation before delete + deploy.
+
+## Schema / CROSS-WRITE
+
+Expand-only: `VAN_ECOSYSTEM_SCHEMA_REGISTRY.md` — add fields first, delete later after consumers deploy.
 
 ## Critical
 

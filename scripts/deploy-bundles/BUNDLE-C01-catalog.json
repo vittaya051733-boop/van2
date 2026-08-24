@@ -1,0 +1,44 @@
+{
+  "id": "BUNDLE-C01",
+  "slug": "catalog-products-shops",
+  "titleTh": "Catalog / สินค้า / อนุมัติร้าน",
+  "project": "van-merchant",
+  "scope": "CROSS-WRITE",
+  "crossWriteGroup": "C",
+  "writerApps": ["van4", "van1"],
+  "consumerApps": ["van2", "van1", "van3"],
+  "collections": ["products", "public_shops", "product_admin_reviews"],
+  "summaryTh": "van4 อนุมัติ/แก้ catalog และร้าน → van2 หน้าแรก/ร้าน; van1 จัดการสินค้าของตัวเอง",
+  "impactTh": [
+    "van2: products/public_shops listener — visibility เปลี่ยนทันที",
+    "van1: สินค้าของร้าน / คิว product_admin_reviews",
+    "van3: อ่าน public_shops ได้ (บาง flow)",
+    "ห้าม rename field catalog โดยไม่ให้ van2 default"
+  ],
+  "riskTh": "ปานกลาง-สูง — catalog ผิด = ลูกค้าไม่เห็นสินค้า",
+  "forbidden": [
+    "van2:firestore",
+    "van3:firestore",
+    "van4:firestore-van4",
+    "van2:functions"
+  ],
+  "allowedPaths": [
+    "van4/lib/admin_repository.dart",
+    "van1/my-flutter/lib/add_product_screen.dart",
+    "van1/my-flutter/lib/shop_management_screen.dart",
+    "van2/lib/public_catalog_service.dart",
+    "van2/lib/home_product_discovery_service.dart"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    { "app": "van4", "noteTh": "Build van4 อนุมัติ catalog" },
+    { "app": "van1", "noteTh": "Build van1 จัดการสินค้า" },
+    { "app": "van2", "noteTh": "Build van2 หน้าแรก/ร้าน" }
+  ],
+  "smokeChecklistTh": [
+    "van4: อนุมัติสินค้า/ร้าน",
+    "van2: เห็นสินค้าบนหน้าแรก",
+    "van1: รายการสินค้าโหลดได้"
+  ],
+  "relatedDocs": ["VAN_ECOSYSTEM_CROSS_WRITE.md", "VAN_ECOSYSTEM_SCHEMA_REGISTRY.md"]
+}

@@ -17,10 +17,6 @@ $paths = Get-VanGovernanceRoot
 $appRoot = $paths.Van2Root
 Set-Location $appRoot
 
-if ([string]::IsNullOrWhiteSpace($FinalAcknowledge)) {
-  $FinalAcknowledge = Get-VanAckTh
-}
-
 $rulesFile = $cfg.FirestoreCanonicalFile
 
 Assert-VanDeployConfirmation -App 'van2' -ConfirmDeploy $ConfirmDeploy
@@ -29,34 +25,30 @@ Assert-VanImpactConfirmation -ConfirmImpact $ConfirmImpact -ExpectedImpact $cfg.
 Assert-VanFinalAcknowledge -FinalAcknowledge $FinalAcknowledge
 
 if ($InteractiveConfirm) {
-  $expectedImpactTh = ConvertTo-VanImpactTokenTh $cfg.FirestoreSharedImpact
-  $interactiveFile = Read-Host (Get-VanMsg 'interactiveFilePrompt' @($rulesFile))
+  $interactiveFile = Read-Host "Interactive confirm file scope (expected: $rulesFile)"
   if ($interactiveFile -ne $rulesFile) {
-    Write-Error (Get-VanMsg 'interactiveFileFail')
+    Write-Error 'Interactive confirmation failed for file scope.'
     exit 1
   }
-  $interactiveImpact = Read-Host (Get-VanMsg 'interactiveImpactPrompt' @($expectedImpactTh))
-  if (-not (Test-VanImpactTokenMatch -Provided $interactiveImpact -ExpectedEn $cfg.FirestoreSharedImpact)) {
-    Write-Error (Get-VanMsg 'interactiveImpactFail')
+  $interactiveImpact = Read-Host "Interactive confirm impact scope (expected: $($cfg.FirestoreSharedImpact))"
+  if ($interactiveImpact -ne $cfg.FirestoreSharedImpact) {
+    Write-Error 'Interactive confirmation failed for impact scope.'
     exit 1
   }
-  Write-Host (Get-VanMsg 'interactiveOk') -ForegroundColor Green
-  $FinalAcknowledge = Read-Host (Get-VanMsg 'interactiveFinalPrompt' @($cfg.FinalAcknowledgeTh))
+  Write-Host '[interactive] File and impact confirmations accepted.' -ForegroundColor Green
+  $FinalAcknowledge = Read-Host "Type final acknowledgement before deploy (expected: $($cfg.FinalAcknowledge))"
   Assert-VanFinalAcknowledge -FinalAcknowledge $FinalAcknowledge
 }
 
 Invoke-VanDeployPreflight -App 'van2' -Target 'firestore'
 Sync-VanFirestoreRules
 
-Write-Host (Get-VanMsg 'firestoreSharedNote' @((Get-VanSharedImpactTh), $DatabaseId)) -ForegroundColor DarkYellow
+Write-Host "Firestore rules are shared by $($cfg.FirestoreSharedImpact) on database '$DatabaseId'." -ForegroundColor DarkYellow
 
 if (-not (Test-Path $rulesFile)) {
   Write-Error "Missing rules file: $rulesFile"
   exit 1
 }
-
-$backupPath = Backup-VanFirestoreRules -SourcePath (Join-Path $appRoot $rulesFile) -Label 'firestore-default' -DryRun:$DryRun
-$env:VAN_LAST_FIRESTORE_BACKUP = $backupPath
 
 $tempConfig = '.firebase.firestore.van2.tmp.json'
 $config = @{
@@ -68,9 +60,9 @@ $config = @{
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $tempConfig -Encoding UTF8
 
 try {
-  Write-Host (Get-VanMsg 'firestoreDeploying' @($DatabaseId, $cfg.ProjectId)) -ForegroundColor Cyan
+  Write-Host "Deploying Firestore rules to database '$DatabaseId' in project '$($cfg.ProjectId)'" -ForegroundColor Cyan
   if ($DryRun) {
-    Write-Host (Get-VanMsg 'firestoreDryRun') -ForegroundColor Yellow
+    Write-Host '[dry-run] Skipping firebase deploy for firestore rules.' -ForegroundColor Yellow
     return
   }
   firebase deploy --project $cfg.ProjectId --only firestore --config $tempConfig

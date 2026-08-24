@@ -5,6 +5,7 @@ const DEFAULT_GP_RATE = 0.18;
 const DEFAULT_LEADER_RATE = 0.15;
 const DEFAULT_RIDER_CREDIT_DELAY_MINUTES = 120;
 const DEFAULT_SHOP_CREDIT_DELAY_MINUTES = 120;
+const DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD = 5;
 
 function readDouble(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -53,6 +54,11 @@ function readSettlementConfigFromData(data) {
       'shopCreditDelayMinutes',
       DEFAULT_SHOP_CREDIT_DELAY_MINUTES,
     ),
+    withdrawBankCsvThreshold: readDelayMinutes(
+      source,
+      'withdrawBankCsvThreshold',
+      DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD,
+    ),
   };
 }
 
@@ -99,6 +105,7 @@ module.exports = {
   DEFAULT_LEADER_RATE,
   DEFAULT_RIDER_CREDIT_DELAY_MINUTES,
   DEFAULT_SHOP_CREDIT_DELAY_MINUTES,
+  DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD,
   readSettlementConfigFromData,
   createSettlementConfigLoader,
 };

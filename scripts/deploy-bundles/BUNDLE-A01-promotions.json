@@ -1,0 +1,64 @@
+{
+  "id": "BUNDLE-A01",
+  "slug": "promotions-claimable-coupon",
+  "titleTh": "โปรโมชั่น / คูปองกดรับเอง",
+  "project": "van-merchant",
+  "scope": "CROSS-WRITE",
+  "crossWriteGroup": "A",
+  "writerApps": ["van4"],
+  "consumerApps": ["van2"],
+  "collections": [
+    "coupons",
+    "promotions",
+    "promotion_display_config"
+  ],
+  "summaryTh": "van4 admin สร้าง/แก้คูปองและโปรโมชั่น → ลูกค้า van2 เห็นบนหน้าแรก (popup โปร่งใส / inline)",
+  "impactTh": [
+    "van4: หน้า admin โปรโมชั่น — บันทึก coupons, promotion_display_config",
+    "van2: หน้าแรก — popup คูปองกดรับเอง, แบนเนอร์ inline, วันหมดอายุ, จำกัดจำนวน",
+    "ข้อมูลใน Firestore อัปเดตทันทีเมื่อ admin บันทึก — ไม่ต้อง deploy rules ถ้าแก้แค่โค้ดแอป",
+    "ถ้า deploy ไม่ครบคู่ (แก้ van4 แต่ไม่ build van2) — ลูกค้าไม่เห็น UI ใหม่",
+    "van1 (ร้าน) และ van3 (ไรเดอร์) ไม่เกี่ยวกับชุดนี้"
+  ],
+  "riskTh": "ต่ำ — ถ้า deploy/build เฉพาะ van4+van2 ตามชุด (ไม่แตะ firestore rules)",
+  "forbidden": [
+    "van1:*",
+    "van3:*",
+    "van2:firestore",
+    "van2:storage",
+    "van2:hosting",
+    "van2:functions",
+    "van4:firestore-van4",
+    "van4:storage",
+    "van4:hosting"
+  ],
+  "allowedPaths": [
+    "van4/lib/admin_promotions_screen.dart",
+    "van4/lib/widgets/admin_coupon_target_picker.dart",
+    "van4/lib/admin_screens.dart",
+    "van2/lib/widgets/claimable_coupon_popup.dart",
+    "van2/lib/services/claimable_coupon_service.dart",
+    "van2/lib/models/promotion_models.dart",
+    "van2/lib/main.dart"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    {
+      "app": "van4",
+      "noteTh": "Build/รัน van4 admin — ทดสอบสร้างคูปองกดรับเอง"
+    },
+    {
+      "app": "van2",
+      "noteTh": "Build/hot reload van2 — ทดสอบ popup หน้าแรก + กดรับคูปอง"
+    }
+  ],
+  "smokeChecklistTh": [
+    "van4: เปิดเมนูโปรโมชั่น → สร้างคูปองกดรับเอง → บันทึกสำเร็จ",
+    "van2: หน้าแรก → เห็น popup โปร่งใสหรือ inline (ตาม presentation)",
+    "van2: กดรับคูปอง → ไปใช้ในตะกร้าได้",
+    "van3: ไม่ต้องเทส (นอก scope)"
+  ],
+  "relatedDocs": [
+    "VAN_ECOSYSTEM_CROSS_WRITE.md#กลุ่ม-a--platform-config-van4--van2-เป็นหลัก"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "BUNDLE-HOST",
+  "slug": "hosting-per-app",
+  "titleTh": "Hosting แยกแอป (เลือก van ใน buildSteps)",
+  "project": "van-merchant",
+  "scope": "SELF",
+  "writerApps": ["van1", "van2", "van3", "van4"],
+  "consumerApps": ["van1", "van2", "van3", "van4"],
+  "collections": [],
+  "summaryTh": "Hosting เป็น SELF ต่อแอป — อย่า deploy hosting รวมหลายแอปในคำสั่งเดียว; ใช้ deploy-self -Target hosting ทีละ van",
+  "impactTh": [
+    "Hosting ไม่กระทบ Firestore listener",
+    "ต้องระบุแอปชัด: deploy-self -App vanN -Target hosting",
+    "ชุดนี้เป็นคู่มือ — firebaseSteps ว่าง (กัน deploy รวมพลาด)"
+  ],
+  "riskTh": "ต่ำ",
+  "forbidden": [
+    "van1:firestore",
+    "van2:firestore",
+    "van3:firestore",
+    "van4:firestore",
+    "van1:functions",
+    "van2:functions"
+  ],
+  "allowedPaths": [
+    "van1/my-flutter/firebase.json",
+    "van2/firebase.json",
+    "van3/firebase.json",
+    "van4/firebase.json"
+  ],
+  "firebaseSteps": [],
+  "buildSteps": [
+    { "app": "vanN", "noteTh": "ใช้: deploy.ps1 -App vanN -Target hosting (ทีละแอป)" }
+  ],
+  "smokeChecklistTh": ["เปิดเว็บ hosting ของแอปนั้นโหลดได้"],
+  "relatedDocs": ["DEPLOY_GOVERNANCE.md"]
+}

@@ -1,0 +1,28 @@
+---
+description: Forbidden raw firebase deploy; use deploy.ps1 / Bundle only
+alwaysApply: true
+---
+
+# ห้าม Firebase deploy ดิบ (van-merchant)
+
+## ห้าม
+
+```
+firebase deploy
+firebase deploy --only firestore
+firebase deploy --only functions
+firebase deploy --only storage,hosting
+```
+
+## ใช้แทน
+
+```powershell
+van2\scripts\deploy.ps1 -List
+van2\scripts\deploy.ps1 -Bundle BUNDLE-xxx -ShowOnly
+van2\scripts\deploy.ps1 -Bundle BUNDLE-xxx -Execute ...
+van2\scripts\deploy.ps1 -App vanN -Target storage ...
+van2\scripts\deploy.ps1 -Health
+van2\scripts\deploy.ps1 -Ledger
+```
+
+Backup + impact ภาษาไทย + ledger ทำผ่านสคริปต์เหล่านี้เท่านั้น

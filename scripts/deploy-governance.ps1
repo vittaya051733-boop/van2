@@ -87,7 +87,6 @@ function Get-VanGovernanceConfig {
     }
     FunctionOwnershipVan1  = @(
       'verifyTopUpSlip',
-      'checkPreparingOrders',
       'onOrderStatusUpdate',
       'calculateDeliveryTime',
       'askGeminiFlash',
@@ -125,7 +124,12 @@ function Get-VanGovernanceConfig {
       'placesAutocomplete',
       'placesResolvePlace',
       'reverseGeocodeDeliveryLocation',
-      'syncVan2CartStockHold'
+      'syncVan2CartStockHold',
+      'checkPreparingOrders',
+      'getMerchantWallet',
+      'adminCancelMerchantContract',
+      'syncMerchantWalletOnCreditWrite',
+      'syncMerchantWalletOnContractWrite'
     )
     BlockedScriptNames     = @(
       'deploy-van-merchant-rules.ps1'
@@ -811,7 +815,7 @@ function Show-VanDeployImpactSummary {
   Write-Host (Get-VanMsg 'impactApps' @(($info.AffectedApps -join ', ')))
   Write-Host (Get-VanMsg 'impactDetail' @($info.Summary))
   Write-Host (Get-VanMsg 'impactRider' @($info.RiderRisk)) -ForegroundColor DarkYellow
-  if ($info.Scope -eq 'SHARED') {
+  if ($info.Scope -eq 'SHARED' -or $Target -in @('firestore', 'firestore-van4', 'storage', 'functions', 'hosting')) {
     Write-Host (Get-VanMsg 'impactBackupNote') -ForegroundColor Yellow
   }
   Write-Host ''
@@ -830,45 +834,8 @@ function Show-VanDeployImpactSummary {
   Write-Host ''
 }
 
-function Backup-VanFirestoreRules {
-  param(
-    [Parameter(Mandatory)][string]$SourcePath,
-    [Parameter(Mandatory)][string]$Label,
-    [switch]$DryRun
-  )
-
-  if (-not (Test-Path $SourcePath)) {
-    throw "Cannot backup - missing rules file: $SourcePath"
-  }
-
-  $paths = Get-VanGovernanceRoot
-  $backupDir = Join-Path $paths.Van2Root 'scripts\deploy-backups'
-  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-  $hash = (Get-FileHash $SourcePath -Algorithm SHA256).Hash
-  $shortHash = $hash.Substring(0, 12)
-  $backupFileName = "${Label}-${stamp}-${shortHash}.rules"
-  $backupPath = Join-Path $backupDir $backupFileName
-
-  if ($DryRun) {
-    Write-Host (Get-VanMsg 'backupDryRun' @($backupPath)) -ForegroundColor Yellow
-    return $backupPath
-  }
-
-  New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-  Copy-Item -Path $SourcePath -Destination $backupPath -Force
-
-  $latestManifest = Join-Path $backupDir 'LATEST.txt'
-  @(
-    "timestamp=$stamp"
-    "label=$Label"
-    "file=$backupFileName"
-    "sha256=$hash"
-    "source=$SourcePath"
-  ) | Set-Content -Path $latestManifest -Encoding UTF8
-
-  Write-Host (Get-VanMsg 'backupSaved' @($backupPath)) -ForegroundColor Green
-  return $backupPath
-}
+. (Join-Path $PSScriptRoot 'deploy-backup.ps1')
+. (Join-Path $PSScriptRoot 'deploy-ledger.ps1')
 
 function Show-VanPostDeployConnectionGuide {
   param(
@@ -900,7 +867,8 @@ function Show-VanPostDeployConnectionGuide {
   Write-Host ''
 
   if ($BackupPath) {
-    Write-Host "Rollback: van2\scripts\deploy-restore-firestore-rules.ps1 -BackupFile `"$BackupPath`""
+    Write-Host "Rollback: van2\scripts\deploy-restore-backup.ps1 -BackupDir `"$BackupPath`""
+    Write-Host "Rollback (firestore shared): van2\scripts\deploy-restore-firestore-rules.ps1"
   }
   Write-Host ''
 }

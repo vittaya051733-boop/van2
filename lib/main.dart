@@ -3636,6 +3636,60 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
     return _secondaryFuture!;
   }
 
+  List<Widget> _buildVisibleShelfSections({
+    required List<PublicCatalogProduct> featured,
+    required bool loadingFeatured,
+    required List<PublicCatalogProduct> bestSelling,
+    required List<PublicCatalogProduct> personalized,
+    required bool loadingSecondary,
+  }) {
+    final sections = <Widget>[];
+
+    void addShelf({
+      required String title,
+      required List<PublicCatalogProduct> products,
+      required bool isLoading,
+    }) {
+      if (!isLoading && products.isEmpty) {
+        return;
+      }
+      if (sections.isNotEmpty) {
+        sections.add(const SizedBox(height: 4));
+      }
+      sections.add(
+        HomeProductShelfSection(
+          title: title,
+          products: products,
+          isLoading: isLoading,
+          onProductTap: widget.onProductTap,
+          useCatalogCardStyle: true,
+          customerLatitude: widget.customerLatitude,
+          customerLongitude: widget.customerLongitude,
+          onConfirmOrder: widget.onConfirmOrder,
+          onNavigateToCart: widget.onNavigateToCart,
+        ),
+      );
+    }
+
+    addShelf(
+      title: 'สินค้าแนะนำ',
+      products: featured,
+      isLoading: loadingFeatured,
+    );
+    addShelf(
+      title: 'สินค้าขายดี',
+      products: bestSelling,
+      isLoading: loadingFeatured || loadingSecondary,
+    );
+    addShelf(
+      title: 'สินค้าที่คุณอาจรู้จัก',
+      products: personalized,
+      isLoading: loadingFeatured || loadingSecondary,
+    );
+
+    return sections;
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<PublicCatalogProduct>>(
@@ -3681,51 +3735,23 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
               );
             }
 
+            final shelfSections = _buildVisibleShelfSections(
+              featured: featured,
+              loadingFeatured: loadingFeatured,
+              bestSelling: _filterHomeProducts(
+                secondary?.bestSelling ?? const <PublicCatalogProduct>[],
+              ),
+              personalized: _filterHomeProducts(
+                secondary?.personalized ?? const <PublicCatalogProduct>[],
+              ),
+              loadingSecondary: loadingSecondary,
+            );
+
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                HomeProductShelfSection(
-                  title: 'สินค้าแนะนำ',
-                  products: featured,
-                  isLoading: loadingFeatured,
-                  onProductTap: widget.onProductTap,
-                  useCatalogCardStyle: true,
-                  customerLatitude: widget.customerLatitude,
-                  customerLongitude: widget.customerLongitude,
-                  onConfirmOrder: widget.onConfirmOrder,
-                  onNavigateToCart: widget.onNavigateToCart,
-                ),
-                const SizedBox(height: 4),
-                HomeProductShelfSection(
-                  title: 'สินค้าขายดี',
-                  products: _filterHomeProducts(
-                    secondary?.bestSelling ?? const <PublicCatalogProduct>[],
-                  ),
-                  isLoading: loadingFeatured || loadingSecondary,
-                  onProductTap: widget.onProductTap,
-                  useCatalogCardStyle: true,
-                  customerLatitude: widget.customerLatitude,
-                  customerLongitude: widget.customerLongitude,
-                  onConfirmOrder: widget.onConfirmOrder,
-                  onNavigateToCart: widget.onNavigateToCart,
-                ),
-                const SizedBox(height: 4),
-                HomeProductShelfSection(
-                  title: 'สินค้าที่คุณอาจรู้จัก',
-                  products: _filterHomeProducts(
-                    secondary?.personalized ?? const <PublicCatalogProduct>[],
-                  ),
-                  isLoading: loadingFeatured || loadingSecondary,
-                  onProductTap: widget.onProductTap,
-                  useCatalogCardStyle: true,
-                  customerLatitude: widget.customerLatitude,
-                  customerLongitude: widget.customerLongitude,
-                  onConfirmOrder: widget.onConfirmOrder,
-                  onNavigateToCart: widget.onNavigateToCart,
-                  showWhenEmpty: true,
-                  emptyMessage: 'ยังไม่มีสินค้าที่ตรงกับประวัติของคุณ',
-                ),
-                const SizedBox(height: 4),
+                ...shelfSections,
+                if (shelfSections.isNotEmpty) const SizedBox(height: 4),
                 HomeDiscountProductFeedSection(
                   key: ValueKey<String>(_configKey),
                   customerLatitude: widget.customerLatitude,

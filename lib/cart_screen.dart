@@ -226,11 +226,6 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     _refreshServerTotalsIfNeeded();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-  }
-
   void _refreshShippingIfNeeded({bool force = false}) {
     final nextKey = _buildShippingKey(
       cartItems: widget.cartItems,
@@ -1732,14 +1727,6 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
   void initState() {
     super.initState();
     _attachedSlip = widget.initialAttachedSlip;
-  }
-
-  String _formatDialogMoney(num value) {
-    final fixed = value.toStringAsFixed(1);
-    if (fixed.endsWith('.0')) {
-      return fixed.substring(0, fixed.length - 2);
-    }
-    return fixed;
   }
 
   Future<void> _saveQrCode() async {

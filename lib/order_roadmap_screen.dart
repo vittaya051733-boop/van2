@@ -849,9 +849,9 @@ class _OrderRoadmapCard extends StatelessWidget {
                       : L10n.paymentTotalThb(total.toDouble()),
                 ),
                 if (isTravelOrder && travelVehicleLabel != null)
-                  Text(L10n.vehicleTypeLabel(travelVehicleLabel!)),
+                  Text(L10n.vehicleTypeLabel(travelVehicleLabel)),
                 if (isTravelOrder && travelScheduleLabel != null)
-                  Text(L10n.travelScheduleLabel(travelScheduleLabel!)),
+                  Text(L10n.travelScheduleLabel(travelScheduleLabel)),
                 if (productEntries.isNotEmpty && !isTravelOrder) ...[
                   const SizedBox(height: 10),
                   Text(

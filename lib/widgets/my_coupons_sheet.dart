@@ -1,7 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/promotion_models.dart';
+import '../services/locale_service.dart';
 import '../services/user_coupon_wallet_service.dart';
 
 typedef CouponWalletApplyCallback = void Function(String couponCode);
@@ -24,12 +26,15 @@ class MyCouponsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final userId = FirebaseAuth.instance.currentUser?.uid;
 
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('คูปองของฉัน'),
+        title: Text(L10n.myCoupons),
         backgroundColor: Colors.white,
         foregroundColor: const Color(0xFF111827),
         elevation: 0,
@@ -46,11 +51,11 @@ class MyCouponsScreen extends StatelessWidget {
           }
 
           if (coupons.isEmpty) {
-            return const Center(
+            return Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Text(
-                  'ยังไม่มีคูปอง — กดรับจากหน้าแรกได้เลย',
+                  L10n.noCouponsYet,
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -71,6 +76,8 @@ class MyCouponsScreen extends StatelessWidget {
           );
         },
       ),
+    );
+      },
     );
   }
 }
@@ -131,8 +138,17 @@ class _WalletCouponTile extends StatelessWidget {
                 ),
                 if (coupon.code.isNotEmpty)
                   Text(
-                    'โค้ด: ${coupon.code}',
+                    L10n.couponCode(coupon.code),
                     style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                if (coupon.isClaimCredit)
+                  Text(
+                    L10n.adminClaimCredit,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9A3412),
+                    ),
                   ),
               ],
             ),
@@ -143,7 +159,7 @@ class _WalletCouponTile extends StatelessWidget {
                 Navigator.of(context).pop();
                 onApplyToCart!(coupon.code);
               },
-              child: const Text('ใช้ในตะกร้า'),
+              child: Text(L10n.useInCart),
             ),
         ],
       ),

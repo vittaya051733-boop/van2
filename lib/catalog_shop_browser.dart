@@ -214,7 +214,7 @@ class _CatalogShopsFeedState extends State<_CatalogShopsFeed> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 6),
             child: Text(
-              'ร้าน ${_currentShopIndex + 1} / $total',
+              L10n.catalogShopPager(_currentShopIndex + 1, total),
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF9A3412),
@@ -240,10 +240,10 @@ class _CatalogShopsFeedState extends State<_CatalogShopsFeed> {
             }),
           ),
           const SizedBox(height: 4),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Text(
-              'ปัดซ้าย-ขวาเพื่อเปลี่ยนร้าน หรือเลื่อนลงเพื่อดูร้านถัดไป',
+              L10n.catalogSwipeShopHint,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Color(0xFF6B7280),
@@ -395,9 +395,9 @@ class _ShopHeaderBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayName = shopName?.trim().isNotEmpty == true
-        ? shopName!.trim()
-        : 'ร้านค้า';
+    final displayName = LocalizedProductText.shopName(<String, dynamic>{
+      'shopName': shopName,
+    });
     final description = shopDescription?.trim();
     final distanceText = _formatDistanceKm(shopDistanceKm);
     final hasImage = shopImageUrl != null && shopImageUrl!.trim().isNotEmpty;
@@ -478,8 +478,8 @@ class _ShopHeaderBanner extends StatelessWidget {
                   color: const Color(0xFF16A34A),
                   borderRadius: BorderRadius.circular(999),
                 ),
-                child: const Text(
-                  'ใหม่',
+                child: Text(
+                  L10n.catalogNewBadge,
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -501,7 +501,7 @@ class _ShopHeaderBanner extends StatelessWidget {
               ),
               const SizedBox(width: 4),
               Text(
-                'ห่าง $distanceText',
+                L10n.catalogDistanceAway(distanceText),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF6B7280),
                   fontWeight: FontWeight.w600,
@@ -576,7 +576,7 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: FilterChip(
-                    label: const Text('ทั้งหมด'),
+                    label: Text(L10n.catalogFilterAll),
                     selected: _selectedTypeKey == null,
                     onSelected: (_) => setState(() => _selectedTypeKey = null),
                     selectedColor: const Color(0xFFFFEDD5),
@@ -587,7 +587,7 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: FilterChip(
-                      label: Text(typeGroup.type),
+                      label: Text(L10n.catalogTaxonomyLabel(typeGroup.type)),
                       selected: _selectedTypeKey == typeGroup.typeKey,
                       onSelected: (_) =>
                           setState(() => _selectedTypeKey = typeGroup.typeKey),
@@ -605,7 +605,7 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
             Padding(
               padding: const EdgeInsets.only(top: 2, bottom: _catalogHeadingBottomGap),
               child: Text(
-                typeGroup.type,
+                L10n.catalogTaxonomyLabel(typeGroup.type),
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: const Color(0xFF9A3412),
@@ -618,7 +618,7 @@ class _ShopProductsPanelState extends State<_ShopProductsPanel> {
               Padding(
                 padding: const EdgeInsets.only(bottom: _catalogHeadingBottomGap),
                 child: Text(
-                  headingGroup.heading,
+                  CatalogTaxonomy.displayHeading(headingGroup.heading),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF111827),
@@ -772,7 +772,7 @@ class _NationwideMixedProductsFeedState extends State<NationwideMixedProductsFee
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: FilterChip(
-                    label: const Text('ทั้งหมด'),
+                    label: Text(L10n.catalogFilterAll),
                     selected: _selectedHeadingKey == null,
                     onSelected: (_) => setState(() => _selectedHeadingKey = null),
                     selectedColor: const Color(0xFFFFEDD5),
@@ -783,7 +783,7 @@ class _NationwideMixedProductsFeedState extends State<NationwideMixedProductsFee
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: FilterChip(
-                      label: Text(headingGroup.heading),
+                      label: Text(CatalogTaxonomy.displayHeading(headingGroup.heading)),
                       selected:
                           _selectedHeadingKey ==
                           _readCatalogSlug(null, headingGroup.heading),

@@ -46,11 +46,8 @@ class MarketCheckoutFees {
   bool shopQualifies(String shopId) => qualifyingShopIds.contains(shopId);
 
   double feesForShop(String shopId, {required bool collectionAssigned}) {
-    if (!applies || !shopQualifies(shopId)) {
-      return 0;
-    }
     var total = serviceFeePerOrder;
-    if (collectionAssigned) {
+    if (collectionAssigned && shopQualifies(shopId)) {
       total += collectionFee;
     }
     return total;
@@ -129,34 +126,37 @@ class MarketPricingPolicy {
   static MarketCheckoutFees computeCheckoutFees(
     Iterable<MarketShopLocation> shops,
   ) {
-    final qualifyingIds = <String>{};
+    final uniqueShopIds = <String>{};
+    final hubQualifyingIds = <String>{};
     for (final shop in shops) {
       final shopId = shop.shopId.trim();
       if (shopId.isEmpty) {
         continue;
       }
+      uniqueShopIds.add(shopId);
       if (isShopNearHub(
         latitude: shop.latitude,
         longitude: shop.longitude,
       )) {
-        qualifyingIds.add(shopId);
+        hubQualifyingIds.add(shopId);
       }
     }
 
-    if (qualifyingIds.length < _multiShopMinShops) {
+    if (uniqueShopIds.isEmpty) {
       return MarketCheckoutFees.zero;
     }
 
-    final serviceTotal = _serviceFeePerOrder * qualifyingIds.length;
-    final total = _collectionFee + serviceTotal;
+    final serviceTotal = _serviceFeePerOrder * uniqueShopIds.length;
+    final collectionApplies = hubQualifyingIds.length >= _multiShopMinShops;
+    final collectionTotal = collectionApplies ? _collectionFee : 0.0;
     return MarketCheckoutFees(
-      applies: true,
-      qualifyingShopCount: qualifyingIds.length,
-      collectionFee: _collectionFee,
+      applies: serviceTotal > 0 || collectionTotal > 0,
+      qualifyingShopCount: hubQualifyingIds.length,
+      collectionFee: collectionTotal,
       serviceFeePerOrder: _serviceFeePerOrder,
       serviceFeeTotal: serviceTotal,
-      totalFees: total,
-      qualifyingShopIds: qualifyingIds,
+      totalFees: collectionTotal + serviceTotal,
+      qualifyingShopIds: hubQualifyingIds,
     );
   }
 

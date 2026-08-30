@@ -6,7 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'admin_contact_screen.dart';
 import 'admin_support_inbox_screen.dart';
 import 'help_center_screen.dart';
-import 'localization/settings_copy.dart';
+import 'l10n/l10n.dart';
 import 'privacy_security_screen.dart';
 import 'services/admin_support_config.dart';
 import 'services/locale_service.dart';
@@ -58,7 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (email != null && email.isNotEmpty) return email;
     final phoneNumber = user?.phoneNumber?.trim();
     if (phoneNumber != null && phoneNumber.isNotEmpty) return phoneNumber;
-    return SettingsCopy.userFallback;
+    return L10n.defaultUser;
   }
 
   String? _secondaryText(User? user) {
@@ -132,21 +132,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: Text(
-                  SettingsCopy.chooseLanguage,
+                  L10n.chooseLanguage,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
               ListTile(
-                title: Text(SettingsCopy.thaiLabel),
+                title: Text(L10n.languageThai),
                 trailing: service.locale == LocaleService.thai
                     ? const Icon(Icons.check_rounded)
                     : null,
                 onTap: () => Navigator.of(context).pop(LocaleService.thai),
               ),
               ListTile(
-                title: Text(SettingsCopy.englishLabel),
+                title: Text(L10n.languageEnglish),
                 trailing: service.locale == LocaleService.english
                     ? const Icon(Icons.check_rounded)
                     : null,
@@ -173,16 +173,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text(SettingsCopy.logoutTitle),
-          content: Text(SettingsCopy.logoutConfirm),
+          title: Text(L10n.logoutTitle),
+          content: Text(L10n.logoutConfirm),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: Text(SettingsCopy.cancel),
+              child: Text(L10n.cancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: Text(SettingsCopy.logout),
+              child: Text(L10n.logout),
             ),
           ],
         );
@@ -208,7 +208,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${SettingsCopy.logout}: $error')),
+          SnackBar(content: Text('${L10n.logout}: $error')),
         );
       }
     } finally {
@@ -226,9 +226,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final currentUser = FirebaseAuth.instance.currentUser;
         final name = _displayName(currentUser);
         final secondary = _secondaryText(currentUser);
-        final localeLabel = LocaleService.instance.labelFor(
-          LocaleService.instance.locale,
-        );
+        final localeLabel = L10n.localeLabel(LocaleService.instance.locale);
 
         return Scaffold(
           backgroundColor: Colors.white,
@@ -237,7 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             foregroundColor: Colors.white,
             elevation: 0,
             title: Text(
-              SettingsCopy.settingsTitle,
+              L10n.settingsTitle,
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
             bottom: PreferredSize(
@@ -287,10 +285,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           body: ListView(
             children: <Widget>[
-              _sectionTitle(SettingsCopy.helpSection),
+              _sectionTitle(L10n.helpSection),
               ListTile(
                 leading: const Icon(Icons.help_outline_rounded),
-                title: Text(SettingsCopy.helpCenter),
+                title: Text(L10n.helpCenter),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.of(context).push(
@@ -302,7 +300,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               ListTile(
                 leading: const Icon(Icons.support_agent_rounded),
-                title: Text(SettingsCopy.contactAdmin),
+                title: Text(L10n.contactAdmin),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.of(context).push(
@@ -316,8 +314,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               ListTile(
                 leading: const Icon(Icons.mark_chat_unread_outlined),
-                title: Text(SettingsCopy.adminMessages),
-                subtitle: Text(SettingsCopy.adminMessagesSubtitle),
+                title: Text(L10n.adminMessages),
+                subtitle: Text(L10n.adminMessagesSubtitle),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.of(context).push(
@@ -330,10 +328,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               const Divider(height: 1),
-              _sectionTitle(SettingsCopy.securitySection),
+              _sectionTitle(L10n.securitySection),
               ListTile(
                 leading: const Icon(Icons.shield_outlined),
-                title: Text(SettingsCopy.privacySecurity),
+                title: Text(L10n.privacySecurity),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
                   Navigator.of(context).push(
@@ -347,16 +345,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               const Divider(height: 1),
-              _sectionTitle(SettingsCopy.languageSection),
+              _sectionTitle(L10n.languageSection),
               ListTile(
                 leading: const Icon(Icons.language_rounded),
-                title: Text(SettingsCopy.language),
+                title: Text(L10n.language),
                 subtitle: Text(localeLabel),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: _pickLanguage,
               ),
               const Divider(height: 1),
-              _sectionTitle(SettingsCopy.accountSection),
+              _sectionTitle(L10n.accountSection),
               ListTile(
                 enabled: !_isSigningOut,
                 leading: _isSigningOut
@@ -367,7 +365,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       )
                     : const Icon(Icons.logout_rounded, color: Color(0xFFDC2626)),
                 title: Text(
-                  _isSigningOut ? SettingsCopy.loggingOut : SettingsCopy.logout,
+                  _isSigningOut ? L10n.loggingOut : L10n.logout,
                   style: const TextStyle(
                     color: Color(0xFFDC2626),
                     fontWeight: FontWeight.w700,

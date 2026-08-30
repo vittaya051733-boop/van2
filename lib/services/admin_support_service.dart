@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
+import '../models/claim_request_models.dart';
 import '../utils/upload_image_compressor.dart';
 import 'admin_support_config.dart';
 
@@ -24,6 +25,9 @@ class AdminSupportTicketSummary {
     this.lastMessagePreview,
     this.lastMessageAt,
     this.createdAt,
+    this.orderId,
+    this.claimRequest,
+    this.topicKey = '',
   });
 
   factory AdminSupportTicketSummary.fromDoc(
@@ -50,6 +54,9 @@ class AdminSupportTicketSummary {
       lastMessagePreview: (data['lastMessagePreview'] as String?)?.trim(),
       lastMessageAt: _readTimestamp(data['lastMessageAt']),
       createdAt: _readTimestamp(data['createdAt']),
+      orderId: (data['orderId'] as String?)?.trim(),
+      claimRequest: AdminSupportService.readClaimRequest(data['claimRequest']),
+      topicKey: (data['topicKey'] as String?)?.trim() ?? '',
     );
   }
 
@@ -68,6 +75,12 @@ class AdminSupportTicketSummary {
   final String? lastMessagePreview;
   final DateTime? lastMessageAt;
   final DateTime? createdAt;
+  final String? orderId;
+  final ClaimRequestPayload? claimRequest;
+  final String topicKey;
+
+  bool get isProductClaim =>
+      topicKey == ClaimRequestPayload.topicKey || claimRequest != null;
 
   String get previewText {
     final last = lastMessagePreview?.trim();
@@ -183,12 +196,93 @@ class AdminSupportService {
         );
   }
 
+  static Future<String?> findOpenProductClaimTicketId({
+    required String orderId,
+    required String requesterUid,
+  }) async {
+    final trimmedOrderId = orderId.trim();
+    if (trimmedOrderId.isEmpty) {
+      return null;
+    }
+
+    final snapshot = await _tickets
+        .where('requesterUid', isEqualTo: requesterUid)
+        .where('topicKey', isEqualTo: ClaimRequestPayload.topicKey)
+        .limit(20)
+        .get();
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      if ((data['orderId'] as String?)?.trim() != trimmedOrderId) {
+        continue;
+      }
+      if (data['status'] == 'closed' || data['contactClosed'] == true) {
+        continue;
+      }
+      final claimRequest = readClaimRequest(data['claimRequest']);
+      if (claimRequest == null || claimRequest.isPending) {
+        return doc.id;
+      }
+    }
+    return null;
+  }
+
+  static Future<String> submitProductClaimRequest({
+    required AdminSupportConfig config,
+    required String orderId,
+    required ClaimRequestPayload claimRequest,
+    String? extraNote,
+    List<File> imageFiles = const <File>[],
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('กรุณาเข้าสู่ระบบก่อนขอเคลม');
+    }
+
+    if (claimRequest.items.isEmpty) {
+      throw ArgumentError('เลือกสินค้าที่ต้องการเคลมอย่างน้อย 1 รายการ');
+    }
+
+    final trimmedOrderId = orderId.trim();
+    if (trimmedOrderId.isEmpty) {
+      throw ArgumentError('ไม่พบออเดอร์');
+    }
+
+    final existingTicketId = await findOpenProductClaimTicketId(
+      orderId: trimmedOrderId,
+      requesterUid: user.uid,
+    );
+    if (existingTicketId != null) {
+      return existingTicketId;
+    }
+
+    final summary = claimRequest.buildSummaryMessage(extraNote: extraNote);
+    final ticketId = await submit(
+      config: config,
+      topicKey: ClaimRequestPayload.topicKey,
+      topicLabel: ClaimRequestPayload.topicLabel,
+      message: summary,
+      imageFiles: imageFiles,
+      orderId: trimmedOrderId,
+      claimRequest: claimRequest.toMap(),
+    );
+
+    await _notifyMerchantClaimRequest(
+      orderId: trimmedOrderId,
+      claimRequest: claimRequest,
+    );
+
+    return ticketId;
+  }
+
   static Future<String> submit({
     required AdminSupportConfig config,
     required String topicKey,
     required String topicLabel,
     required String message,
     List<File> imageFiles = const <File>[],
+    String? orderId,
+    Map<String, dynamic>? claimRequest,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -233,6 +327,9 @@ class AdminSupportService {
       'unreadForAdmin': true,
       'lastMessagePreview': preview,
       'lastMessageRole': 'requester',
+      if ((orderId ?? '').trim().isNotEmpty) 'orderId': orderId!.trim(),
+      if (claimRequest != null && claimRequest.isNotEmpty)
+        'claimRequest': claimRequest,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       'lastMessageAt': FieldValue.serverTimestamp(),
@@ -378,5 +475,53 @@ class AdminSupportService {
 
   static bool _isContactClosedMap(Map<String, dynamic> data) {
     return data['contactClosed'] == true || data['status'] == 'closed';
+  }
+
+  static ClaimRequestPayload? readClaimRequest(Object? raw) {
+    if (raw is! Map) {
+      return null;
+    }
+    return ClaimRequestPayload.fromMap(Map<dynamic, dynamic>.from(raw));
+  }
+
+  static Future<void> _notifyMerchantClaimRequest({
+    required String orderId,
+    required ClaimRequestPayload claimRequest,
+  }) async {
+    try {
+      final orderSnap = await FirebaseFirestore.instance
+          .collection('orders')
+          .doc(orderId)
+          .get();
+      if (!orderSnap.exists) {
+        return;
+      }
+      final data = orderSnap.data() ?? <String, dynamic>{};
+      final shopOwnerId = (data['shopOwnerId'] as String?)?.trim() ??
+          (data['shopId'] as String?)?.trim();
+      if (shopOwnerId == null || shopOwnerId.isEmpty) {
+        return;
+      }
+
+      final itemSummary = claimRequest.items
+          .map((item) => '${item.name} x${item.quantity}')
+          .join(', ');
+      await FirebaseFirestore.instance.collection('app_notifications').add(
+        <String, dynamic>{
+          'targetApp': 'van1',
+          'recipientUid': shopOwnerId,
+          'title': 'ลูกค้าขอเคลมสินค้า',
+          'body': 'ออเดอร์ $orderId — $itemSummary',
+          'action': 'order_claim_request',
+          'orderId': orderId,
+          'sourceApp': 'van2',
+          'read': false,
+          'isRead': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (_) {
+      // Non-fatal if rules block cross-app notification.
+    }
   }
 }

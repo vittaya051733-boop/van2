@@ -30,8 +30,45 @@ class HomeProductDiscoveryService {
     return PublicCatalogService.filterHomeRetailProducts(
       products,
       enabledServiceTypes: _homeActions.enabledRetailServiceTypes,
-      nationwideEnabled: _homeActions.nationwideEnabled,
     );
+  }
+
+  static List<PublicCatalogProduct> _applyExcludeIds(
+    List<PublicCatalogProduct> products,
+    Set<String> excludeIds,
+  ) {
+    if (excludeIds.isEmpty) {
+      return products;
+    }
+    return products
+        .where((product) => !excludeIds.contains(product.id))
+        .toList(growable: false);
+  }
+
+  static ({
+    List<PublicCatalogProduct> bestSelling,
+    List<PublicCatalogProduct> personalized,
+  })?
+  peekCachedSecondaryShelves({Set<String> excludeIds = const <String>{}}) {
+    final bestSelling = _applyExcludeIds(
+      _filterHomeProducts(
+        HomeCatalogBootstrap.peekBestSellingShelf() ??
+            const <PublicCatalogProduct>[],
+      ),
+      excludeIds,
+    ).take(shelfLimit).toList(growable: false);
+    final personalized = _applyExcludeIds(
+      _filterHomeProducts(
+        HomeCatalogBootstrap.peekPersonalizedShelf() ??
+            const <PublicCatalogProduct>[],
+      ),
+      excludeIds,
+    ).take(shelfLimit).toList(growable: false);
+
+    if (bestSelling.isEmpty && personalized.isEmpty) {
+      return null;
+    }
+    return (bestSelling: bestSelling, personalized: personalized);
   }
 
   static Future<List<PublicCatalogProduct>> loadDiscountFeed() async {
@@ -112,6 +149,35 @@ class HomeProductDiscoveryService {
   static Future<List<PublicCatalogProduct>> loadBestSellingShelf({
     Set<String> excludeIds = const <String>{},
   }) async {
+    final cached = _filterHomeProducts(
+      HomeCatalogBootstrap.peekBestSellingShelf() ??
+          const <PublicCatalogProduct>[],
+    )
+        .where((product) => !excludeIds.contains(product.id))
+        .toList(growable: false);
+
+    final networkFuture = _fetchBestSellingShelf(excludeIds: excludeIds);
+    if (cached.isNotEmpty) {
+      unawaited(
+        networkFuture.then((products) {
+          if (products.isNotEmpty) {
+            HomeCatalogBootstrap.updateBestSellingShelf(products);
+          }
+        }),
+      );
+      return cached.take(shelfLimit).toList(growable: false);
+    }
+
+    final products = await networkFuture;
+    if (products.isNotEmpty) {
+      HomeCatalogBootstrap.updateBestSellingShelf(products);
+    }
+    return products;
+  }
+
+  static Future<List<PublicCatalogProduct>> _fetchBestSellingShelf({
+    required Set<String> excludeIds,
+  }) async {
     final products = await PublicCatalogService.listBestSellingProducts(
       limit: shelfLimit * 3,
       excludeIds: excludeIds,
@@ -122,18 +188,156 @@ class HomeProductDiscoveryService {
     );
   }
 
+  static Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >
+  loadSecondaryShelves({
+    required double? customerLatitude,
+    required double? customerLongitude,
+    Set<String> excludeIds = const <String>{},
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh) {
+      final cached = peekCachedSecondaryShelves(excludeIds: excludeIds);
+      if (cached != null) {
+        unawaited(
+          _refreshSecondaryShelves(
+            customerLatitude: customerLatitude,
+            customerLongitude: customerLongitude,
+            excludeIds: excludeIds,
+          ).catchError((_) {
+            return (
+              bestSelling: const <PublicCatalogProduct>[],
+              personalized: const <PublicCatalogProduct>[],
+            );
+          }),
+        );
+        return cached;
+      }
+    }
+
+    try {
+      return await _refreshSecondaryShelves(
+        customerLatitude: customerLatitude,
+        customerLongitude: customerLongitude,
+        excludeIds: excludeIds,
+      );
+    } catch (_) {
+      return (
+        bestSelling: const <PublicCatalogProduct>[],
+        personalized: const <PublicCatalogProduct>[],
+      );
+    }
+  }
+
+  static Future<
+    ({
+      List<PublicCatalogProduct> bestSelling,
+      List<PublicCatalogProduct> personalized,
+    })
+  >
+  _refreshSecondaryShelves({
+    required double? customerLatitude,
+    required double? customerLongitude,
+    required Set<String> excludeIds,
+  }) async {
+    List<PublicCatalogProduct> bestSelling = const <PublicCatalogProduct>[];
+    List<PublicCatalogProduct> personalized = const <PublicCatalogProduct>[];
+
+    try {
+      bestSelling = await _fetchBestSellingShelf(excludeIds: excludeIds);
+      if (bestSelling.isNotEmpty) {
+        HomeCatalogBootstrap.updateBestSellingShelf(bestSelling);
+      }
+    } catch (_) {}
+
+    try {
+      final combinedExclude = <String>{
+        ...excludeIds,
+        ...bestSelling.map((product) => product.id),
+      };
+      personalized = await _fetchPersonalizedShelf(
+        customerLatitude: customerLatitude,
+        customerLongitude: customerLongitude,
+        excludeIds: combinedExclude,
+      );
+      if (personalized.isEmpty) {
+        personalized = await _fetchPersonalizedShelf(
+          customerLatitude: customerLatitude,
+          customerLongitude: customerLongitude,
+          excludeIds: excludeIds,
+        );
+      }
+      if (personalized.isNotEmpty) {
+        HomeCatalogBootstrap.updatePersonalizedShelf(personalized);
+      }
+    } catch (_) {}
+
+    return (bestSelling: bestSelling, personalized: personalized);
+  }
+
   static Future<List<PublicCatalogProduct>> loadPersonalizedShelf({
     required double? customerLatitude,
     required double? customerLongitude,
     Set<String> excludeIds = const <String>{},
   }) async {
+    final cached = _applyExcludeIds(
+      _filterHomeProducts(
+        HomeCatalogBootstrap.peekPersonalizedShelf() ??
+            const <PublicCatalogProduct>[],
+      ),
+      excludeIds,
+    );
+
+    final networkFuture = _fetchPersonalizedShelf(
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
+      excludeIds: excludeIds,
+    );
+    if (cached.isNotEmpty) {
+      unawaited(
+        networkFuture.then((products) {
+          if (products.isNotEmpty) {
+            HomeCatalogBootstrap.updatePersonalizedShelf(products);
+          }
+        }),
+      );
+      return cached.take(shelfLimit).toList(growable: false);
+    }
+
+    final products = await networkFuture;
+    if (products.isNotEmpty) {
+      HomeCatalogBootstrap.updatePersonalizedShelf(products);
+    }
+    return products;
+  }
+
+  static Future<List<PublicCatalogProduct>> _fetchPersonalizedShelf({
+    required double? customerLatitude,
+    required double? customerLongitude,
+    required Set<String> excludeIds,
+  }) async {
     final user = FirebaseAuth.instance.currentUser;
     List<PublicCatalogProduct> products;
     if (user != null && !user.isAnonymous) {
-      products = await _loadFromOrderHistory(
-        customerId: user.uid,
-        excludeIds: excludeIds,
-      );
+      try {
+        products = await _loadFromOrderHistory(
+          customerId: user.uid,
+          excludeIds: excludeIds,
+        ).timeout(const Duration(seconds: 3));
+      } catch (_) {
+        products = const <PublicCatalogProduct>[];
+      }
+      if (products.isEmpty) {
+        products = await _loadNearbyPopularShelf(
+          customerLatitude: customerLatitude,
+          customerLongitude: customerLongitude,
+          excludeIds: excludeIds,
+        );
+      }
     } else {
       products = await _loadNearbyPopularShelf(
         customerLatitude: customerLatitude,

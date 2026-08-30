@@ -9,6 +9,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'models/omise_payment_channel.dart';
 import 'map_picker_screen.dart';
+import 'l10n/l10n.dart';
 import 'shipping_pricing_policy.dart';
 import 'travel_payment_flow.dart';
 import 'travel_tracking_screen.dart';
@@ -55,15 +56,17 @@ class TravelRideSelection {
 
   String get scheduleLabel {
     if (isImmediate) {
-      return 'ให้รถออกตอนนี้';
+      return L10n.departNow;
     }
 
-    final day = scheduledAt.day.toString().padLeft(2, '0');
-    final month = scheduledAt.month.toString().padLeft(2, '0');
-    final year = scheduledAt.year.toString();
     final hour = scheduledAt.hour.toString().padLeft(2, '0');
     final minute = scheduledAt.minute.toString().padLeft(2, '0');
-    return '$day/$month/$year $hour:$minute น.';
+    return L10n.thaiDateTime(
+      scheduledAt.day,
+      scheduledAt.month,
+      scheduledAt.year,
+      '$hour:$minute',
+    );
   }
 }
 
@@ -281,6 +284,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   }
 
   Set<Polyline> get _polylines {
+    // Flutter Web's native polyline can render a long straight artifact while
+    // the JavaScript DirectionsRenderer below owns the real road overlay.
     if (kIsWeb) {
       return const <Polyline>{};
     }
@@ -766,7 +771,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     final picked = await buildPickedLocation(
       latitude: position.latitude,
       longitude: position.longitude,
-      fallbackTitle: 'จุดรับที่เลือก',
+      fallbackTitle: L10n.selectedPickup,
     );
 
     if (!mounted) {
@@ -791,7 +796,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
     final picked = await buildPickedLocation(
       latitude: position.latitude,
       longitude: position.longitude,
-      fallbackTitle: 'จุดหมายที่เลือก',
+      fallbackTitle: L10n.selectedDestination,
     );
 
     if (!mounted) {
@@ -909,7 +914,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
         PlaceSuggestion(
           placeId: placeId,
           primaryText: query,
-          secondaryText: 'ค้นหาด้วย Geocoding (fallback)',
+          secondaryText: L10n.geocodingFallback,
           description: query,
         ),
       ];
@@ -979,7 +984,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       }
 
       if (resolved == null) {
-        _showSnackBar('ไม่สามารถโหลดรายละเอียดสถานที่ได้');
+        _showSnackBar(L10n.placeDetailsLoadFailed);
         return;
       }
 
@@ -1007,7 +1012,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
   Future<void> _fallbackSearchDestination(String query) async {
     final locations = await locationFromAddress(query);
     if (locations.isEmpty) {
-      _showSnackBar('ไม่พบตำแหน่งที่ค้นหา');
+      _showSnackBar(L10n.searchLocationNotFound);
       return;
     }
 
@@ -1085,7 +1090,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       await _applyPlaceSuggestion(selected);
     } catch (error) {
       if (mounted) {
-        _showSnackBar('ค้นหาสถานที่ไม่สำเร็จ: $error');
+        _showSnackBar(L10n.placeSearchFailed(error));
       }
     } finally {
       if (mounted) {
@@ -1207,7 +1212,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
 
     final rideSelection = selection ?? _rideSelection;
     if (rideSelection == null) {
-      _showSnackBar('กรุณาเลือกเวลาและประเภทรถก่อน');
+      _showSnackBar(L10n.selectTimeAndVehicleFirst);
       return;
     }
 
@@ -1247,7 +1252,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
       _pickupReady = true;
       _retryPickupOnResume = false;
     });
-    _showSnackBar('เลือกจุดรับโดยแตะแผนที่หรือลากหมุดสีเขียว');
+    _showSnackBar(L10n.tapMapForPickup);
   }
 
   Widget _buildLocationGateOverlay() {
@@ -1272,7 +1277,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'เปิดตำแหน่งเพื่อเริ่มเดินทาง',
+                  L10n.enableLocationForTravel,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w800,
@@ -1281,8 +1286,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 const SizedBox(height: 8),
                 Text(
                   kIsWeb
-                      ? 'เว็บต้องได้รับอนุญาตจากเบราว์เซอร์ก่อน ระบบจึงจะใช้ตำแหน่งปัจจุบันเป็นจุดรับ'
-                      : 'ระบบต้องใช้ตำแหน่งปัจจุบันเป็นจุดรับผู้โดยสาร',
+                      ? L10n.webLocationPermissionHint
+                      : L10n.locationRequiredForPickup,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: const Color(0xFF6B7280),
@@ -1291,7 +1296,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 if (kIsWeb) ...<Widget>[
                   const SizedBox(height: 12),
                   Text(
-                    'ถ้าเคยกด "Block": คลิกไอคอน 🔒 หรือ ⓘ ข้าง van2.web.app → Location → Allow แล้วรีเฟรชหน้า',
+                    L10n.webLocationBlockHint,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: const Color(0xFF9A3412),
@@ -1315,7 +1320,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.my_location),
-                    label: const Text('เปิดตำแหน่ง'),
+                    label: Text(L10n.enableLocation),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1324,7 +1329,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                   child: TextButton(
                     onPressed:
                         _isRequestingLocationGate ? null : _skipLocationGate,
-                    child: const Text('เลือกจุดรับบนแผนที่แทน'),
+                    child: Text(L10n.pickPickupOnMapInstead),
                   ),
                 ),
               ],
@@ -1369,7 +1374,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            'ตำแหน่งของคุณ',
+                            L10n.yourLocation,
                             style:
                                 Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: const Color(0xFF6B7280),
@@ -1379,7 +1384,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                           const SizedBox(height: 2),
                           Text(
                             _isLoadingPickup
-                                ? 'กำลังค้นหาตำแหน่ง...'
+                                ? L10n.findingLocation
                                 : _pickupReadout(),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -1427,7 +1432,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                     onTap: () =>
                         setState(() => _activePin = _TravelActivePin.destination),
                     decoration: InputDecoration(
-                      hintText: 'ไปไหน?',
+                      hintText: L10n.whereTo,
                       border: InputBorder.none,
                       suffixIcon: _isSearchingDestination
                           ? const Padding(
@@ -1538,7 +1543,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
               const SizedBox(height: 16),
               if (!_hasDestination)
                 Text(
-                  'เลือกจุดหมายบนแผนที่หรือค้นหาด้านบน',
+                  L10n.pickDestinationHint,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: const Color(0xFF6B7280),
                         fontWeight: FontWeight.w600,
@@ -1546,7 +1551,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 )
               else if (_isLoadingRoute)
                 Text(
-                  'กำลังคำนวณเส้นทางตามถนน...',
+                  L10n.calculatingRoadRoute,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: const Color(0xFF6B7280),
                         fontWeight: FontWeight.w600,
@@ -1554,7 +1559,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 )
               else if (distanceKm != null) ...<Widget>[
                 Text(
-                  '${distanceKm.toStringAsFixed(1)} กม.',
+                  L10n.distanceKmFormatted(distanceKm),
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w800,
                         color: const Color(0xFF111827),
@@ -1562,7 +1567,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'เริ่มต้น ~${startingFare!.round()} บาท',
+                  L10n.startingFareApprox(startingFare!.round()),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: const Color(0xFF0D6B45),
                         fontWeight: FontWeight.w700,
@@ -1570,7 +1575,7 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 ),
               ] else
                 Text(
-                  'ไม่สามารถคำนวณเส้นทางตามถนนได้',
+                  L10n.roadRouteFailed,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: const Color(0xFF9A3412),
                         fontWeight: FontWeight.w600,
@@ -1596,8 +1601,8 @@ class _TravelPlannerScreenState extends State<TravelPlannerScreen>
                 icon: const Icon(Icons.route_rounded),
                 label: Text(
                   _locationsConfirmed
-                      ? 'เลือกประเภทรถ'
-                      : 'ยืนยันการเดินทาง',
+                      ? L10n.selectVehicleType
+                      : L10n.confirmTrip,
                 ),
               ),
             ],
@@ -1755,7 +1760,7 @@ class _TravelPlaceSuggestionSheet extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'เลือกสถานที่',
+                  L10n.pickPlace,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -1813,20 +1818,6 @@ class _TravelRideSetupSheet extends StatefulWidget {
 
 class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
   static const Locale _thaiLocale = Locale('th', 'TH');
-  static const List<String> _thaiMonths = <String>[
-    'มกราคม',
-    'กุมภาพันธ์',
-    'มีนาคม',
-    'เมษายน',
-    'พฤษภาคม',
-    'มิถุนายน',
-    'กรกฎาคม',
-    'สิงหาคม',
-    'กันยายน',
-    'ตุลาคม',
-    'พฤศจิกายน',
-    'ธันวาคม',
-  ];
 
   late TravelVehicleType _selectedVehicle;
   late bool _isImmediate;
@@ -1913,14 +1904,14 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
 
   String _formatThaiDate(DateTime value) {
     final buddhistYear = value.year + 543;
-    final monthName = _thaiMonths[value.month - 1];
+    final monthName = L10n.thaiMonthNames[value.month - 1];
     return '${value.day} $monthName $buddhistYear';
   }
 
   String _formatThaiTime(DateTime value) {
     final hour = value.hour.toString().padLeft(2, '0');
     final minute = value.minute.toString().padLeft(2, '0');
-    return '$hour:$minute น.';
+    return L10n.thaiTimeSuffix('$hour:$minute');
   }
 
   Widget _thaiPickerLocalization(BuildContext context, Widget? child) {
@@ -2056,7 +2047,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                   ),
                   const SizedBox(height: 18),
                   Text(
-                    'เลือกประเภทรถ',
+                    L10n.selectVehicleType,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w800,
                       color: const Color(0xFF111827),
@@ -2065,8 +2056,14 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                   const SizedBox(height: 8),
                   Text(
                     isLoadingRiders
-                        ? '${widget.distanceKm.toStringAsFixed(1)} กม. · กำลังค้นหารถใกล้คุณ...'
-                        : '${widget.distanceKm.toStringAsFixed(1)} กม. · พบรถออนไลน์ ${vehicleCounts.values.fold<int>(0, (total, item) => total + item)} คัน',
+                        ? L10n.distanceFindingVehicles(widget.distanceKm)
+                        : L10n.distanceOnlineVehicles(
+                            widget.distanceKm,
+                            vehicleCounts.values.fold<int>(
+                              0,
+                              (total, item) => total + item,
+                            ),
+                          ),
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: const Color(0xFF6B7280),
                       fontWeight: FontWeight.w600,
@@ -2101,7 +2098,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'เวลาเดินทาง',
+                    L10n.travelTime,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -2111,7 +2108,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
-                        'ไม่มีรถ${_selectedVehicle.label}ออนไลน์ — กรุณากำหนดวันและเวลาเดินทาง',
+                        L10n.noVehicleOnlineSchedule(_selectedVehicle.label),
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: const Color(0xFF92400E),
                               fontWeight: FontWeight.w700,
@@ -2123,7 +2120,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                     runSpacing: 10,
                     children: <Widget>[
                       ChoiceChip(
-                        label: const Text('ตอนนี้'),
+                        label: Text(L10n.now),
                         selected: _isImmediate,
                         onSelected: canBookImmediate
                             ? (_) {
@@ -2135,7 +2132,7 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                             : null,
                       ),
                       ChoiceChip(
-                        label: const Text('กำหนดวันและเวลา'),
+                        label: Text(L10n.setDateAndTime),
                         selected: !_isImmediate,
                         onSelected: (_) => _enableScheduledMode(),
                       ),
@@ -2147,9 +2144,9 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                       children: <Widget>[
                         Expanded(
                           child: _TravelScheduleFieldCard(
-                            label: 'วันที่เดินทาง',
+                            label: L10n.travelDate,
                             value: _scheduledAt == null
-                                ? 'เลือกวันที่'
+                                ? L10n.selectDate
                                 : _formatThaiDate(_scheduledAt!),
                             icon: Icons.calendar_month_rounded,
                             onTap: _pickScheduleDate,
@@ -2158,9 +2155,9 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: _TravelScheduleFieldCard(
-                            label: 'เวลาเดินทาง',
+                            label: L10n.travelTime,
                             value: _scheduledAt == null
-                                ? 'เลือกเวลา'
+                                ? L10n.selectTime
                                 : _formatThaiTime(_scheduledAt!),
                             icon: Icons.access_time_rounded,
                             onTap: _pickScheduleTime,
@@ -2171,8 +2168,11 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                     const SizedBox(height: 10),
                     Text(
                       _scheduledAt == null
-                          ? 'กรุณาเลือกวันที่และเวลาเดินทาง'
-                          : 'กำหนดเดินทางวันที่ ${_formatThaiDate(_scheduledAt!)} เวลา ${_formatThaiTime(_scheduledAt!)}',
+                          ? L10n.scheduleDateTimeRequired
+                          : L10n.scheduledTripSummary(
+                              _formatThaiDate(_scheduledAt!),
+                              _formatThaiTime(_scheduledAt!),
+                            ),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: const Color(0xFF6B7280),
                         fontWeight: FontWeight.w600,
@@ -2206,10 +2206,12 @@ class _TravelRideSetupSheetState extends State<_TravelRideSetupSheet> {
                       icon: const Icon(Icons.check_circle),
                       label: Text(
                         selectedQuote == null
-                            ? 'ยืนยันตัวเลือกนี้'
+                            ? L10n.confirmSelection
                             : !canConfirm && !_isImmediate
-                                ? 'เลือกวันและเวลาก่อนยืนยัน'
-                                : 'ยืนยัน ~${selectedQuote.displayFare} บาท',
+                                ? L10n.selectDateTimeBeforeConfirm
+                                : L10n.confirmFareApprox(
+                                    selectedQuote.displayFare,
+                                  ),
                       ),
                     ),
                   ),
@@ -2305,7 +2307,9 @@ class _TravelVehicleFareRow extends StatelessWidget {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        isOnline ? 'ออนไลน์ $onlineCount คัน' : 'ออฟไลน์',
+                        isOnline
+                            ? L10n.onlineVehicleCount(onlineCount)
+                            : L10n.offline,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: isOnline
                                   ? const Color(0xFF166534)
@@ -2319,7 +2323,7 @@ class _TravelVehicleFareRow extends StatelessWidget {
               ),
             ),
             Text(
-              '~$displayFare บาท',
+              L10n.fareApprox(displayFare),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: isOnline

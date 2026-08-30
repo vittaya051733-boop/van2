@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
+import '../services/locale_service.dart';
+
 bool orderIsCashOnDelivery(Map<String, dynamic> data) {
   final paymentMethod =
       (data['paymentMethod'] as String?)?.trim().toLowerCase() ?? '';
@@ -64,73 +67,81 @@ class _OrderRefundAccountDialogState extends State<OrderRefundAccountDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('ขอคืนเงิน'),
-      content: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'กรุณาใส่หมายเลขบัญชี ชื่อ และธนาคารให้ถูกต้อง และต้องเป็นบัญชีที่โอนมาซื้อเท่านั้น หากเป็นบัญชีอื่นจะไม่สามารถโอนคืนได้ เนื่องจากเกี่ยวข้องกับข้อกฎหมาย ระบบสรุปยอดเวลา 18:00 น. ของทุกวัน และเงินจะเข้าบัญชีช่วง 18:00-20:00 น.',
-                style: TextStyle(fontWeight: FontWeight.w700),
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
+        return AlertDialog(
+          title: Text(L10n.refundDialogTitle),
+          content: SingleChildScrollView(
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    L10n.refundDialogBody,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _accountNumberController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: L10n.accountNumberLabel,
+                      border: const OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return L10n.accountNumberRequired;
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _accountNameController,
+                    decoration: InputDecoration(
+                      labelText: L10n.accountHolderName,
+                      border: const OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return L10n.accountHolderRequired;
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _bankNameController,
+                    decoration: InputDecoration(
+                      labelText: L10n.bankNameLabel,
+                      border: const OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return L10n.bankNameRequired;
+                      }
+                      return null;
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _accountNumberController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'หมายเลขบัญชี',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'กรุณาใส่หมายเลขบัญชี';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _accountNameController,
-                decoration: const InputDecoration(
-                  labelText: 'ชื่อเจ้าของบัญชี',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'กรุณาใส่ชื่อเจ้าของบัญชี';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _bankNameController,
-                decoration: const InputDecoration(
-                  labelText: 'ชื่อธนาคาร',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'กรุณาใส่ชื่อธนาคาร';
-                  }
-                  return null;
-                },
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('ยกเลิก'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('ยืนยันคืนเงิน')),
-      ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(L10n.cancel),
+            ),
+            FilledButton(
+              onPressed: _submit,
+              child: Text(L10n.confirmRefund),
+            ),
+          ],
+        );
+      },
     );
   }
 }

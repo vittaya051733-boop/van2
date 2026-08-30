@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'data/legal_content.dart';
-import 'localization/settings_copy.dart';
-import 'services/locale_service.dart';
+import 'l10n/l10n.dart';
 
 class LegalDocumentScreen extends StatelessWidget {
   const LegalDocumentScreen({super.key, required this.document});
@@ -11,17 +10,16 @@ class LegalDocumentScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final english = LocaleService.instance.isEnglish;
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(document.title(english)),
+        title: Text(document.title(L10n.en)),
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: <Widget>[
           Text(
-            '${SettingsCopy.lastUpdated}: ${document.updatedAtLabel}',
+            L10n.lastUpdatedWithDate(document.updatedAtLabel),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: const Color(0xFF6B7280),
               fontWeight: FontWeight.w600,
@@ -29,7 +27,7 @@ class LegalDocumentScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            document.body(english),
+            document.body(L10n.en),
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
               height: 1.55,
               color: const Color(0xFF374151),

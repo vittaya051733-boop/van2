@@ -79,7 +79,7 @@ class OmisePaymentService {
             FirebaseFunctions.instanceFor(region: 'asia-southeast1'),
         _firestore = firestore ?? FirebaseFirestore.instance;
 
-  static const String defaultReturnUri = 'https://van2.web.app/payment/return';
+  static const String defaultReturnUri = 'https://vantalad.web.app/payment/return';
 
   final FirebaseFunctions _functions;
   final FirebaseFirestore _firestore;

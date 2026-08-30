@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'data/legal_content.dart';
 import 'legal_document_screen.dart';
-import 'localization/settings_copy.dart';
-import 'services/locale_service.dart';
+import 'l10n/l10n.dart';
 
 class PrivacyOnboardingResult {
   const PrivacyOnboardingResult({
@@ -60,18 +59,10 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final english = LocaleService.instance.isEnglish;
-    final title = english
-        ? 'Privacy and terms'
-        : 'ความเป็นส่วนตัวและข้อกำหนด';
-    final intro = english
-        ? 'Please review how VANTALAD uses your data before continuing.'
-        : 'โปรดอ่านการใช้ข้อมูลส่วนบุคคลของ VANTALAD ก่อนใช้งานต่อ';
-
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(title),
+        title: Text(L10n.privacyOnboardingTitle),
         automaticallyImplyLeading: widget.canDismiss,
       ),
       body: SafeArea(
@@ -82,7 +73,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
                 children: [
                   Text(
-                    intro,
+                    L10n.privacyOnboardingIntro,
                     style: const TextStyle(
                       fontSize: 15,
                       height: 1.5,
@@ -92,25 +83,28 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                   const SizedBox(height: 16),
                   _LinkCard(
                     icon: Icons.policy_outlined,
-                    title: SettingsCopy.privacyPolicy,
-                    subtitle:
-                        '${SettingsCopy.lastUpdated}: ${LegalContent.privacyPolicy.updatedAtLabel}',
+                    title: L10n.privacyPolicy,
+                    subtitle: L10n.lastUpdatedWithDate(
+                      LegalContent.privacyPolicy.updatedAtLabel,
+                    ),
                     onTap: () => _openDocument(LegalContent.privacyPolicy),
                   ),
                   const SizedBox(height: 10),
                   _LinkCard(
                     icon: Icons.description_outlined,
-                    title: SettingsCopy.termsOfService,
-                    subtitle:
-                        '${SettingsCopy.lastUpdated}: ${LegalContent.termsOfService.updatedAtLabel}',
+                    title: L10n.termsOfService,
+                    subtitle: L10n.lastUpdatedWithDate(
+                      LegalContent.termsOfService.updatedAtLabel,
+                    ),
                     onTap: () => _openDocument(LegalContent.termsOfService),
                   ),
                   const SizedBox(height: 10),
                   _LinkCard(
                     icon: Icons.inventory_2_outlined,
-                    title: SettingsCopy.dataWeCollect,
-                    subtitle:
-                        '${SettingsCopy.lastUpdated}: ${LegalContent.dataSummary.updatedAtLabel}',
+                    title: L10n.dataWeCollect,
+                    subtitle: L10n.lastUpdatedWithDate(
+                      LegalContent.dataSummary.updatedAtLabel,
+                    ),
                     onTap: () => _openDocument(LegalContent.dataSummary),
                   ),
                   const SizedBox(height: 20),
@@ -121,49 +115,25 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                       setState(() => _acceptedTerms = value == true);
                     },
                     controlAffinity: ListTileControlAffinity.leading,
-                    title: Text.rich(
-                      TextSpan(
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                        children: [
-                          TextSpan(
-                            text: english
-                                ? 'I accept the Terms of Service and Privacy Policy (required)'
-                                : 'ยอมรับข้อกำหนดการใช้งานและนโยบายความเป็นส่วนตัว (จำเป็น)',
-                          ),
-                        ],
-                      ),
+                    title: Text(
+                      L10n.privacyAcceptRequired,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     value: _pushOptIn,
                     onChanged: (value) => setState(() => _pushOptIn = value),
-                    title: Text(
-                      english
-                          ? 'Order status notifications'
-                          : 'รับการแจ้งเตือนสถานะออเดอร์',
-                    ),
-                    subtitle: Text(
-                      english
-                          ? 'Optional — you can change this later in Settings'
-                          : 'ไม่บังคับ — เปลี่ยนได้ภายหลังในตั้งค่า',
-                    ),
+                    title: Text(L10n.privacyOrderNotificationsOptional),
+                    subtitle: Text(L10n.privacyOrderNotificationsOptionalSubtitle),
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     value: _marketingOptIn,
                     onChanged: (value) =>
                         setState(() => _marketingOptIn = value),
-                    title: Text(
-                      english
-                          ? 'Promotions and special offers'
-                          : 'รับข่าวโปรโมชันและสิทธิพิเศษ',
-                    ),
-                    subtitle: Text(
-                      english
-                          ? 'Optional marketing messages'
-                          : 'ข้อความการตลาด (ไม่บังคับ)',
-                    ),
+                    title: Text(L10n.privacyPromotionsOptional),
+                    subtitle: Text(L10n.privacyMarketingOptionalSubtitle),
                   ),
                 ],
               ),
@@ -174,7 +144,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: _acceptedTerms ? _continue : null,
-                  child: Text(english ? 'Continue' : 'ดำเนินการต่อ'),
+                  child: Text(L10n.continueAction),
                 ),
               ),
             ),

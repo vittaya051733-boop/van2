@@ -199,30 +199,75 @@ class ProductVariantSupport {
     }
 
     final originals = readCatalogProductImageUrls(productData);
-    final candidates = <String>{
-      if (imageIndex < originals.length) originals[imageIndex],
-    };
-
-    final thumbs = productData['thumbnailUrls'];
-    if (thumbs is List && imageIndex < thumbs.length) {
-      final thumb = thumbs[imageIndex].toString().trim();
-      if (thumb.isNotEmpty) {
-        candidates.add(thumb);
-      }
+    if (imageIndex >= originals.length) {
+      return const <ProductVariant>[];
     }
+    return variantsForImageUrl(variants, originals[imageIndex]);
+  }
 
-    candidates.removeWhere((url) => url.isEmpty);
-    if (candidates.isEmpty) {
+  static List<ProductVariant> variantsForImageUrl(
+    List<ProductVariant> variants,
+    String imageUrl,
+  ) {
+    final normalized = imageUrl.trim();
+    if (normalized.isEmpty) {
       return const <ProductVariant>[];
     }
 
     return activeVariants(variants)
         .where(
           (variant) =>
-              candidates.contains(variant.imageUrl.trim()) ||
-              candidates.contains(variant.thumbnailUrl.trim()),
+              variant.imageUrl.trim() == normalized ||
+              variant.thumbnailUrl.trim() == normalized,
         )
         .toList(growable: false);
+  }
+
+  static Map<String, dynamic> variantGalleryFields(
+    List<ProductVariant> variants,
+  ) {
+    final active = activeVariants(variants);
+    if (active.isEmpty) {
+      return const <String, dynamic>{};
+    }
+    final derived = buildDerivedProductFields(active);
+    return <String, dynamic>{
+      'imageUrls': derived['imageUrls'],
+      'thumbnailUrls': derived['thumbnailUrls'],
+    };
+  }
+
+  static int galleryImageIndexForVariant(
+    List<ProductVariant> variants,
+    ProductVariant variant,
+  ) {
+    final gallery = variantGalleryFields(variants);
+    final rawUrls = gallery['imageUrls'];
+    if (rawUrls is! List || rawUrls.isEmpty) {
+      return 0;
+    }
+    final urls = rawUrls.map((entry) => entry.toString().trim()).toList();
+    for (final candidate in <String>[
+      variant.imageUrl.trim(),
+      variant.thumbnailUrl.trim(),
+    ]) {
+      if (candidate.isEmpty) {
+        continue;
+      }
+      final index = urls.indexOf(candidate);
+      if (index >= 0) {
+        return index;
+      }
+    }
+
+    final active = activeVariants(variants);
+    for (var index = 0; index < urls.length; index++) {
+      final scoped = variantsForImageUrl(active, urls[index]);
+      if (scoped.any((entry) => entry.id == variant.id)) {
+        return index;
+      }
+    }
+    return 0;
   }
 
   static String optionKey({required String size, required String color}) {
@@ -247,14 +292,15 @@ class ProductVariantSupport {
     final imageUrls = <String>[];
     final thumbnailUrls = <String>[];
     for (final variant in active) {
-      if (variant.imageUrl.isNotEmpty && !imageUrls.contains(variant.imageUrl)) {
-        imageUrls.add(variant.imageUrl);
+      final primary = variant.imageUrl.trim();
+      final thumb = variant.thumbnailUrl.trim();
+      final displayUrl = primary.isNotEmpty ? primary : thumb;
+      if (displayUrl.isNotEmpty && !imageUrls.contains(displayUrl)) {
+        imageUrls.add(displayUrl);
       }
-      final thumb = variant.thumbnailUrl.isNotEmpty
-          ? variant.thumbnailUrl
-          : variant.imageUrl;
-      if (thumb.isNotEmpty && !thumbnailUrls.contains(thumb)) {
-        thumbnailUrls.add(thumb);
+      final thumbDisplay = thumb.isNotEmpty ? thumb : primary;
+      if (thumbDisplay.isNotEmpty && !thumbnailUrls.contains(thumbDisplay)) {
+        thumbnailUrls.add(thumbDisplay);
       }
     }
 

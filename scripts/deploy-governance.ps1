@@ -128,6 +128,7 @@ function Get-VanGovernanceConfig {
       'checkPreparingOrders',
       'getMerchantWallet',
       'adminCancelMerchantContract',
+      'adminResolveClaim',
       'syncMerchantWalletOnCreditWrite',
       'syncMerchantWalletOnContractWrite'
     )

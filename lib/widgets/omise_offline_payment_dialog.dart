@@ -4,7 +4,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/omise_payment_channel.dart';
+import '../services/locale_service.dart';
 import '../services/omise_payment_service.dart';
 import 'omise_qr_display.dart';
 
@@ -28,7 +30,7 @@ Future<OmisePaymentSession> showOmiseOfflinePaymentDialog({
     },
   ).then((value) {
     if (value == null) {
-      throw const PaymentCheckoutCancelled('ยกเลิกการชำระเงิน');
+      throw PaymentCheckoutCancelled(L10n.paymentCancelledMessage);
     }
     return value;
   });
@@ -113,7 +115,7 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
       }
       if (mounted && !_completed) {
         setState(() {
-          _pollError = 'ตรวจสอบสถานะไม่สำเร็จ กำลังลองใหม่...';
+          _pollError = L10n.pollStatusRetrying;
         });
       }
     } finally {
@@ -173,22 +175,22 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
   String get _title {
     switch (widget.channel) {
       case OmisePaymentChannel.promptPay:
-        return 'สแกนจ่ายพร้อมเพย์';
+        return L10n.scanPromptPay;
       case OmisePaymentChannel.trueMoney:
-        return 'สแกนจ่าย TrueMoney';
+        return L10n.scanTrueMoney;
       default:
-        return 'ชำระเงิน';
+        return L10n.paymentTitle;
     }
   }
 
   String get _instruction {
     switch (widget.channel) {
       case OmisePaymentChannel.promptPay:
-        return 'สแกน QR ด้วยแอปธนาคาร แล้วรอระบบยืนยัน';
+        return L10n.scanQrBankHint;
       case OmisePaymentChannel.trueMoney:
-        return 'สแกน QR ด้วยแอป TrueMoney แล้วรอระบบยืนยัน';
+        return L10n.scanQrTrueMoneyHint;
       default:
-        return 'ชำระเงินแล้วรอระบบยืนยัน';
+        return L10n.payThenWaitConfirm;
     }
   }
 
@@ -214,6 +216,9 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final referenceLabel = _referenceLabel;
     final chargeTail = _chargeTail;
 
@@ -226,7 +231,7 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Text(
-              'ยอด ฿${widget.session.amount.toStringAsFixed(2)}',
+              L10n.amountBaht(widget.session.amount.toStringAsFixed(2)),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFFE55A00),
@@ -235,7 +240,7 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
             if (referenceLabel != null) ...<Widget>[
               const SizedBox(height: 8),
               Text(
-                'รหัสอ้างอิง: $referenceLabel',
+                L10n.referenceCode(referenceLabel),
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -297,26 +302,28 @@ class _OmiseOfflinePaymentDialogState extends State<_OmiseOfflinePaymentDialog> 
         if (!_completed)
           TextButton(
             onPressed: _isPolling ? null : _pollSession,
-            child: const Text('ตรวจสอบอีกครั้ง'),
+            child: Text(L10n.checkAgain),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('ยกเลิก'),
+          child: Text(L10n.cancel),
         ),
       ],
+    );
+      },
     );
   }
 
   String _statusLabel(String status) {
     switch (status) {
       case 'paid':
-        return 'ชำระเงินสำเร็จ';
+        return L10n.paymentSuccess;
       case 'failed':
-        return 'การชำระเงินไม่สำเร็จ';
+        return L10n.paymentFailedShort;
       case 'expired':
-        return 'หมดเวลาชำระเงิน';
+        return L10n.paymentTimedOut;
       default:
-        return 'กำลังรอการชำระเงิน...';
+        return L10n.waitingForPayment;
     }
   }
 }

@@ -45,7 +45,6 @@ class HomeQuickActionConfig {
     HomeQuickActionSpec(
       id: 'nationwide-shipping',
       labelTh: 'สินค้าส่งทั่วประเทศ',
-      hidesHomeProducts: true,
     ),
     HomeQuickActionSpec(id: 'more', labelTh: 'เพิ่มเติม'),
   ];
@@ -92,8 +91,6 @@ class HomeQuickActionConfig {
   }
 
   bool isEnabled(String id) => _enabled[id] != false;
-
-  bool get nationwideEnabled => isEnabled('nationwide-shipping');
 
   Set<String> get enabledRetailServiceTypes {
     return <String>{

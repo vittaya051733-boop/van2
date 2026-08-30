@@ -46,6 +46,10 @@ const AdminSupportConfig kVan2AdminSupportConfig = AdminSupportConfig(
       label: 'คุณภาพสินค้า / ร้านค้า',
     ),
     AdminSupportTopic(
+      key: 'product_claim',
+      label: 'ขอเคลมสินค้า',
+    ),
+    AdminSupportTopic(
       key: 'account_login',
       label: 'บัญชี / เข้าสู่ระบบ',
     ),

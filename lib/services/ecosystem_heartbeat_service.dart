@@ -13,10 +13,15 @@ class EcosystemHeartbeatService {
 
   static const String appId = 'van2';
   static const Duration interval = Duration(seconds: 45);
-  static const Duration probeTimeout = Duration(seconds: 8);
+  static const Duration probeTimeout = Duration(seconds: 4);
+  static const Duration permissionDeniedCooldown = Duration(minutes: 30);
+  static const Duration timeoutCooldown = Duration(minutes: 15);
 
   Timer? _timer;
   bool _pulsing = false;
+  bool _loggedWriteFailure = false;
+  final Set<String> _loggedProbeFailures = <String>{};
+  final Map<String, DateTime> _probePausedUntil = <String, DateTime>{};
 
   void start() {
     _timer?.cancel();
@@ -56,6 +61,45 @@ class EcosystemHeartbeatService {
     }, SetOptions(merge: true));
   }
 
+  bool _isProbePaused(String pointId) {
+    final until = _probePausedUntil[pointId];
+    if (until == null) {
+      return false;
+    }
+    if (DateTime.now().isBefore(until)) {
+      return true;
+    }
+    _probePausedUntil.remove(pointId);
+    return false;
+  }
+
+  void _pauseProbe(String pointId, Object error) {
+    Duration? cooldown;
+    if (error is TimeoutException) {
+      cooldown = timeoutCooldown;
+    } else if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+        case 'unauthenticated':
+          cooldown = permissionDeniedCooldown;
+        case 'unavailable':
+          cooldown = timeoutCooldown;
+        default:
+          break;
+      }
+    }
+    if (cooldown != null) {
+      _probePausedUntil[pointId] = DateTime.now().add(cooldown);
+    }
+  }
+
+  void _logProbeFailureOnce(String pointId, Object error) {
+    if (!_loggedProbeFailures.add(pointId)) {
+      return;
+    }
+    debugPrint('van2 heartbeat $pointId failed: $error');
+  }
+
   Future<void> pulse() async {
     if (_pulsing) {
       return;
@@ -82,9 +126,15 @@ class EcosystemHeartbeatService {
       var firestoreOk = true;
 
       Future<void> check(String pointId, Future<void> Function() action) async {
+        if (_isProbePaused(pointId)) {
+          return;
+        }
+
         try {
           await action().timeout(probeTimeout);
           points[pointId] = true;
+          _probePausedUntil.remove(pointId);
+          _loggedProbeFailures.remove(pointId);
         } catch (error) {
           points[pointId] = false;
           firestoreOk = false;
@@ -92,7 +142,8 @@ class EcosystemHeartbeatService {
           if (error is FirebaseException) {
             errorCode ??= error.code;
           }
-          debugPrint('van2 heartbeat $pointId failed: $error');
+          _pauseProbe(pointId, error);
+          _logProbeFailureOnce(pointId, error);
         }
       }
 
@@ -100,10 +151,14 @@ class EcosystemHeartbeatService {
       const server = GetOptions(source: Source.server);
 
       await check('V2-CATALOG', () async {
-        await db.collection('products').limit(1).get(server);
+        await db.collection('public_shops').limit(1).get(server);
       });
       await check('V2-COUPONS', () async {
-        await db.collection('coupons').limit(1).get(server);
+        await db
+            .collection('coupons')
+            .where('active', isEqualTo: true)
+            .limit(1)
+            .get(server);
       });
       await check('V2-PRICING', () async {
         await db.collection('pricing_config').limit(1).get(server);
@@ -123,6 +178,10 @@ class EcosystemHeartbeatService {
             .get(server);
       });
 
+      if (points.isEmpty) {
+        return;
+      }
+
       await _writeSession(
         uid: uid,
         firestoreOk: firestoreOk,
@@ -131,6 +190,10 @@ class EcosystemHeartbeatService {
         errorCode: errorCode,
       );
     } catch (error) {
+      if (_loggedWriteFailure) {
+        return;
+      }
+      _loggedWriteFailure = true;
       debugPrint('van2 heartbeat write failed: $error');
     } finally {
       _pulsing = false;

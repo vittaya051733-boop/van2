@@ -343,6 +343,7 @@ function createRiderAvailabilityHandlers({
   onSchedule,
   onDocumentWritten,
   DEFAULT_REGION,
+  onRiderBecameAvailable,
 }) {
   const syncRiderAvailabilityOnWrite = onDocumentWritten(
     {
@@ -366,7 +367,35 @@ function createRiderAvailabilityHandlers({
           return;
         }
 
+        const becameDeliveryOnline =
+          isDeliveryOnline(after) && (!beforeExists || !isDeliveryOnline(before));
+        const becameTravelAvailable =
+          isTravelAvailable(after) &&
+          (!beforeExists || !isTravelAvailable(before));
+
         await patchRiderInPool(db, FieldValue, riderId, after);
+
+        if (
+          typeof onRiderBecameAvailable === 'function' &&
+          (becameDeliveryOnline || becameTravelAvailable)
+        ) {
+          try {
+            await onRiderBecameAvailable({
+              riderId,
+              reason: 'rider_online',
+              becameDeliveryOnline,
+              becameTravelAvailable,
+            });
+          } catch (matchError) {
+            logger.error('onRiderBecameAvailable failed', {
+              riderId,
+              message:
+                matchError instanceof Error
+                  ? matchError.message
+                  : String(matchError),
+            });
+          }
+        }
       } catch (error) {
         logger.error('syncRiderAvailabilityOnWrite failed', {
           riderId,

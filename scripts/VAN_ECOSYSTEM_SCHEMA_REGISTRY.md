@@ -12,7 +12,7 @@ Project: **van-merchant** · DB: `(default)`
 
 | Collection | Field สำคัญ | Writer | Reader | Default ถ้าไม่มี |
 |------------|-------------|--------|--------|------------------|
-| `coupons/{id}` | `presentation`, `display.transparentImage`, `conditions.productIds`, `conditions.shopIds`, `maxClaims`, `expiresAt` | van4 | van2 | presentation=`inline` หรือข้าม popup |
+| `coupons/{id}` | `presentation`, `display.transparentImage`, `conditions.productIds`, `conditions.shopIds`, `maxClaims`, `expiresAt`, `distribution` (`self_claim` / `admin_grant`), `assigneeUid`, `originOrderId` | van4 / CF | van2 | presentation=`inline` หรือข้าม popup; `admin_grant` ไม่โชว์ป๊อปอัพ self-claim |
 | `promotions/{id}` | ตาม schema โปร | van4 | van2 | ข้ามรายการ |
 | `promotion_display_config/global` | config แสดงผล | van4 | van2 | ใช้ค่าในโค้ด van2 |
 | `pricing_config/global` | อัตรา/ค่าส่ง | van4 | van2 | ค่า fallback ใน `pricing_config_service` |
@@ -29,23 +29,26 @@ Project: **van-merchant** · DB: `(default)`
 
 | Collection | Field สำคัญ | Writer | Reader | Default |
 |------------|-------------|--------|--------|---------|
-| `products/{id}` | `isActive`, `catalogReviewStatus`, stock, variants | van1/van4 | van2, van1 | ซ่อนถ้าไม่ active |
+| `products/{id}` | `isActive`, `catalogReviewStatus`, stock, variants, **`nameEn`**, **`descriptionEn`**, **`translationSource`**, **`translatedAt`** (van2 CF แปล cache) | van1/van4 write หลัก; van2 CF เขียน EN | van2, van1 | ซ่อนถ้าไม่ active; ไม่มี `nameEn` → แสดง `name` (TH) |
 | `public_shops/{id}` | mirror ร้าน | van4/CF | van2, van1, van3 | ข้ามร้าน |
 
 ## กลุ่ม D — Orders / wallet
 
 | Path | Field สำคัญ | Writer | Reader | Default |
 |------|-------------|--------|--------|---------|
-| `orders/{id}` | `status`, `settlement`, `shopPayout`, `riderPayout`, `driverId`, `shopOwnerId`, `customerId` | van2 CF / van4 | van1,2,3 | UI แสดง "—" ถ้าไม่มี payout |
-| `credits/{uid}` | `balance` | CF | van1, van3 | 0 |
-| `withdraw_requests` | status | CF | van1, van3, van4 | ข้ารายการ |
+| `orders/{id}` | `status`, `settlement`, `shopPayout`, `riderPayout`, `driverId`, `shopOwnerId`, `customerId`, `orderType`, `originOrderId`, `claimId`, `claimStatus`, `replacementOrderId`, `claimCreditCouponId` | van2 CF / van4 | van1,2,3 | ไม่มี `orderType`/`claim*` = ออเดอร์ปกติ; UI แสดง "—" ถ้าไม่มี payout |
+| `order_claims/{id}` | `originalOrderId`, `customerId`, `kind` (`replacement`\|`credit`), `reason`, `adminUid`, `replacementOrderId` / `couponId`, `status` | van2 CF | van4 (R) | ไม่มีเอกสาร = ยังไม่เคลม |
+| `credits/{creditId}` | `uid`, `amount`, `type` (`top_up`, `order_cod_*`, `withdraw_*`, `admin_adjustment`, …), `reason`, `note`, `adminUid`, `actorType`, `orderId`, `timestamp` | CF / van4 admin CF | van1, van3, van4 | sum(`amount`) where `uid` = balance |
+| `credit_admin_actions/{id}` | mirror ของ admin adjust: `creditId`, `uid`, `amount`, `beforeBalance`, `afterBalance`, `reason`, `adminUid`, `actorType`, `createdAt` | van2 CF | van4 | ไม่มี = ไม่มีประวัติปรับมือ |
+| `merchant_wallets/{uid}` | `totalCredit`, `withdrawableCredit`, `lockedCredit`, `omise*` | CF sync | van1, van4 | 0 |
+| `withdraw_requests` | `amount`, `withdrawFeeBaht`, `netPayout`, `status`, … | CF | van1, van3, van4 | ข้ารายการ |
 
 ## กลุ่ม E — Admin
 
 | Collection | หมายเหตุ |
 |------------|----------|
 | `admins`, `admin_presence`, `admin_internal_threads` | van4 เป็นหลัก |
-| `admin_support_tickets` | user ทุก van สร้างได้; van4 ตอบ |
+| `admin_support_tickets` | user ทุก van สร้างได้; van4 ตอบ; `orderId` ออปชัน; `claimRequest` `{ items[], reason, status, claimId? }` เมื่อ `topicKey=product_claim` (expand-only) |
 
 ## กลุ่ม E2 — Ecosystem heartbeats
 

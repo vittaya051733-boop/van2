@@ -5,8 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'data/legal_content.dart';
 import 'legal_document_screen.dart';
-import 'localization/settings_copy.dart';
-import 'services/locale_service.dart';
+import 'l10n/l10n.dart';
 import 'services/notification_service.dart';
 import 'services/privacy_consent_service.dart';
 
@@ -67,7 +66,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('บันทึกการตั้งค่าแจ้งเตือนไม่สำเร็จ: $error')),
+          SnackBar(content: Text(L10n.saveNotificationSettingsFailed(error))),
         );
       }
       await _loadPreferences();
@@ -92,7 +91,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('บันทึกการตั้งค่าการตลาดไม่สำเร็จ: $error')),
+          SnackBar(content: Text(L10n.saveMarketingSettingsFailed(error))),
         );
       }
       await _loadPreferences();
@@ -108,35 +107,30 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาเข้าสู่ระบบก่อนส่งคำขอ')),
+        SnackBar(content: Text(L10n.privacyRequestSignInRequired)),
       );
       return;
     }
 
-    final english = LocaleService.instance.isEnglish;
     final title = switch (type) {
-      'export' => SettingsCopy.requestDataExport,
-      'delete' => SettingsCopy.requestAccountDeletion,
-      'correct' => SettingsCopy.requestDataCorrection,
-      _ => SettingsCopy.privacyRights,
+      'export' => L10n.requestDataExport,
+      'delete' => L10n.requestAccountDeletion,
+      'correct' => L10n.requestDataCorrection,
+      _ => L10n.privacyRights,
     };
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(title),
-        content: Text(
-          english
-              ? 'We will create a privacy request and notify admin. Continue?'
-              : 'ระบบจะสร้างคำขอ PDPA และแจ้งแอดมิน ต้องการดำเนินการต่อหรือไม่?',
-        ),
+        content: Text(L10n.privacyRequestConfirmBody),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(SettingsCopy.cancel),
+            child: Text(L10n.cancel),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(english ? 'Submit' : 'ส่งคำขอ'),
+            child: Text(L10n.submit),
           ),
         ],
       ),
@@ -156,17 +150,13 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            english
-                ? 'Request submitted (${result.requestId})'
-                : 'ส่งคำขอแล้ว (${result.requestId})',
-          ),
+          content: Text(L10n.privacyRequestSubmitted(result.requestId)),
         ),
       );
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('ส่งคำขอไม่สำเร็จ: $error')),
+          SnackBar(content: Text(L10n.privacyRequestFailed(error))),
         );
       }
     } finally {
@@ -181,7 +171,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(SettingsCopy.privacyTitle),
+        title: Text(L10n.privacyTitle),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -189,7 +179,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               children: <Widget>[
                 ListTile(
                   leading: const Icon(Icons.policy_outlined),
-                  title: Text(SettingsCopy.privacyPolicy),
+                  title: Text(L10n.privacyPolicy),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.of(context).push(
@@ -203,7 +193,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.description_outlined),
-                  title: Text(SettingsCopy.termsOfService),
+                  title: Text(L10n.termsOfService),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.of(context).push(
@@ -217,7 +207,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.inventory_2_outlined),
-                  title: Text(SettingsCopy.dataWeCollect),
+                  title: Text(L10n.dataWeCollect),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
                     Navigator.of(context).push(
@@ -233,7 +223,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text(
-                    SettingsCopy.consentPreferences,
+                    L10n.consentPreferences,
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF6B7280),
@@ -242,15 +232,15 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 ),
                 SwitchListTile(
                   secondary: const Icon(Icons.notifications_active_outlined),
-                  title: Text(SettingsCopy.pushNotifications),
-                  subtitle: Text(SettingsCopy.pushNotificationsSubtitle),
+                  title: Text(L10n.pushNotifications),
+                  subtitle: Text(L10n.pushNotificationsSubtitle),
                   value: _pushOptIn,
                   onChanged: _busy ? null : _setPushOptIn,
                 ),
                 SwitchListTile(
                   secondary: const Icon(Icons.campaign_outlined),
-                  title: Text(SettingsCopy.marketingMessages),
-                  subtitle: Text(SettingsCopy.marketingMessagesSubtitle),
+                  title: Text(L10n.marketingMessages),
+                  subtitle: Text(L10n.marketingMessagesSubtitle),
                   value: _marketingOptIn,
                   onChanged: _busy ? null : _setMarketingOptIn,
                 ),
@@ -258,7 +248,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                   child: Text(
-                    SettingsCopy.privacyRights,
+                    L10n.privacyRights,
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF6B7280),
@@ -267,27 +257,27 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 ),
                 ListTile(
                   leading: const Icon(Icons.download_outlined),
-                  title: Text(SettingsCopy.requestDataExport),
-                  subtitle: Text(SettingsCopy.requestDataExportSubtitle),
+                  title: Text(L10n.requestDataExport),
+                  subtitle: Text(L10n.requestDataExportSubtitle),
                   onTap: _busy ? null : () => _submitPrivacyRequest('export'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.edit_note_outlined),
-                  title: Text(SettingsCopy.requestDataCorrection),
-                  subtitle: Text(SettingsCopy.requestDataCorrectionSubtitle),
+                  title: Text(L10n.requestDataCorrection),
+                  subtitle: Text(L10n.requestDataCorrectionSubtitle),
                   onTap: _busy ? null : () => _submitPrivacyRequest('correct'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.delete_forever_outlined),
-                  title: Text(SettingsCopy.requestAccountDeletion),
-                  subtitle: Text(SettingsCopy.requestAccountDeletionSubtitle),
+                  title: Text(L10n.requestAccountDeletion),
+                  subtitle: Text(L10n.requestAccountDeletionSubtitle),
                   onTap: _busy ? null : () => _submitPrivacyRequest('delete'),
                 ),
                 const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.admin_panel_settings_outlined),
-                  title: Text(SettingsCopy.managePermissions),
-                  subtitle: Text(SettingsCopy.managePermissionsSubtitle),
+                  title: Text(L10n.managePermissions),
+                  subtitle: Text(L10n.managePermissionsSubtitle),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: _openSystemSettings,
                 ),
@@ -295,7 +285,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.info_outline_rounded),
-                    title: Text(SettingsCopy.appVersion),
+                    title: Text(L10n.appVersion),
                     subtitle: Text(widget.appVersionLabel!),
                   ),
                 ],
@@ -304,7 +294,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _openSystemSettings,
                     icon: const Icon(Icons.settings_outlined),
-                    label: Text(SettingsCopy.openAppSettings),
+                    label: Text(L10n.openAppSettings),
                   ),
                 ),
               ],

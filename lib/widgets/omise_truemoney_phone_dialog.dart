@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/l10n.dart';
+import '../services/locale_service.dart';
 /// Prompts for the TrueMoney Wallet phone number (10 digits, Thai format).
 Future<String?> showOmiseTrueMoneyPhoneDialog({
   required BuildContext context,
@@ -61,7 +63,7 @@ class _OmiseTrueMoneyPhoneDialogState extends State<_OmiseTrueMoneyPhoneDialog> 
   void _submit() {
     final phone = _normalizeThaiPhone(_controller.text.trim());
     if (phone.length != 10 || !phone.startsWith('0')) {
-      setState(() => _errorText = 'กรุณากรอกเบอร์มือถือ 10 หลัก (เช่น 0812345678)');
+      setState(() => _errorText = L10n.invalidMobileTenDigits);
       return;
     }
     Navigator.of(context).pop(phone);
@@ -69,15 +71,16 @@ class _OmiseTrueMoneyPhoneDialogState extends State<_OmiseTrueMoneyPhoneDialog> 
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return AlertDialog(
-      title: const Text('เบอร์ TrueMoney Wallet'),
+      title: Text(L10n.trueMoneyPhoneTitle),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Text(
-            'กรอกเบอร์ที่ผูกกับ TrueMoney Wallet เพื่อรับ OTP และยืนยันการชำระเงิน',
-          ),
+          Text(L10n.trueMoneyPhoneHint),
           const SizedBox(height: 12),
           TextField(
             controller: _controller,
@@ -87,7 +90,7 @@ class _OmiseTrueMoneyPhoneDialogState extends State<_OmiseTrueMoneyPhoneDialog> 
               LengthLimitingTextInputFormatter(10),
             ],
             decoration: InputDecoration(
-              labelText: 'เบอร์มือถือ',
+              labelText: L10n.mobilePhoneLabel,
               hintText: '0812345678',
               errorText: _errorText,
               border: const OutlineInputBorder(),
@@ -99,13 +102,15 @@ class _OmiseTrueMoneyPhoneDialogState extends State<_OmiseTrueMoneyPhoneDialog> 
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('ยกเลิก'),
+          child: Text(L10n.cancel),
         ),
         FilledButton(
           onPressed: _submit,
-          child: const Text('ดำเนินการต่อ'),
+          child: Text(L10n.continueAction),
         ),
       ],
+    );
+      },
     );
   }
 }

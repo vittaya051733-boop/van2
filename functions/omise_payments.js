@@ -33,7 +33,7 @@ const MOBILE_BANK_CODES = {
   bay: 'mobile_banking_bay',
 };
 
-const DEFAULT_RETURN_URI = 'https://van2.web.app/payment/return';
+const DEFAULT_RETURN_URI = 'https://vantalad.web.app/payment/return';
 
 function normalizeThaiPhoneNumber(raw) {
   const digits = String(raw || '').replace(/\D/g, '');

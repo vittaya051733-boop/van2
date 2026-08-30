@@ -3,7 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/l10n.dart';
 import '../models/saved_payment_card.dart';
+import '../services/locale_service.dart';
 import '../utils/omise_card_token_helper.dart';
 import 'card_brand_strip.dart';
 
@@ -124,7 +126,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
       } else {
         final publicKey = widget.publicKey?.trim();
         if (publicKey == null || !publicKey.startsWith('pkey_')) {
-          throw Exception('ไม่พบ Omise public key สำหรับชำระด้วยบัตร');
+          throw Exception(L10n.omisePublicKeyMissing);
         }
         final expiryParts = _expiryController.text.split('/');
         final cardToken = await OmiseCardTokenHelper.createToken(
@@ -158,10 +160,10 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
       final message = error is FirebaseFunctionsException
           ? (error.message?.trim().isNotEmpty == true
               ? error.message!.trim()
-              : 'ไม่สามารถชำระด้วยบัตรได้')
+              : L10n.cardPaymentUnavailable)
           : error.toString();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ชำระด้วยบัตรไม่สำเร็จ: $message')),
+        SnackBar(content: Text(L10n.cardPaymentFailed(message))),
       );
     } finally {
       if (mounted) {
@@ -176,6 +178,9 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F6),
       body: Column(
@@ -220,6 +225,8 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
         ],
       ),
     );
+      },
+    );
   }
 
   Widget _buildHeader(BuildContext context) {
@@ -242,7 +249,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
           ),
           Expanded(
             child: Text(
-              'กรอกข้อมูลบัตร',
+              L10n.enterCardDetails,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 color: Colors.white,
@@ -261,7 +268,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Text(
-          'บัตรที่บันทึกไว้',
+          L10n.savedCards,
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
             fontWeight: FontWeight.w700,
             color: const Color(0xFF9A3412),
@@ -313,7 +320,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                             Text(
-                              'หมดอายุ ${card.expiryLabel}',
+                              L10n.cardExpires(card.expiryLabel),
                               style: const TextStyle(
                                 color: Color(0xFF6B7280),
                                 fontSize: 12,
@@ -330,7 +337,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
           ),
         TextButton(
           onPressed: () => setState(() => _selectedSavedCardId = null),
-          child: const Text('ใช้บัตรใหม่'),
+          child: Text(L10n.useNewCard),
         ),
       ],
     );
@@ -345,7 +352,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Text(
-          'ชำระด้วยบัตรที่บันทึกไว้ — กดชำระเงินเพื่อดำเนินการต่อ',
+          L10n.payWithSavedCardHint,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
             color: const Color(0xFF6B7280),
           ),
@@ -362,7 +369,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          _fieldLabel('เลขที่บัตรเครดิต / เดบิต'),
+          _fieldLabel(L10n.cardNumberLabel),
           TextFormField(
             controller: _numberController,
             keyboardType: TextInputType.number,
@@ -377,7 +384,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 16),
-          _fieldLabel('ชื่อบนบัตร'),
+          _fieldLabel(L10n.nameOnCard),
           TextFormField(
             controller: _nameController,
             textCapitalization: TextCapitalization.characters,
@@ -394,7 +401,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    _fieldLabel('วันหมดอายุ'),
+                    _fieldLabel(L10n.expiryDate),
                     TextFormField(
                       controller: _expiryController,
                       keyboardType: TextInputType.number,
@@ -421,7 +428,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
                         _fieldLabel('CVV/CID'),
                         const SizedBox(width: 4),
                         Tooltip(
-                          message: 'รหัส 3-4 หลักด้านหลังบัตร',
+                          message: L10n.cvvHint,
                           child: Icon(
                             Icons.info_outline,
                             size: 16,
@@ -469,7 +476,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
           ),
           Expanded(
             child: Text(
-              'บันทึกบัตรนี้สำหรับทำรายการครั้งถัดไป',
+              L10n.saveCardForLater,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
@@ -482,11 +489,9 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _securityLine(
-          'รับรองมาตรฐานความปลอดภัย PCI DSS สำหรับการชำระด้วยบัตรเครดิต/เดบิต',
-        ),
+        _securityLine(L10n.pciDssNotice),
         const SizedBox(height: 8),
-        _securityLine('ชำระเงินปลอดภัยด้วยมาตรฐาน 3D Secure'),
+        _securityLine(L10n.secure3dsNotice),
       ],
     );
   }
@@ -537,7 +542,7 @@ class _OmiseCardCheckoutScreenState extends State<OmiseCardCheckoutScreen> {
                     ),
                   )
                 : Text(
-                    'ชำระเงิน ฿${widget.amount.toStringAsFixed(2)}',
+                    L10n.payAmountBaht(widget.amount.toStringAsFixed(2)),
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,

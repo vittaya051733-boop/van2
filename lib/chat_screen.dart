@@ -2,9 +2,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'chat_room_screen.dart';
+import 'l10n/l10n.dart';
 import 'models/user_profile.dart';
 import 'services/friend_service.dart';
 import 'services/chat_warmup.dart';
+import 'services/locale_service.dart';
 import 'utils/app_colors.dart';
 import 'widgets/cached_app_avatar.dart';
 
@@ -67,29 +69,32 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (added == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('เพิ่มเพื่อนสำเร็จ')),);
+        SnackBar(content: Text(L10n.friendAddedSuccess)),);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
       return Scaffold(
         backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: _lineOrange,
         elevation: 0,
         titleSpacing: 0,
-        title: const Text('แชต'),
+        title: Text(L10n.chatTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: () {},
-            tooltip: 'ค้นหา',
+            tooltip: L10n.searchTooltip,
           ),
           IconButton(
             icon: const Icon(Icons.person_add_alt_1),
             onPressed: _openAddFriendSheet,
-            tooltip: 'เพิ่มเพื่อน',
+            tooltip: L10n.addFriendTooltip,
           ),
           const SizedBox(width: 4),
         ],
@@ -101,6 +106,8 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+      },
+    );
   }
 
   Widget _buildFriendList() {
@@ -109,7 +116,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (_friendsStream == null) {
-      return const _EmptyState(message: 'ไม่พบผู้ใช้');
+      return _EmptyState(message: L10n.userNotFound);
     }
 
     return StreamBuilder<List<FriendPreview>>(
@@ -120,12 +127,12 @@ class _ChatScreenState extends State<ChatScreen> {
         }
 
         if (snapshot.hasError) {
-          return const _EmptyState(message: 'เกิดข้อผิดพลาดในการโหลดรายชื่อเพื่อน');
+          return _EmptyState(message: L10n.loadFriendsError);
         }
 
         final friends = snapshot.data ?? const [];
         if (friends.isEmpty) {
-          return const _EmptyState(message: 'ยังไม่มีเพื่อนในระบบ');
+          return _EmptyState(message: L10n.noFriendsYet);
         }
 
         ChatWarmup.prefetchRoomsForFriends(
@@ -185,10 +192,10 @@ class _SearchField extends StatelessWidget {
           children: [
             Icon(Icons.search, color: accent),
             const SizedBox(width: 8),
-            const Expanded(
+            Expanded(
               child: Text(
-                'ค้นหาเพื่อนหรือข้อความ',
-                style: TextStyle(color: AppColors.accent, fontSize: 15),
+                L10n.searchFriendsOrMessages,
+                style: TextStyle(color: accent, fontSize: 15),
               ),
             ),
           ],
@@ -273,7 +280,7 @@ class _ChatTile extends StatelessWidget {
                           children: [
                             Icon(Icons.verified, color: accent, size: 14),
                             const SizedBox(width: 4),
-                            Text('บัญชีทางการ', style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.w600)),
+                            Text(L10n.officialAccount, style: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.w600)),
                           ],
                         ),
                       ),
@@ -395,6 +402,9 @@ class _AddFriendSheetState extends State<AddFriendSheet> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final viewInsets = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsets),
@@ -404,15 +414,14 @@ class _AddFriendSheetState extends State<AddFriendSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('เพิ่มเพื่อนด้วยชื่อร้าน',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(L10n.addFriendByShopName,
+                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
-            // No phone input, only show suggestions
-            const Text('เลือกจากรายชื่อร้านค้าด้านล่างเพื่อเพิ่มเป็นเพื่อน',
-                style: TextStyle(fontSize: 16)),
+            Text(L10n.addFriendByShopHint,
+                style: const TextStyle(fontSize: 16)),
             const SizedBox(height: 20),
-            const Text('ร้านค้าที่อาจรู้จัก',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text(L10n.shopsYouMayKnow,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             FutureBuilder<List<UserProfile>>(
               future: _suggestionsFuture,
@@ -422,7 +431,7 @@ class _AddFriendSheetState extends State<AddFriendSheet> {
                 }
                 final suggestions = snapshot.data ?? const [];
                 if (suggestions.isEmpty) {
-                  return const Text('ยังไม่มีร้านค้าอื่นที่พร้อมให้เพิ่มเป็นเพื่อน');
+                  return Text(L10n.noShopsToAddFriend);
                 }
                 return Column(
                   children: suggestions
@@ -443,9 +452,9 @@ class _AddFriendSheetState extends State<AddFriendSheet> {
         ),
       ),
     );
+      },
+    );
   }
-
-  // Removed: _search() (no longer needed)
 
   Future<void> _addFriend() async {
     final target = _result;
@@ -508,7 +517,7 @@ class _FriendResultCard extends StatelessWidget {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             ),
-            child: const Text('เพิ่ม'),
+            child: Text(L10n.addAction),
           ),
         ],
       ),

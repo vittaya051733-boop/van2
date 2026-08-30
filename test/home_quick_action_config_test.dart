@@ -126,14 +126,17 @@ void main() {
       );
     });
 
-    test('closing nationwide hides nationwide products from home', () {
-      final filtered = PublicCatalogService.filterHomeRetailProducts(
-        products,
-        nationwideEnabled: false,
-      );
+    test('closing nationwide button keeps products on home shelves', () {
+      final filtered = PublicCatalogService.filterHomeRetailProducts(products);
       expect(
         filtered.map((product) => product.id).toList(),
-        <String>['food-1', 'market-1', 'shop-1', 'pharmacy-1'],
+        <String>[
+          'food-1',
+          'market-1',
+          'shop-1',
+          'shop-nationwide',
+          'pharmacy-1',
+        ],
       );
     });
 

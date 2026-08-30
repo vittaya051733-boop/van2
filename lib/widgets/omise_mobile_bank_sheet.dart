@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
+import '../services/locale_service.dart';
+
 class OmiseMobileBankOption {
   const OmiseMobileBankOption({
     required this.code,
@@ -24,6 +27,9 @@ Future<String?> showOmiseMobileBankSheet(BuildContext context) {
     context: context,
     backgroundColor: Colors.transparent,
     builder: (sheetContext) {
+      return ListenableBuilder(
+        listenable: LocaleService.instance,
+        builder: (context, _) {
       return Container(
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -48,14 +54,14 @@ Future<String?> showOmiseMobileBankSheet(BuildContext context) {
                 ),
               ),
               Text(
-                'เลือกธนาคาร',
+                L10n.selectBank,
                 style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 6),
               Text(
-                'ระบบจะเปิดแอปธนาคารที่เลือกเพื่อยืนยันการชำระเงิน',
+                L10n.selectBankHint,
                 style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF6B7280),
                 ),
@@ -104,6 +110,8 @@ Future<String?> showOmiseMobileBankSheet(BuildContext context) {
             ],
           ),
         ),
+      );
+        },
       );
     },
   );

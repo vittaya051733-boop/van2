@@ -8,14 +8,19 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'admin_contact_screen.dart';
 import 'call_screen.dart';
+import 'l10n/l10n.dart';
+import 'order_claim_request_screen.dart';
 import 'chat_room_screen.dart';
 import 'models/rider_vehicle_profile.dart';
 import 'models/user_profile.dart';
+import 'services/admin_support_config.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/chat_warmup.dart';
 import 'services/notification_service.dart';
 import 'services/review_service.dart';
+import 'utils/localized_product_text.dart';
 import 'utils/catalog_product_image_url.dart';
 import 'widgets/cached_app_image.dart';
 import 'widgets/no_rider_customer_actions_banner.dart';
@@ -239,7 +244,7 @@ class OrderRoadmapScreen extends StatelessWidget {
         appBar: AppBar(
           backgroundColor: Colors.white,
           surfaceTintColor: Colors.white,
-          title: const Text('ประวัติออเดอร์'),
+          title: Text(L10n.orderHistoryTitle),
         ),
         body: _CustomerHistoryRoadmapList(
           uid: uid,
@@ -258,12 +263,12 @@ class OrderRoadmapScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
-        title: const Text('Roadmap การจัดส่ง'),
+        title: Text(L10n.deliveryRoadmapTitle),
         actions: [
           TextButton.icon(
             onPressed: () => _openHistory(context),
             icon: const Icon(Icons.history, size: 20),
-            label: const Text('ประวัติ'),
+            label: Text(L10n.history),
           ),
         ],
       ),
@@ -351,10 +356,10 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if ((uid == null || uid!.isEmpty) && preferredOrderIds.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text('กรุณาเข้าสู่ระบบเพื่อดูโรดแมปออเดอร์'),
+          padding: const EdgeInsets.all(24),
+          child: Text(L10n.signInRequiredForOrders),
         ),
       );
     }
@@ -377,7 +382,7 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text('โหลดโรดแมปไม่สำเร็จ: ${snapshot.error}'),
+              child: Text(L10n.loadRoadmapFailed(snapshot.error!)),
             ),
           );
         }
@@ -419,22 +424,22 @@ class _CustomerActiveRoadmapList extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'ไม่มีออเดอร์ที่กำลังดำเนินการ',
+                  Text(
+                    L10n.noActiveOrders,
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'ออเดอร์ที่ส่งสำเร็จ ยกเลิก หรือขอคืนเงินแล้วจะอยู่ในปุ่มประวัติ',
+                  Text(
+                    L10n.completedOrdersInHistory,
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF6B7280)),
+                    style: const TextStyle(color: Color(0xFF6B7280)),
                   ),
                   const SizedBox(height: 16),
                   OutlinedButton.icon(
                     onPressed: onOpenHistory,
                     icon: const Icon(Icons.history),
-                    label: const Text('ดูประวัติออเดอร์'),
+                    label: Text(L10n.viewOrderHistory),
                   ),
                 ],
               ),
@@ -537,10 +542,10 @@ class _CustomerHistoryRoadmapListState
     final firestore = widget.firestore;
 
     if (uid == null || uid.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text('กรุณาเข้าสู่ระบบเพื่อดูประวัติออเดอร์'),
+          padding: const EdgeInsets.all(24),
+          child: Text(L10n.signInRequiredForHistory),
         ),
       );
     }
@@ -560,7 +565,7 @@ class _CustomerHistoryRoadmapListState
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text('โหลดประวัติไม่สำเร็จ: ${snapshot.error}'),
+              child: Text(L10n.loadHistoryFailed(snapshot.error!)),
             ),
           );
         }
@@ -596,10 +601,10 @@ class _CustomerHistoryRoadmapListState
         );
 
         if (historyDocs.isEmpty) {
-          return const Center(
+          return Center(
             child: Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('ยังไม่มีประวัติออเดอร์ที่ส่งสำเร็จ'),
+              padding: const EdgeInsets.all(24),
+              child: Text(L10n.noCompletedOrderHistory),
             ),
           );
         }
@@ -608,7 +613,7 @@ class _CustomerHistoryRoadmapListState
           padding: const EdgeInsets.all(12),
           children: <Widget>[
             if (productEntries.isNotEmpty) ...<Widget>[
-              const _HistorySectionHeader(title: 'สินค้า'),
+              _HistorySectionHeader(title: L10n.historyProductsSection),
               const SizedBox(height: 8),
               for (final entry in productEntries) ...<Widget>[
                 OrderHistoryCompactProductCard(
@@ -621,6 +626,9 @@ class _CustomerHistoryRoadmapListState
                       0,
                   products: buildHistoryProductLines(entry.data),
                   isBusy: _reorderingOrderId == entry.id,
+                  isClaimReplacement:
+                      (entry.data['orderType'] as String?)?.trim() ==
+                          'claim_replacement',
                   onReorder: widget.onReorderProducts == null
                       ? null
                       : () => _handleReorder(entry.data, entry.id),
@@ -630,7 +638,7 @@ class _CustomerHistoryRoadmapListState
             ],
             if (travelEntries.isNotEmpty) ...<Widget>[
               if (productEntries.isNotEmpty) const SizedBox(height: 6),
-              const _HistorySectionHeader(title: 'การเดินทาง'),
+              _HistorySectionHeader(title: L10n.historyTravelSection),
               const SizedBox(height: 8),
               for (final entry in travelEntries) ...<Widget>[
                 OrderHistoryCompactTravelCard(
@@ -709,7 +717,7 @@ class _OrderRoadmapCard extends StatelessWidget {
           return _roadmapOrderCard(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('โหลดออเดอร์ $orderId ไม่สำเร็จ: ${snapshot.error}'),
+              child: Text(L10n.loadOrderFailed(orderId, snapshot.error!)),
             ),
           );
         }
@@ -719,7 +727,7 @@ class _OrderRoadmapCard extends StatelessWidget {
           return _roadmapOrderCard(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('ไม่พบข้อมูลออเดอร์ $orderId'),
+              child: Text(L10n.orderNotFound(orderId)),
             ),
           );
         }
@@ -731,6 +739,7 @@ class _OrderRoadmapCard extends StatelessWidget {
 
         final roadmap = _buildRoadmapState(data);
         final isTravelOrder = _isTravelPassengerOrder(data);
+        final isClaimReplacement = _isClaimReplacementOrder(data);
         final shopName = (data['shopName'] as String?)?.trim();
         final orderCode = (data['orderCode'] as String?)?.trim();
         final total =
@@ -827,22 +836,28 @@ class _OrderRoadmapCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   isTravelOrder
-                      ? 'จุดรับ: ${pickupLabel?.isNotEmpty == true ? pickupLabel : '-'}'
-                      : 'ร้าน: ${shopName?.isNotEmpty == true ? shopName : '-'}',
+                      ? L10n.pickupPointLabel(pickupLabel ?? '')
+                      : L10n.shopLabel(shopName ?? ''),
                 ),
                 if (isTravelOrder)
                   Text(
-                    'จุดส่ง: ${destinationLabel?.isNotEmpty == true ? destinationLabel : '-'}',
+                    L10n.dropoffLabel(destinationLabel ?? ''),
                   ),
-                Text('ยอดชำระ: THB ${total.toStringAsFixed(1)}'),
+                Text(
+                  isClaimReplacement
+                      ? L10n.substituteNoCharge
+                      : L10n.paymentTotalThb(total.toDouble()),
+                ),
                 if (isTravelOrder && travelVehicleLabel != null)
-                  Text('ประเภทรถ: $travelVehicleLabel'),
+                  Text(L10n.vehicleTypeLabel(travelVehicleLabel!)),
                 if (isTravelOrder && travelScheduleLabel != null)
-                  Text('เวลาเดินทาง: $travelScheduleLabel'),
+                  Text(L10n.travelScheduleLabel(travelScheduleLabel!)),
                 if (productEntries.isNotEmpty && !isTravelOrder) ...[
                   const SizedBox(height: 10),
                   Text(
-                    isTravelOrder ? 'รายละเอียดการเดินทาง' : 'สินค้าในออเดอร์',
+                    isTravelOrder
+                        ? L10n.travelDetails
+                        : L10n.orderProducts,
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
@@ -866,9 +881,9 @@ class _OrderRoadmapCard extends StatelessWidget {
                 if (deliveryProofImageUrl != null &&
                     deliveryProofImageUrl.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  const Text(
-                    'รูปยืนยันจากไรเดอร์',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  Text(
+                    L10n.riderProofPhoto,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   ClipRRect(
@@ -882,7 +897,7 @@ class _OrderRoadmapCard extends StatelessWidget {
                         height: 120,
                         color: const Color(0xFFF3F4F6),
                         alignment: Alignment.center,
-                        child: const Text('โหลดรูปยืนยันไม่สำเร็จ'),
+                        child: Text(L10n.proofPhotoLoadFailed),
                       ),
                     ),
                   ),
@@ -931,7 +946,7 @@ class _OrderRoadmapCard extends StatelessWidget {
                                     );
                                   },
                             icon: const Icon(Icons.chat_bubble_outline_rounded),
-                            label: const Text('แชทไรเดอร์'),
+                            label: Text(L10n.chatRider),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -948,13 +963,49 @@ class _OrderRoadmapCard extends StatelessWidget {
                                   },
                             icon: const Icon(Icons.phone_in_talk_outlined),
                             label: Text(
-                              canCall ? 'โทรไรเดอร์' : 'โทรไรเดอร์ไม่ได้',
+                              canCall ? L10n.callRider : L10n.callRiderUnavailable,
                             ),
                           ),
                         ),
                       ],
                     );
                   },
+                ),
+                const SizedBox(height: 8),
+                if (_canRequestProductClaim(data))
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => OrderClaimRequestScreen(
+                              orderId: orderId,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.assignment_return_outlined),
+                      label: Text(L10n.claimProduct),
+                    ),
+                  ),
+                if (_canRequestProductClaim(data)) const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AdminContactScreen(
+                            config: kVan2AdminSupportConfig,
+                            orderId: orderId,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.support_agent_outlined),
+                    label: Text(L10n.contactAdminAboutOrder),
+                  ),
                 ),
                 if (isActiveTravelTrackingOrder(data)) ...[
                   const SizedBox(height: 10),
@@ -968,7 +1019,7 @@ class _OrderRoadmapCard extends StatelessWidget {
                         );
                       },
                       icon: const Icon(Icons.map_outlined, size: 18),
-                      label: const Text('แผนที่'),
+                      label: Text(L10n.mapLabel),
                       style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFFDC2626),
                         foregroundColor: Colors.white,
@@ -992,14 +1043,14 @@ class _OrderRoadmapCard extends StatelessWidget {
                     orderActions: orderActions,
                   ),
                 _TimelineStepTile(
-                  label: 'ไรเดอร์รับออเดอร์',
+                  label: L10n.riderAcceptedOrder,
                   status: roadmap.riderAccepted,
                   leadingIcon: Icons.assignment_turned_in_outlined,
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder
-                      ? 'ไรเดอร์ถึงจุดรับแล้ว'
-                      : 'ร้านค้ารับออเดอร์',
+                      ? L10n.riderAtPickup
+                      : L10n.shopAcceptedOrder,
                   status: isTravelOrder
                       ? roadmap.riderScannedPickup
                       : roadmap.shopPreparing,
@@ -1009,8 +1060,8 @@ class _OrderRoadmapCard extends StatelessWidget {
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder
-                      ? 'กำลังรอผู้โดยสารขึ้นรถ'
-                      : 'ไรเดอร์สแกนรับสินค้า',
+                      ? L10n.waitingPassengerBoard
+                      : L10n.riderScannedPickup,
                   status: isTravelOrder
                       ? roadmap.shopPreparing
                       : roadmap.riderScannedPickup,
@@ -1020,15 +1071,17 @@ class _OrderRoadmapCard extends StatelessWidget {
                 ),
                 _TimelineStepTile(
                   label: isTravelOrder
-                      ? 'กำลังเดินทางไปจุดส่ง'
-                      : 'ไรเดอร์กำลังไปส่ง',
+                      ? L10n.travelingToDropoff
+                      : L10n.riderDelivering,
                   status: roadmap.delivering,
                   leadingIcon: isTravelOrder
                       ? Icons.directions_car_outlined
                       : Icons.delivery_dining_outlined,
                 ),
                 _TimelineStepTile(
-                  label: isTravelOrder ? 'ถึงจุดหมายแล้ว' : 'ส่งถึงลูกค้าแล้ว',
+                  label: isTravelOrder
+                      ? L10n.arrivedAtDestination
+                      : L10n.deliveredToCustomer,
                   status: roadmap.delivered,
                   leadingIcon: isTravelOrder
                       ? Icons.flag_outlined
@@ -1059,13 +1112,13 @@ class _OrderRoadmapCard extends StatelessWidget {
     final capturedAt = _formatProofCapturedAt(data['deliveryProofCapturedAt']);
 
     if (capturedByName != null && capturedAt != null) {
-      return 'ยืนยันโดย $capturedByName เมื่อ $capturedAt';
+      return L10n.confirmedByAt(capturedByName, capturedAt);
     }
     if (capturedByName != null) {
-      return 'ยืนยันโดย $capturedByName';
+      return L10n.confirmedBy(capturedByName);
     }
     if (capturedAt != null) {
-      return 'ถ่ายเมื่อ $capturedAt';
+      return L10n.capturedAt(capturedAt);
     }
     return null;
   }
@@ -1377,7 +1430,10 @@ class _OrderRoadmapCard extends StatelessWidget {
       results.add(
         _RoadmapProductEntry(
           productId: productId,
-          name: name ?? 'สินค้า',
+          name: LocalizedProductText.name(
+            Map<String, dynamic>.from(rawProduct),
+            productId: productId,
+          ),
           imageUrl: imageUrl,
           quantity: quantity,
         ),
@@ -1444,7 +1500,7 @@ class _OrderRoadmapCard extends StatelessWidget {
     final fallbackName =
         ((data['driverName'] as String?)?.trim().isNotEmpty ?? false)
         ? (data['driverName'] as String).trim()
-        : 'ไรเดอร์';
+        : L10n.rider;
 
     try {
       final doc = await firestore.collection('riders').doc(driverId).get();
@@ -1469,7 +1525,7 @@ class _OrderRoadmapCard extends StatelessWidget {
     final fallbackName =
         ((data['driverName'] as String?)?.trim().isNotEmpty ?? false)
         ? (data['driverName'] as String).trim()
-        : 'ไรเดอร์';
+        : L10n.rider;
     final fallbackPhone = (data['driverPhone'] as String?)?.trim();
 
     if (driverId == null || driverId.isEmpty) {
@@ -1524,7 +1580,7 @@ class _OrderRoadmapCard extends StatelessWidget {
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!ok) {
       messenger?.showSnackBar(
-        const SnackBar(content: Text('ไม่สามารถโทรออกได้')),
+        SnackBar(content: Text(L10n.cannotMakeCall)),
       );
     }
   }
@@ -1545,14 +1601,14 @@ class _OrderRoadmapCard extends StatelessWidget {
           return;
         }
         if (caller.uid == riderUid) {
-          throw Exception('ไม่สามารถโทรหาบัญชีตัวเองได้');
+          throw Exception(L10n.cannotCallSelf);
         }
 
         final callee =
             riderProfile ??
             UserProfile(
               uid: riderUid,
-              displayName: 'ไรเดอร์',
+              displayName: L10n.rider,
               phoneNumber: contact?.phone,
             );
 
@@ -1583,7 +1639,7 @@ class _OrderRoadmapCard extends StatelessWidget {
         return;
       } catch (error) {
         messenger?.showSnackBar(
-          SnackBar(content: Text('เริ่มการโทรไม่สำเร็จ: $error')),
+          SnackBar(content: Text(L10n.startCallFailed(error))),
         );
       }
     }
@@ -1595,14 +1651,14 @@ class _OrderRoadmapCard extends StatelessWidget {
     }
 
     messenger?.showSnackBar(
-      const SnackBar(content: Text('ไม่พบข้อมูลไรเดอร์สำหรับโทรออก')),
+      SnackBar(content: Text(L10n.riderInfoMissingForCall)),
     );
   }
 
   Future<UserProfile> _buildCurrentUserProfile() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
-      throw Exception('กรุณาเข้าสู่ระบบก่อนโทรหาไรเดอร์');
+      throw Exception(L10n.signInRequiredBeforeCallRider);
     }
 
     final customerDoc = await FirebaseFirestore.instance
@@ -1619,7 +1675,7 @@ class _OrderRoadmapCard extends StatelessWidget {
           ? user.displayName!.trim()
           : (user.email?.trim().isNotEmpty == true
                 ? user.email!.trim()
-                : 'ลูกค้า'),
+                : L10n.customer),
       phoneNumber: user.phoneNumber,
       photoUrl: user.photoURL,
     );
@@ -1772,6 +1828,27 @@ bool _isTravelPassengerOrder(Map<String, dynamic> data) {
   return orderType == 'travel_passenger' || serviceType == 'travel_passenger';
 }
 
+bool _isClaimReplacementOrder(Map<String, dynamic> data) {
+  return (data['orderType'] as String?)?.trim() == 'claim_replacement';
+}
+
+bool _canRequestProductClaim(Map<String, dynamic> data) {
+  if (!_isDeliveredRoadmapOrder(data)) {
+    return false;
+  }
+  if (_isTravelPassengerOrder(data)) {
+    return false;
+  }
+  if (_isClaimReplacementOrder(data)) {
+    return false;
+  }
+  final claimStatus = (data['claimStatus'] as String?)?.trim().toLowerCase();
+  if (claimStatus == 'replaced' || claimStatus == 'credited') {
+    return false;
+  }
+  return true;
+}
+
 String? _readTravelPickupLabel(Map<String, dynamic> data) {
   final travelRequest = data['travelRequest'];
   if (travelRequest is Map) {
@@ -1912,7 +1989,7 @@ class _RoadmapProductImageCard extends StatelessWidget {
                 ),
                 const Spacer(),
                 Text(
-                  quantity > 0 ? '$quantity ชิ้น' : '-',
+                  L10n.quantityPiecesOrDash(quantity),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1979,8 +2056,10 @@ class _OrderReviewPanel extends StatelessWidget {
     }
 
     final panelTitle = hasProductReview || hasShopReview
-        ? (hasRiderReview ? 'รีวิวสินค้า ร้านค้า และไรเดอร์' : 'รีวิวสินค้าและร้านค้า')
-        : 'รีวิวไรเดอร์';
+        ? (hasRiderReview
+            ? L10n.reviewProductsShopRider
+            : L10n.reviewProductsShop)
+        : L10n.reviewRider;
 
     return Padding(
       padding: const EdgeInsets.only(top: 12),
@@ -2011,7 +2090,7 @@ class _OrderReviewPanel extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'รีวิวจากออเดอร์ที่ส่งสำเร็จ ช่วยให้ลูกค้าคนอื่นตัดสินใจง่ายขึ้น',
+              L10n.reviewHelpOthers,
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: const Color(0xFF92400E)),
@@ -2024,7 +2103,7 @@ class _OrderReviewPanel extends StatelessWidget {
                 foregroundColor: Colors.white,
               ),
               icon: const Icon(Icons.rate_review_outlined),
-              label: const Text('รีวิว / แก้ไขรีวิว'),
+              label: Text(L10n.reviewOrEdit),
             ),
           ],
         ),
@@ -2038,7 +2117,7 @@ class _OrderReviewPanel extends StatelessWidget {
   ) async {
     final shopId = _readOrderShopId(data);
     final shopOwnerId = _resolveReviewShopOwnerId(data, shopId);
-    final shopName = (data['shopName'] as String?)?.trim() ?? 'ร้านค้า';
+    final shopName = LocalizedProductText.shopName(data);
     final hasShopReview = shopId.isNotEmpty;
     final allowedProductIds = _readOrderProductIds(data);
     final reviewableProducts = products
@@ -2063,7 +2142,9 @@ class _OrderReviewPanel extends StatelessWidget {
         _ReviewDraft(
           id: reviewId,
           title: product.name,
-          subtitle: product.quantity > 0 ? 'จำนวน ${product.quantity}' : null,
+          subtitle: product.quantity > 0
+              ? L10n.quantityCount(product.quantity)
+              : null,
           imageUrl: product.imageUrl,
           rating: _readReviewRating(review),
           comment: (review?['comment'] as String?) ?? '',
@@ -2093,7 +2174,7 @@ class _OrderReviewPanel extends StatelessWidget {
         ? _ReviewDraft(
             id: shopReviewId,
             title: shopName,
-            subtitle: 'รีวิวร้านค้า',
+            subtitle: L10n.reviewShop,
             imageUrl: _roadmapReadTrimmedString(
               data['shopImageUrl'],
               data['imageUrl'],
@@ -2128,11 +2209,11 @@ class _OrderReviewPanel extends StatelessWidget {
             'driverName',
             'deliveryProofCapturedByName',
           ]) ??
-          'ไรเดอร์';
+          L10n.rider;
       riderDraft = _ReviewDraft(
         id: riderReviewId,
         title: riderName,
-        subtitle: 'รีวิวไรเดอร์',
+        subtitle: L10n.reviewRider,
         imageUrl: null,
         rating: _readReviewRating(riderReview),
         comment: (riderReview?['comment'] as String?) ?? '',
@@ -2347,7 +2428,7 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
     final draftsToSave = allDrafts.where((draft) => draft.rating > 0).toList();
     if (draftsToSave.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาให้คะแนนอย่างน้อย 1 รายการ')),
+        SnackBar(content: Text(L10n.rateAtLeastOne)),
       );
       return;
     }
@@ -2374,8 +2455,8 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
           SnackBar(
             content: Text(
               firstError == null
-                  ? 'บันทึกรีวิวไม่สำเร็จ'
-                  : 'บันทึกรีวิวไม่สำเร็จ: $firstError',
+                  ? L10n.reviewSaveFailed
+                  : L10n.reviewSaveFailedWithError(firstError),
             ),
           ),
         );
@@ -2384,8 +2465,8 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
 
       Navigator.of(context).pop();
       final message = savedCount == draftsToSave.length
-          ? 'บันทึกรีวิวเรียบร้อยแล้ว'
-          : 'บันทึกรีวิวได้ $savedCount/${draftsToSave.length} รายการ';
+          ? L10n.reviewSaved
+          : L10n.reviewSavedPartial(savedCount, draftsToSave.length);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -2395,7 +2476,7 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('บันทึกรีวิวไม่สำเร็จ: $error')));
+      ).showSnackBar(SnackBar(content: Text(L10n.reviewSaveFailedWithError(error))));
     } finally {
       if (mounted) {
         setState(() => _saving = false);
@@ -2410,9 +2491,9 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
         widget.productDrafts.isNotEmpty || widget.shopDraft != null;
     final sheetTitle = hasShopOrProduct
         ? (widget.riderDraft != null
-            ? 'รีวิวสินค้า ร้านค้า และไรเดอร์'
-            : 'รีวิวสินค้าและร้านค้า')
-        : 'รีวิวไรเดอร์';
+            ? L10n.reviewProductsShopRider
+            : L10n.reviewProductsShop)
+        : L10n.reviewRider;
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + bottomInset),
@@ -2430,7 +2511,7 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'ให้คะแนนและแนบรูปได้สูงสุด ${ReviewService.maxImagesPerReview} รูปต่อรายการ ค่าเริ่มต้นคือ 5 ดาว',
+                L10n.reviewMaxImagesHint(ReviewService.maxImagesPerReview),
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
@@ -2470,7 +2551,7 @@ class _OrderReviewSheetState extends State<_OrderReviewSheet> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save_outlined),
-                label: Text(_saving ? 'กำลังบันทึก...' : 'บันทึกรีวิว'),
+                label: Text(_saving ? L10n.savingReview : L10n.saveReview),
               ),
             ],
           ),
@@ -2569,9 +2650,9 @@ class _ReviewDraftTileState extends State<_ReviewDraftTile> {
             controller: _commentController,
             maxLines: 2,
             maxLength: 1000,
-            decoration: const InputDecoration(
-              labelText: 'ความคิดเห็น (ไม่บังคับ)',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: L10n.commentOptional,
+              border: const OutlineInputBorder(),
               counterText: '',
             ),
             onChanged: (value) => draft.comment = value,
@@ -2604,7 +2685,7 @@ class _ReviewDraftTileState extends State<_ReviewDraftTile> {
                     Icons.add_photo_alternate_outlined,
                     size: 18,
                   ),
-                  label: const Text('เพิ่มรูป'),
+                  label: Text(L10n.addPhoto),
                 ),
             ],
           ),
@@ -2623,7 +2704,7 @@ class _ReviewDraftTileState extends State<_ReviewDraftTile> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'อัปโหลดได้สูงสุด ${ReviewService.maxImagesPerReview} รูปต่อรีวิว',
+            L10n.maxPhotosPerReview(ReviewService.maxImagesPerReview),
           ),
         ),
       );
@@ -2938,7 +3019,7 @@ class _AwaitingShopDecisionBannerState
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'รอเพิ่ม ${_customerExtraWaitDuration.inMinutes} นาที ร้านค้าจะเห็นออเดอร์นี้อีกครั้ง',
+              L10n.waitExtraMinutes(_customerExtraWaitDuration.inMinutes),
             ),
           ),
         );
@@ -2947,7 +3028,7 @@ class _AwaitingShopDecisionBannerState
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('บันทึกการรอไม่สำเร็จ: $e')));
+        ).showSnackBar(SnackBar(content: Text(L10n.saveWaitFailed(e))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -2973,13 +3054,13 @@ class _AwaitingShopDecisionBannerState
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('ยกเลิกออเดอร์แล้ว')));
+        ).showSnackBar(SnackBar(content: Text(L10n.orderCancelled)));
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('ยกเลิกออเดอร์ไม่สำเร็จ: $e')));
+        ).showSnackBar(SnackBar(content: Text(L10n.cancelOrderFailed(e))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -3016,10 +3097,10 @@ class _AwaitingShopDecisionBannerState
               Expanded(
                 child: Text(
                   waiting
-                      ? 'กำลังรอร้านค้าอีก 15 นาที'
+                      ? L10n.waitingShopExtra15
                       : rejected
-                      ? 'ร้านค้าปฏิเสธออเดอร์นี้'
-                      : 'ร้านค้ายังไม่รับออเดอร์หลังไรเดอร์รับงานแล้ว',
+                      ? L10n.shopRejectedOrder
+                      : L10n.shopNotAcceptedAfterRider,
                   style: const TextStyle(
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF92400E),
@@ -3031,10 +3112,10 @@ class _AwaitingShopDecisionBannerState
           const SizedBox(height: 6),
           Text(
             waiting
-                ? 'หากร้านค้ายังไม่รับงานภายในเวลาที่กำหนด คุณสามารถยกเลิกออเดอร์ได้'
+                ? L10n.canCancelIfShopLate
                 : (_canRequestRefund
-                      ? 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์และขอคืนเงินได้'
-                      : 'คุณสามารถเลือกรออีก 15 นาที หรือยกเลิกออเดอร์นี้ได้'),
+                      ? L10n.canWaitOrCancelRefund
+                      : L10n.canWaitOrCancel),
             style: const TextStyle(color: Color(0xFF78350F), fontSize: 13),
           ),
           const SizedBox(height: 10),
@@ -3044,7 +3125,7 @@ class _AwaitingShopDecisionBannerState
                 child: OutlinedButton.icon(
                   onPressed: _busy || waiting ? null : _wait15Min,
                   icon: const Icon(Icons.timer_outlined),
-                  label: Text(waiting ? 'รออยู่...' : 'รออีก 15 นาที'),
+                  label: Text(waiting ? L10n.waiting : L10n.wait15More),
                 ),
               ),
               const SizedBox(width: 8),
@@ -3055,7 +3136,7 @@ class _AwaitingShopDecisionBannerState
                   ),
                   onPressed: _busy ? null : _cancelOrder,
                   icon: const Icon(Icons.cancel_outlined),
-                  label: const Text('ยกเลิกออเดอร์'),
+                  label: Text(L10n.cancelOrder),
                 ),
               ),
             ],

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/promotion_models.dart';
+import '../services/locale_service.dart';
 
 class PromotionCartPanel extends StatelessWidget {
   const PromotionCartPanel({
@@ -28,6 +30,9 @@ class PromotionCartPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     if (config.isBannerOnlyCart) {
       return _buildCouponOnly(context);
     }
@@ -37,6 +42,8 @@ class PromotionCartPanel extends StatelessWidget {
     }
 
     return _buildExpanded(context);
+      },
+    );
   }
 
   Widget _buildExpanded(BuildContext context) {
@@ -51,7 +58,7 @@ class PromotionCartPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         if (config.showAutoPromotionsInCart) ...<Widget>[
-          _sectionTitle(context, 'โปรที่ใช้ได้'),
+          _sectionTitle(context, L10n.promosAvailable),
           const SizedBox(height: 8),
           if (promoLines.isNotEmpty)
             for (final line in promoLines)
@@ -60,11 +67,11 @@ class PromotionCartPanel extends StatelessWidget {
             for (final near in discounts.nearMissPromotions)
               _nearMissTile(context, near)
           else
-            _infoTile(context, 'ยังไม่มีโปรที่ใช้ได้ในตะกร้านี้'),
+            _infoTile(context, L10n.noPromosInCart),
           const SizedBox(height: 12),
         ],
         if (config.showCouponField) ...<Widget>[
-          _sectionTitle(context, 'คูปอง'),
+          _sectionTitle(context, L10n.couponsSection),
           const SizedBox(height: 8),
           _couponField(context),
           if (couponLines.isNotEmpty)
@@ -112,7 +119,7 @@ class PromotionCartPanel extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                'ใช้คูปอง $appliedCouponCode แล้ว',
+                L10n.couponApplied(appliedCouponCode!),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF15803D),
                   fontWeight: FontWeight.w700,
@@ -135,7 +142,7 @@ class PromotionCartPanel extends StatelessWidget {
           Row(
             children: <Widget>[
               Text(
-                'ส่วนลดรวม',
+                L10n.totalDiscountLabel,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -201,8 +208,8 @@ class PromotionCartPanel extends StatelessWidget {
             child: TextField(
               controller: couponController,
               textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                hintText: 'กรอกรหัสคูปอง',
+              decoration: InputDecoration(
+                hintText: L10n.enterCouponCode,
                 border: InputBorder.none,
                 isDense: true,
               ),
@@ -212,7 +219,7 @@ class PromotionCartPanel extends StatelessWidget {
             IconButton(
               onPressed: isApplyingCoupon ? null : onClearCoupon,
               icon: const Icon(Icons.close_rounded, size: 20),
-              tooltip: 'ลบคูปอง',
+              tooltip: L10n.removeCoupon,
             ),
           FilledButton(
             onPressed: isApplyingCoupon ? null : onApplyCoupon,
@@ -229,7 +236,7 @@ class PromotionCartPanel extends StatelessWidget {
                       color: Colors.white,
                     ),
                   )
-                : const Text('ใช้'),
+                : Text(L10n.apply),
           ),
         ],
       ),
@@ -284,7 +291,7 @@ class PromotionCartPanel extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'ใช้ ${line.code ?? line.label} แล้ว',
+              L10n.promoApplied(line.code ?? line.label),
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -317,7 +324,9 @@ class PromotionCartPanel extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '${near.label} — ขาดอีก ฿${near.shortfall.toStringAsFixed(0)}',
+              L10n.en
+                  ? '${near.label} — need ฿${near.shortfall.toStringAsFixed(0)} more'
+                  : '${near.label} — ขาดอีก ฿${near.shortfall.toStringAsFixed(0)}',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFF6B7280),
                 fontWeight: FontWeight.w600,
@@ -368,7 +377,7 @@ class PromotionDiscountBreakdown extends StatelessWidget {
           Row(
             children: <Widget>[
               Text(
-                'ส่วนลดโปร',
+                L10n.promoDiscountLabel,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: const Color(0xFF1F2937),
@@ -390,7 +399,7 @@ class PromotionDiscountBreakdown extends StatelessWidget {
           Row(
             children: <Widget>[
               Text(
-                'ส่วนลดคูปอง',
+                L10n.couponDiscountLabel,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: const Color(0xFF1F2937),

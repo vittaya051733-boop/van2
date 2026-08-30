@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../l10n/l10n.dart';
 import '../models/promotion_models.dart';
+import '../services/locale_service.dart';
 import '../services/user_coupon_wallet_service.dart';
 
 class ClaimableCouponPopupHost extends StatefulWidget {
@@ -112,8 +114,8 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
         return;
       }
       final message = result.alreadyClaimed
-          ? 'คุณรับคูปองนี้แล้ว — ดูได้ใน "คูปองของฉัน"'
-          : 'เก็บคูปองใน "คูปองของฉัน" แล้ว';
+          ? L10n.couponAlreadyClaimedView
+          : L10n.couponSavedToMyCoupons;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
@@ -124,7 +126,7 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('รับคูปองไม่สำเร็จ: $error'),
+            content: Text(L10n.claimCouponFailed(error)),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -138,6 +140,9 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     if (_checkingDismissals || _visibleCoupon == null) {
       return const SizedBox.shrink();
     }
@@ -248,7 +253,9 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
                             if (coupon.minSubtotal > 0) ...<Widget>[
                               const SizedBox(height: 6),
                               Text(
-                                'ขั้นต่ำ ฿${coupon.minSubtotal.toStringAsFixed(0)}',
+                                L10n.minSubtotalBaht(
+                                  coupon.minSubtotal.toStringAsFixed(0),
+                                ),
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                             ],
@@ -292,6 +299,8 @@ class _ClaimableCouponPopupHostState extends State<ClaimableCouponPopupHost> {
           ),
         ),
       ],
+    );
+      },
     );
   }
 

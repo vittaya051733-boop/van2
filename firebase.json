@@ -75,6 +75,27 @@
         "destination": "/terms.html"
       },
       {
+        "source": "/product/*/og.jpg",
+        "function": {
+          "functionId": "productShareOgImage",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/product/*/share.jpg",
+        "function": {
+          "functionId": "productShareOgImage",
+          "region": "asia-southeast1"
+        }
+      },
+      {
+        "source": "/product/**",
+        "function": {
+          "functionId": "productSharePreview",
+          "region": "asia-southeast1"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -86,7 +107,7 @@
       "van-merchant.firebaseapp.com",
       "van-merchant.web.app",
       "van1.web.app",
-      "van2.web.app",
+      "vantalad.web.app",
       "van3.web.app",
       "van4.web.app"
     ],
@@ -97,7 +118,7 @@
         "oAuthBrandDisplayName": "VANTALAD",
         "supportEmail": "support@vantalad.app",
         "authorizedRedirectUris": [
-          "https://van2.web.app",
+          "https://vantalad.web.app",
           "https://van1.web.app",
           "https://van3.web.app",
           "https://van4.web.app",

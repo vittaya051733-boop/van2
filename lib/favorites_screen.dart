@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
 import 'public_catalog_service.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/favorites_service.dart';
@@ -89,9 +90,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4FAFB),
       appBar: AppBar(
-        title: const Text(
-          'รายการโปรด',
-          style: TextStyle(fontWeight: FontWeight.w800),
+        title: Text(
+          L10n.favoritesTitle,
+          style: const TextStyle(fontWeight: FontWeight.w800),
         ),
         backgroundColor: const Color(0xFFF57C00),
         foregroundColor: Colors.white,
@@ -100,13 +101,13 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         valueListenable: FavoritesService.instance.favorites,
         builder: (context, items, _) {
           if (items.isEmpty) {
-            return const Center(
+            return Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Text(
-                  'ยังไม่มีรายการโปรด\nกดไอคอนหัวใจที่สินค้าหรือร้านค้าเพื่อบันทึก',
+                  L10n.favoritesEmpty,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Color(0xFF6B7280),
                     fontWeight: FontWeight.w600,
                     height: 1.5,
@@ -183,7 +184,9 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                               ],
                               const SizedBox(height: 4),
                               Text(
-                                isProduct ? 'สินค้า' : 'ร้านค้า',
+                                isProduct
+                                    ? L10n.favoriteProductKind
+                                    : L10n.favoriteShopKind,
                                 style: const TextStyle(
                                   color: Color(0xFFF57C00),
                                   fontWeight: FontWeight.w700,
@@ -194,7 +197,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'ลบออกจากรายการโปรด',
+                          tooltip: L10n.removeFromFavorites,
                           onPressed: () =>
                               FavoritesService.instance.remove(item),
                           icon: const Icon(

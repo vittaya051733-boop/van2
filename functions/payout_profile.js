@@ -488,6 +488,11 @@ function createPayoutLedger(deps) {
     const uid = String(data.uid || '').trim();
     const actorType = String(data.actorType || 'rider').trim();
     const amount = readMoney(data.amount);
+    const withdrawFeeBaht = readMoney(data.withdrawFeeBaht);
+    const netPayout =
+      data.netPayout != null
+        ? roundMoney(data.netPayout)
+        : roundMoney(Math.max(0, amount - withdrawFeeBaht));
     const reservedCreditIds = Array.isArray(data.reservedCreditIds)
       ? data.reservedCreditIds
       : [];
@@ -519,11 +524,15 @@ function createPayoutLedger(deps) {
 
     const targetApp = actorType === 'merchant' ? 'van1' : 'van3';
     const notifRef = db.collection('app_notifications').doc();
+    const feeNotice =
+      withdrawFeeBaht > 0
+        ? ` (หักค่าบริการ ${withdrawFeeBaht.toFixed(2)} บาทจากยอด ${amount.toFixed(2)} บาท)`
+        : '';
     batch.set(notifRef, {
       targetApp,
       recipientUid: uid,
       title: 'ถอนเงินสำเร็จ',
-      body: `โอน ${amount.toFixed(2)} บาทเข้าบัญชีของคุณแล้ว`,
+      body: `โอน ${netPayout.toFixed(2)} บาทเข้าบัญชีของคุณแล้ว${feeNotice}`,
       action: 'payout_paid',
       sourceApp: 'cloud_function',
       read: false,

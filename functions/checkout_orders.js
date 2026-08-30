@@ -1385,9 +1385,8 @@ async function createCheckoutOrdersHandler(request, deps) {
       firstItem.shopLongitude,
       totals.pricingRates,
     );
-    const orderServiceFee = shopQualifiesForMarket
-      ? totals.pricingRates.marketServiceFeePerOrder ?? 5
-      : 0;
+    const orderServiceFee =
+      totals.pricingRates.marketServiceFeePerOrder ?? 5;
     let orderCollectionFee = 0;
     if (!marketCollectionAssigned && shopQualifiesForMarket && totals.marketFees.applies) {
       orderCollectionFee = totals.pricingRates.marketMultiShopCollectionFee ?? 5;
@@ -1551,7 +1550,7 @@ async function createCheckoutOrdersHandler(request, deps) {
       shippingFee,
       serviceFee: orderServiceFee,
       multiShopCollectionFee: orderCollectionFee,
-      ...(totals.marketFees.applies && shopQualifiesForMarket
+      ...(orderCollectionFee > 0
         ? {
             marketHubFeesApplied: true,
             marketQualifyingShopCount: totals.marketFees.qualifyingShopCount,
@@ -2012,4 +2011,5 @@ module.exports = {
   persistCheckoutQuote,
   createCheckoutOrdersHandler,
   createNationwideParcelOrdersHandler,
+  findNearestRiderForShop,
 };

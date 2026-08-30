@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'l10n/l10n.dart';
+import 'services/locale_service.dart';
+
 class ShopQrScannerScreen extends StatefulWidget {
   const ShopQrScannerScreen({super.key});
 
@@ -31,37 +34,42 @@ class _ShopQrScannerScreenState extends State<ShopQrScannerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('สแกน QR ร้านค้า'),
-        backgroundColor: const Color(0xFFF57C00),
-        foregroundColor: Colors.white,
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(L10n.scanShopQrTitle),
+            backgroundColor: const Color(0xFFF57C00),
+            foregroundColor: Colors.white,
           ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xCC111827),
-                borderRadius: BorderRadius.circular(12),
+          body: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              MobileScanner(
+                controller: _controller,
+                onDetect: _onDetect,
               ),
-              child: const Text(
-                'สแกน QR หน้าร้าน เพื่อเปิดรายการสินค้าออนไลน์ของร้านนั้น',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white),
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  margin: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xCC111827),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    L10n.scanShopQrHint,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

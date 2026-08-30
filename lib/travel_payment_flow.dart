@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'l10n/l10n.dart';
 import 'models/omise_payment_channel.dart';
 import 'widgets/payment_brand_strip.dart';
 import 'widgets/payment_checkout_sheet.dart';
@@ -73,10 +74,7 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
   bool _isProcessing = false;
 
   String _formatDistanceKm(double value) {
-    if (value < 1) {
-      return '${(value * 1000).round()} เมตร';
-    }
-    return '${value.toStringAsFixed(value >= 10 ? 0 : 1)} กม.';
+    return L10n.distanceKmOrMeters(value);
   }
 
   Future<void> _openPaymentOptions() async {
@@ -90,7 +88,10 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
       await showPaymentCheckoutSheet(
         context: context,
         grandTotal: widget.grandTotal,
-        subtitle: 'จาก ${widget.pickupLabel} ไป ${widget.destinationLabel}',
+        subtitle: L10n.travelRouteSubtitle(
+          widget.pickupLabel,
+          widget.destinationLabel,
+        ),
         onCashOnDelivery: widget.onConfirmCashOnDelivery == null
             ? null
             : () async {
@@ -98,7 +99,7 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
                 try {
                   final orderIds = await widget.onConfirmCashOnDelivery!.call();
                   if (orderIds.isEmpty) {
-                    throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+                    throw Exception(L10n.createTravelOrderFailed);
                   }
                   await widget.onOrderCompleted(orderIds);
                 } finally {
@@ -112,11 +113,11 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
           try {
             final callback = widget.onSubmitOmisePayment;
             if (callback == null) {
-              throw Exception('ระบบชำระเงิน Omise ยังไม่พร้อม');
+              throw Exception(L10n.omisePaymentNotReady);
             }
             final orderIds = await callback(channel);
             if (orderIds.isEmpty) {
-              throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+              throw Exception(L10n.createTravelOrderFailed);
             }
             await widget.onOrderCompleted(orderIds);
           } finally {
@@ -160,7 +161,7 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
             ),
             const SizedBox(height: 18),
             Text(
-              'ชำระค่าการเดินทาง',
+              L10n.travelPaymentTitle,
               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF111827),
@@ -168,14 +169,14 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
             ),
             const SizedBox(height: 8),
             Text(
-              'เลือกวิธีชำระเงินก่อนสร้างออเดอร์และแมตช์ไรเดอร์',
+              L10n.travelPaymentSubtitle,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: const Color(0xFF6B7280),
               ),
             ),
             const SizedBox(height: 18),
             Text(
-              'ยอดที่ต้องชำระ ฿${widget.grandTotal.toStringAsFixed(2)}',
+              L10n.amountDueBaht(widget.grandTotal),
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w900,
                 color: const Color(0xFFE55A00),
@@ -210,9 +211,9 @@ class _TravelPaymentSheetState extends State<_TravelPaymentSheet> {
                           color: Colors.white,
                         ),
                       )
-                    : const Text(
-                        'ชำระ',
-                        style: TextStyle(
+                    : Text(
+                        L10n.pay,
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
                         ),
@@ -256,21 +257,25 @@ class _TravelOrderSummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          _SummaryRow(label: 'จุดรับ', value: pickupLabel),
+          _SummaryRow(label: L10n.pickupPoint, value: pickupLabel),
           const SizedBox(height: 8),
-          _SummaryRow(label: 'ปลายทาง', value: destinationLabel),
+          _SummaryRow(label: L10n.destination, value: destinationLabel),
           const SizedBox(height: 8),
-          _SummaryRow(label: 'ระยะทาง', value: distanceLabel),
+          _SummaryRow(label: L10n.distance, value: distanceLabel),
           if (vehicleTypeLabel != null && vehicleTypeLabel!.isNotEmpty) ...<Widget>[
             const SizedBox(height: 8),
-            _SummaryRow(label: 'ประเภทรถ', value: vehicleTypeLabel!),
+            _SummaryRow(label: L10n.vehicleType, value: vehicleTypeLabel!),
           ],
           if (scheduleLabel != null && scheduleLabel!.isNotEmpty) ...<Widget>[
             const SizedBox(height: 8),
-            _SummaryRow(label: 'เวลา', value: scheduleLabel!),
+            _SummaryRow(label: L10n.scheduleTime, value: scheduleLabel!),
           ],
           const SizedBox(height: 8),
-          _SummaryRow(label: 'ยอดรวม', value: totalLabel, emphasized: true),
+          _SummaryRow(
+            label: L10n.total,
+            value: totalLabel,
+            emphasized: true,
+          ),
         ],
       ),
     );

@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'call_screen.dart';
 import 'chat_room_screen.dart';
+import 'l10n/l10n.dart';
 import 'models/rider_vehicle_profile.dart';
 import 'models/user_profile.dart';
 import 'services/chat_warmup.dart';
@@ -541,14 +542,14 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
                   ?.toString())
               : null) ??
           (orderData['shopName'] as String?) ??
-          'จุดรับ';
+          L10n.pickupPoint;
       markers.add(
         Marker(
           markerId: const MarkerId('pickup'),
           position: pickup,
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           infoWindow: InfoWindow(
-            title: 'จุดรับ',
+            title: L10n.pickupPoint,
             snippet: pickupLabel,
           ),
         ),
@@ -563,7 +564,7 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
           position: destination,
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
           infoWindow: InfoWindow(
-            title: 'ปลายทาง',
+            title: L10n.destination,
             snippet: _readDestinationLabel(orderData) ?? '',
           ),
         ),
@@ -739,14 +740,14 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
         );
         if (!ok && mounted) {
           messenger?.showSnackBar(
-            const SnackBar(content: Text('ไม่สามารถโทรออกได้')),
+            SnackBar(content: Text(L10n.cannotMakeCall)),
           );
         }
         return;
       }
       if (mounted) {
         messenger?.showSnackBar(
-          const SnackBar(content: Text('ไม่สามารถโทรหาไรเดอร์ได้')),
+          SnackBar(content: Text(L10n.cannotCallRider)),
         );
       }
     }
@@ -823,18 +824,18 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
                 ),
               ),
               if (_isLoadingRoute)
-                const SafeArea(
+                SafeArea(
                   child: Align(
                     alignment: Alignment.topCenter,
                     child: Padding(
-                      padding: EdgeInsets.only(top: 64),
+                      padding: const EdgeInsets.only(top: 64),
                       child: Card(
                         child: Padding(
-                          padding: EdgeInsets.symmetric(
+                          padding: const EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 8,
                           ),
-                          child: Text('กำลังอัปเดตเส้นทาง...'),
+                          child: Text(L10n.updatingRoute),
                         ),
                       ),
                     ),
@@ -856,7 +857,7 @@ class _TravelTrackingScreenState extends State<TravelTrackingScreen> {
                                   as Map)['pickup']?['title']
                               ?.toString())
                           : null) ??
-                      'จุดรับผู้โดยสาร',
+                      L10n.passengerPickup,
                   canContact: hasRider &&
                       (orderData['driverId'] as String?)?.trim().isNotEmpty ==
                           true,
@@ -924,21 +925,23 @@ class _TravelTrackingSheet extends StatelessWidget {
   }
 
   String get _etaTargetLabel {
-    return status == _TravelTrackingStatus.pickedUp ? 'ปลายทาง' : 'จุดรับ';
+    return status == _TravelTrackingStatus.pickedUp
+        ? L10n.destination
+        : L10n.pickupPoint;
   }
 
   String get _statusTitle {
     switch (status) {
       case _TravelTrackingStatus.searching:
-        return 'กำลังหาไรเดอร์';
+        return L10n.findingRider;
       case _TravelTrackingStatus.driverAssigned:
-        return 'รอไรเดอร์รับงาน';
+        return L10n.waitingRiderAccept;
       case _TravelTrackingStatus.driverComing:
-        return 'คนขับกำลังมา';
+        return L10n.driverComing;
       case _TravelTrackingStatus.pickedUp:
-        return 'กำลังเดินทางไปปลายทาง';
+        return L10n.travelingToDestination;
       case _TravelTrackingStatus.arrived:
-        return 'ถึงจุดหมายแล้ว';
+        return L10n.arrivedAtDestination;
     }
   }
 
@@ -949,19 +952,19 @@ class _TravelTrackingSheet extends StatelessWidget {
           final scheduleLabel =
               OrderNoRiderPolicy.readScheduleLabel(orderData);
           if (scheduleLabel != null) {
-            return 'กำหนดเดินทาง $scheduleLabel — ระบบจะจับคู่ไรเดอร์ก่อนเวลาเดินทาง';
+            return L10n.scheduledMatchHint(scheduleLabel);
           }
-          return 'ระบบจะจับคู่ไรเดอร์ก่อนเวลาเดินทางที่คุณกำหนด';
+          return L10n.scheduledMatchGeneric;
         }
-        return 'ระบบกำลังจับคู่ไรเดอร์ที่ใกล้ที่สุด';
+        return L10n.matchingNearestRider;
       case _TravelTrackingStatus.driverAssigned:
-        return 'ระบบจับคู่ไรเดอร์แล้ว รอไรเดอร์ยืนยันรับงาน';
+        return L10n.riderMatchedWaitingConfirm;
       case _TravelTrackingStatus.driverComing:
-        return 'ขึ้นรถทันที คนขับไม่สามารถจอดรอได้';
+        return L10n.boardImmediatelyHint;
       case _TravelTrackingStatus.pickedUp:
-        return 'ติดตามเส้นทางจากจุดรับไปปลายทาง (อัปเดตทุก ~1 นาที)';
+        return L10n.trackPickupToDestination;
       case _TravelTrackingStatus.arrived:
-        return 'ขอให้เดินทางปลอดภัย';
+        return L10n.safeTripWish;
     }
   }
 
@@ -1029,7 +1032,7 @@ class _TravelTrackingSheet extends StatelessWidget {
                   ),
                   if (showEta)
                     Text(
-                      '$etaMinutes นาที',
+                      L10n.etaMinutesCount(etaMinutes!),
                       style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                             fontWeight: FontWeight.w900,
                             color: const Color(0xFF111827),
@@ -1077,7 +1080,7 @@ class _TravelTrackingSheet extends StatelessWidget {
                               ),
                               const SizedBox(width: 10),
                               Text(
-                                'แชทหาคนขับ',
+                                L10n.chatDriver,
                                 style: Theme.of(context)
                                     .textTheme
                                     .titleSmall

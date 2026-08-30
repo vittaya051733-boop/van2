@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../l10n/l10n.dart';
+import '../services/locale_service.dart';
 import '../services/omise_payment_service.dart';
 import '../utils/gallery_image_saver.dart';
 
@@ -55,7 +57,7 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
       if (!permissionGranted) {
         if (mounted) {
           messenger.showSnackBar(
-            const SnackBar(content: Text('ไม่ได้รับสิทธิ์บันทึกรูปลงเครื่อง')),
+            SnackBar(content: Text(L10n.photoPermissionDenied)),
           );
         }
         return;
@@ -65,7 +67,7 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
       if (pngBytes == null) {
         if (mounted) {
           messenger.showSnackBar(
-            const SnackBar(content: Text('ยังจับภาพคิวอาร์โค้ดไม่ได้ ลองใหม่อีกครั้ง')),
+            SnackBar(content: Text(L10n.qrCaptureFailed)),
           );
         }
         return;
@@ -83,18 +85,14 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            saved
-                ? 'บันทึกคิวอาร์โค้ดลงเครื่องแล้ว'
-                : 'บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง',
+            saved ? L10n.qrSaveSuccess : L10n.qrSaveFailed,
           ),
         ),
       );
     } catch (_) {
       if (mounted) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text('บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง'),
-          ),
+          SnackBar(content: Text(L10n.qrSaveFailed)),
         );
       }
     } finally {
@@ -106,6 +104,9 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final payload = _payload;
 
     return Column(
@@ -129,7 +130,7 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
         if (payload?.isTestMode == true) ...<Widget>[
           const SizedBox(height: 8),
           Text(
-            'โหมดทดสอบ Omise — ป้าย TEST MODE จะไม่แสดงเมื่อใช้ Live Key',
+            L10n.omiseTestModeHint,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: const Color(0xFF9CA3AF),
             ),
@@ -149,11 +150,13 @@ class _OmiseQrDisplayState extends State<OmiseQrDisplay> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.download_outlined, size: 18),
-              label: Text(_isSaving ? 'กำลังบันทึก...' : 'บันทึกลงเครื่อง'),
+              label: Text(_isSaving ? L10n.savingQrToDevice : L10n.saveToDevice),
             ),
           ),
         ],
       ],
+    );
+      },
     );
   }
 }
@@ -236,9 +239,14 @@ class _QrErrorMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const SizedBox(
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
+    return SizedBox(
       height: 120,
-      child: Center(child: Text('ไม่สามารถโหลด QR ได้')),
+      child: Center(child: Text(L10n.cannotLoadQr)),
+    );
+      },
     );
   }
 }

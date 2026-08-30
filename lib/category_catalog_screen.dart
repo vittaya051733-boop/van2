@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'catalog_search_utils.dart';
 import 'public_catalog_service.dart';
 import 'services/catalog_share.dart';
+import 'services/catalog_share_image_cache.dart';
 import 'services/favorites_service.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/catalog_product_media_prefetch.dart';
@@ -17,12 +18,17 @@ import 'models/product_variant.dart';
 import 'utils/product_variant_color.dart';
 import 'utils/catalog_product_image_url.dart';
 import 'utils/delivery_eta_policy.dart';
+import 'services/locale_service.dart';
+import 'services/product_translation_service.dart';
+import 'utils/localized_product_text.dart';
+import 'l10n/l10n.dart';
 import 'widgets/cached_app_image.dart';
 import 'widgets/catalog_product_media_carousel.dart';
 import 'widgets/product_comment_section.dart';
 import 'widgets/product_discount_badge.dart';
 import 'widgets/product_discount_price.dart';
 import 'widgets/product_reaction_bar.dart';
+import 'data/catalog_taxonomy.dart';
 
 part 'catalog_product_detail_pager.dart';
 part 'catalog_shop_browser.dart';
@@ -310,16 +316,16 @@ class _CategoryCatalogBodyState extends State<_CategoryCatalogBody> {
 
   String get _searchHint {
     if (widget.nationwideShippingOnly) {
-      return 'ค้นหาสินค้าส่งทั่วประเทศ';
+      return L10n.catalogSearchNationwide;
     }
     final normalizedShopId = widget.shopIdFilter?.trim();
     if (normalizedShopId != null && normalizedShopId.isNotEmpty) {
-      return 'ค้นหาสินค้าในร้านนี้';
+      return L10n.catalogSearchInShop;
     }
     if (widget.serviceType.trim().isNotEmpty) {
-      return 'ค้นหาสินค้าในหมวด${widget.title}';
+      return L10n.catalogSearchInCategory(widget.title);
     }
-    return 'ค้นหาสินค้า';
+    return L10n.catalogSearchProducts;
   }
 
   @override
@@ -363,7 +369,7 @@ class _CategoryCatalogBodyState extends State<_CategoryCatalogBody> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                'โหลดข้อมูลไม่สำเร็จ: ${snapshot.error}',
+                L10n.catalogLoadFailed(snapshot.error!),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -402,10 +408,10 @@ class _CategoryCatalogBodyState extends State<_CategoryCatalogBody> {
               padding: const EdgeInsets.all(24),
               child: Text(
                 _searchQuery.trim().isNotEmpty
-                    ? 'ไม่พบสินค้าที่ตรงกับ "${_searchQuery.trim()}"'
+                    ? L10n.catalogNoSearchResults(_searchQuery.trim())
                     : filterByShop
-                    ? 'ร้านนี้ยังไม่มีสินค้า active ให้สั่งออนไลน์ตอนนี้'
-                    : 'ยังไม่มีร้านที่เปิดอยู่ในหมวดนี้ หรือร้านยังไม่ได้เลือกสินค้าแสดง',
+                    ? L10n.catalogShopNoActiveProducts
+                    : L10n.catalogCategoryEmpty,
                 textAlign: TextAlign.center,
               ),
             ),
@@ -466,10 +472,21 @@ class CatalogProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Widget card = _buildCard(context);
+    if (LocaleService.instance.isEnglish) {
+      card = ListenableBuilder(
+        listenable: ProductTranslationService.instance,
+        builder: (context, _) => _buildCard(context),
+      );
+    }
+    return card;
+  }
+
+  Widget _buildCard(BuildContext context) {
     final data = product.data;
     final pricingData = ProductVariantSupport.catalogListPricingData(data);
-    final String name = (data['name'] ?? '').toString();
-    final String description = (data['description'] ?? '').toString();
+    final String name = LocalizedProductText.nameForProduct(product);
+    final String description = LocalizedProductText.descriptionForProduct(product);
     final String cleanDescription = _cleanDescriptionWithoutToppings(
       description,
     );
@@ -482,6 +499,17 @@ class CatalogProductCard extends StatelessWidget {
 
     void openProductDetails() =>
         unawaited(_openProductDetailPager(context, shopProducts: shopProducts));
+
+    Widget cardTapArea(Widget child) {
+      return MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: openProductDetails,
+          behavior: HitTestBehavior.opaque,
+          child: child,
+        ),
+      );
+    }
 
     final Widget imageTile = wrapCatalogImageWithDiscountBadge(
       productData: pricingData,
@@ -516,22 +544,18 @@ class CatalogProductCard extends StatelessWidget {
             ),
           ),
         ),
-        Material(
-          color: const Color(0xFFE55A00),
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: openProductDetails,
-            customBorder: const CircleBorder(),
-            child: SizedBox(
-              width: compact ? 30 : 34,
-              height: compact ? 30 : 34,
-              child: Icon(
-                Icons.add,
-                color: Colors.white,
-                size: compact ? 20 : 22,
-              ),
-            ),
+        Container(
+          width: compact ? 30 : 34,
+          height: compact ? 30 : 34,
+          decoration: const BoxDecoration(
+            color: Color(0xFFE55A00),
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            Icons.add,
+            color: Colors.white,
+            size: compact ? 20 : 22,
           ),
         ),
       ],
@@ -558,94 +582,111 @@ class CatalogProductCard extends StatelessWidget {
     );
 
     if (pinPriceToBottom) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          imageTile,
-          Padding(
-            padding: EdgeInsets.fromLTRB(0, compact ? 6 : 6, 0, compact ? 2 : 2),
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return SizedBox(
+            height: constraints.maxHeight.isFinite ? constraints.maxHeight : null,
+            width: constraints.maxWidth.isFinite ? constraints.maxWidth : null,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                if (compact)
-                  Text(
-                    name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF111827),
-                      height: 1.12,
-                    ),
-                  )
-                else
-                  Text(
-                    name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: const Color(0xFF111827),
-                      height: 1.15,
-                    ),
-                  ),
-                if (showRatingSummary)
-                  _ProductRatingSummary(
-                    productId: product.id,
-                    compact: compact,
-                  ),
-                reactionRow,
-                if (!compact && cleanDescription.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 2),
-                  Text(
-                    cleanDescription,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFF6B7280),
-                      height: 1.15,
-                    ),
-                  ),
-                ],
-                if (!compact && distanceText != null) ...<Widget>[
-                  const SizedBox(height: 2),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      const Padding(
-                        padding: EdgeInsets.only(top: 1),
-                        child: Icon(
-                          Icons.near_me_outlined,
-                          size: 14,
-                          color: Color(0xFF6B7280),
+                imageTile,
+                Expanded(
+                  child: cardTapArea(
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        0,
+                        compact ? 6 : 6,
+                        0,
+                        compact ? 2 : 2,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                    if (compact)
+                      Text(
+                        name.isNotEmpty ? name : L10n.catalogUnnamedProduct,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827),
+                          height: 1.12,
+                        ),
+                      )
+                    else
+                      Text(
+                        name.isNotEmpty ? name : L10n.catalogUnnamedProduct,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF111827),
+                          height: 1.15,
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          distanceText,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: const Color(0xFF6B7280),
-                            fontWeight: FontWeight.w600,
-                            height: 1.15,
-                          ),
+                    if (showRatingSummary)
+                      _ProductRatingSummary(
+                        productId: product.id,
+                        compact: compact,
+                      ),
+                    reactionRow,
+                    if (!compact && cleanDescription.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 2),
+                      Text(
+                        cleanDescription,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF6B7280),
+                          height: 1.15,
                         ),
                       ),
                     ],
+                    if (!compact && distanceText != null) ...<Widget>[
+                      const SizedBox(height: 2),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          const Padding(
+                            padding: EdgeInsets.only(top: 1),
+                            child: Icon(
+                              Icons.near_me_outlined,
+                              size: 14,
+                              color: Color(0xFF6B7280),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              distanceText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                color: const Color(0xFF6B7280),
+                                fontWeight: FontWeight.w600,
+                                height: 1.15,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                          const Spacer(),
+                          priceRow,
+                        ],
+                      ),
+                    ),
                   ),
-                ],
-                const SizedBox(height: 2),
-                priceRow,
+                ),
               ],
             ),
-          ),
-        ],
+          );
+        },
       );
     }
 
@@ -653,7 +694,7 @@ class CatalogProductCard extends StatelessWidget {
       final compactBody = <Widget>[
         Expanded(
           child: Text(
-            name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+            name.isNotEmpty ? name : L10n.catalogUnnamedProduct,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
@@ -675,11 +716,13 @@ class CatalogProductCard extends StatelessWidget {
         children: <Widget>[
           imageTile,
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: compactBody,
+            child: cardTapArea(
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: compactBody,
+                ),
               ),
             ),
           ),
@@ -690,7 +733,7 @@ class CatalogProductCard extends StatelessWidget {
     final standardBody = <Widget>[
       const SizedBox(height: 6),
       Text(
-        name.isNotEmpty ? name : 'ไม่ระบุชื่อสินค้า',
+        name.isNotEmpty ? name : L10n.catalogUnnamedProduct,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(
@@ -750,9 +793,11 @@ class CatalogProductCard extends StatelessWidget {
       children: <Widget>[
         imageTile,
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: standardBody,
+          child: cardTapArea(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: standardBody,
+            ),
           ),
         ),
       ],
@@ -918,7 +963,7 @@ class _ProductRecentReviews extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  'รีวิวล่าสุด',
+                  L10n.catalogRecentReviews,
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w900,
                     color: const Color(0xFF111827),
@@ -1369,10 +1414,8 @@ CartProductSelection? buildCartSelectionFromCatalogProduct({
   }
 
   final safeQuantity = quantity.clamp(1, availableStock ?? 99).toInt();
-  final name = (data['name'] ?? '').toString().trim();
-  final shopName = product.shopName?.trim().isNotEmpty == true
-      ? product.shopName!.trim()
-      : 'ร้านค้า';
+  final name = LocalizedProductText.nameForProduct(product);
+  final shopName = LocalizedProductText.shopNameForProduct(product);
 
   return CartProductSelection(
     productId: product.id,
@@ -1380,7 +1423,7 @@ CartProductSelection? buildCartSelectionFromCatalogProduct({
     shopName: shopName,
     shopLatitude: product.shopLatitude,
     shopLongitude: product.shopLongitude,
-    productName: name.isEmpty ? 'สินค้า' : name,
+    productName: name.isEmpty ? L10n.productFallback : name,
     unitPrice: adjustedBasePrice + toppingTotal,
     merchantBasePrice: merchantBasePrice,
     discountPercent: discountPercent,
@@ -1483,28 +1526,19 @@ String? buildCatalogDeliveryDistanceLabel({
   required double? shopDistanceKm,
   required int preparationTimeMinutes,
 }) {
-  final distanceText = _formatDistanceKm(shopDistanceKm);
-  if (distanceText == null) {
-    return null;
-  }
-
   final totalMinutes = DeliveryEtaPolicy.estimateTotalDeliveryMinutes(
     preparationTimeMinutes: preparationTimeMinutes,
     straightDistanceKm: shopDistanceKm,
   );
-  return 'ห่าง $distanceText · ส่งถึง ~$totalMinutes นาที';
+  return L10n.catalogDeliveryDistanceLabel(
+    shopDistanceKm: shopDistanceKm,
+    totalMinutes: totalMinutes,
+  );
 }
 
 String? _formatDistanceKm(double? distanceKm) {
-  if (distanceKm == null) {
-    return null;
-  }
-
-  if (distanceKm < 1) {
-    return '${(distanceKm * 1000).round()} ม.';
-  }
-
-  return '${distanceKm.toStringAsFixed(distanceKm >= 10 ? 0 : 1)} กม.';
+  final formatted = L10n.formatDistanceKm(distanceKm);
+  return formatted.isEmpty ? null : formatted;
 }
 
 /// Same width/height as one cell in the 2-column catalog grid (ร้านอาหาร/ตลาด/ฯลฯ).

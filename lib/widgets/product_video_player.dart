@@ -78,6 +78,8 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
   String? _thumbnailSource;
   bool _thumbnailIsFile = false;
 
+  bool get _shouldHoldController => widget.hostActive;
+
   bool get _isPlaybackAllowed =>
       widget.hostActive && (widget.isActive ?? _isVisible);
 
@@ -94,7 +96,7 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
     WidgetsBinding.instance.addObserver(this);
     VideoPrefetchService.instance.preloadVideo(widget.videoUrl);
     _loadThumbnail();
-    if (widget.isActive == true) {
+    if (widget.isActive == true || widget.hostActive) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           _onPlaybackAllowedChanged();
@@ -115,8 +117,7 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
       _loadThumbnail();
     }
     if (widget.hostActive != oldWidget.hostActive && !widget.hostActive) {
-      _wantsAutoplay = false;
-      unawaited(_releaseController());
+      _onPlaybackAllowedChanged();
       return;
     }
     if (widget.isActive != oldWidget.isActive ||
@@ -126,19 +127,24 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
   }
 
   void _onPlaybackAllowedChanged() {
-    if (_isPlaybackAllowed) {
-      _wantsAutoplay = true;
+    if (_shouldHoldController) {
       if (_hasError) {
         _safeSetState(() => _hasError = false);
       }
       unawaited(_ensureControllerInitialized());
-      return;
-    }
-    _wantsAutoplay = false;
-    if (!widget.hostActive) {
+    } else {
+      _wantsAutoplay = false;
       unawaited(_releaseController());
       return;
     }
+
+    if (_isPlaybackAllowed) {
+      _wantsAutoplay = true;
+      _safePlay();
+      return;
+    }
+
+    _wantsAutoplay = false;
     _safePause();
   }
 
@@ -166,49 +172,21 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
     }));
   }
 
-  Future<void> _resumePlayback() async {
-    if (!_isPlaybackAllowed) {
-      return;
-    }
-    final controller = _controller;
-    if (controller == null || controller.isDisposed) {
-      await _ensureControllerInitialized();
-      return;
-    }
-    _wantsAutoplay = true;
-    try {
-      await controller.pause();
-      await controller.seekTo(Duration.zero);
-      await controller.play();
-    } catch (error) {
-      debugPrint('ProductVideoPlayer: resume failed -> $error');
-      await _recreateController();
-    }
-  }
-
-  Future<void> _recreateController() async {
-    await _releaseController();
-    if (!mounted || !_isPlaybackAllowed) {
-      return;
-    }
-    await _ensureControllerInitialized();
-  }
-
   Future<void> _ensureControllerInitialized() async {
-    if (!_isPlaybackAllowed) {
+    if (!_shouldHoldController) {
       return;
     }
 
     final existing = _controller;
     if (existing != null) {
       if (!existing.isDisposed) {
-        await _resumePlayback();
-      } else {
-        _controller = null;
-      }
-      if (_controller != null || _isInitializingController) {
+        if (_isPlaybackAllowed) {
+          _wantsAutoplay = true;
+          _safePlay();
+        }
         return;
       }
+      _controller = null;
     }
 
     if (_isInitializingController) {
@@ -219,7 +197,7 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
     BetterPlayerController? createdController;
     try {
       final resolvedUrl = await VideoSourceHelper.resolveMediaUrl(widget.videoUrl);
-      if (!mounted || _released || !_isPlaybackAllowed) {
+      if (!mounted || _released || !_shouldHoldController) {
         return;
       }
 
@@ -230,7 +208,7 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
       );
       createdController.addEventsListener(_handleBetterPlayerEvent);
 
-      if (!mounted || _released || !_isPlaybackAllowed) {
+      if (!mounted || _released || !_shouldHoldController) {
         return;
       }
 
@@ -240,7 +218,9 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
         _isBuffering = true;
       });
       createdController = null;
-      _safePlay();
+      if (_isPlaybackAllowed) {
+        _safePlay();
+      }
     } catch (error) {
       debugPrint('ProductVideoPlayer: init error -> $error');
       _safeSetState(() => _hasError = true);
@@ -444,15 +424,21 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
   }
 
   void _handleVisibilityChanged(VisibilityInfo info) {
-    if (info.visibleFraction >= 0.12) {
+    if (info.visibleFraction >= 0.08) {
       VideoPrefetchService.instance.preloadVideo(widget.videoUrl);
+    }
+    if (info.visibleFraction >= 0.12 &&
+        _shouldHoldController &&
+        _controller == null &&
+        !_isInitializingController) {
+      unawaited(_ensureControllerInitialized());
     }
 
     if (widget.isActive != null) {
       return;
     }
 
-    final mostlyVisible = info.visibleFraction >= 0.45;
+    final mostlyVisible = info.visibleFraction >= 0.3;
     final wasVisible = _isVisible;
     _isVisible = mostlyVisible;
 
@@ -496,29 +482,56 @@ class _ProductVideoPlayerState extends State<ProductVideoPlayer>
     return VisibilityDetector(
       key: ValueKey<String>('product-video-${widget.videoUrl}'),
       onVisibilityChanged: _handleVisibilityChanged,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (controller != null)
-            BetterPlayer(
-              key: ValueKey<Object>(controller),
-              controller: controller,
-            )
-          else
-            const SizedBox.shrink(),
-          if (hasThumbnail)
-            IgnorePointer(
-              ignoring: true,
-              child: AnimatedOpacity(
-                opacity: showPlaceholder ? 1 : 0,
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOut,
-                child: _buildPlaceholder(),
+      child: ColoredBox(
+        color: Colors.black,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (controller != null) _buildVideoPlayerSurface(controller),
+            if (hasThumbnail)
+              IgnorePointer(
+                ignoring: true,
+                child: AnimatedOpacity(
+                  opacity: showPlaceholder ? 1 : 0,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  child: _buildPlaceholder(),
+                ),
               ),
-            ),
-          if (controller == null && _isPlaybackAllowed)
-            const _InlineLoadingOverlay(),
-        ],
+            if (controller == null && _isPlaybackAllowed)
+              const _InlineLoadingOverlay(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoPlayerSurface(BetterPlayerController controller) {
+    final videoSize = controller.videoPlayerController?.value.size;
+    final hasSize =
+        videoSize != null && videoSize.width > 0 && videoSize.height > 0;
+
+    final player = BetterPlayer(
+      key: ValueKey<Object>(controller),
+      controller: controller,
+    );
+
+    if (!hasSize) {
+      return SizedBox.expand(child: player);
+    }
+
+    return SizedBox.expand(
+      child: ClipRect(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(
+            width: videoSize.width,
+            height: videoSize.height,
+            child: player,
+          ),
+        ),
       ),
     );
   }

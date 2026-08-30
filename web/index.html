@@ -20,6 +20,10 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="แว๊นตลาด — แอปลูกค้า">
 
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700;800;900&amp;display=swap">
+
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -36,7 +40,7 @@
     window.gm_authFailure = function () {
       showPersistentWebError(
         'google-maps-auth-error',
-        'Google Maps ใช้งานไม่ได้: ตรวจ API key และเพิ่ม https://van2.web.app/* ใน HTTP referrers (Google Cloud Console → Credentials)'
+        'Google Maps ใช้งานไม่ได้: ตรวจ API key และเพิ่ม https://vantalad.web.app/* ใน HTTP referrers (Google Cloud Console → Credentials)'
       );
     };
 
@@ -74,6 +78,7 @@
 
       window.vanEnsureGoogleMapsReady = function () {
         if (window.google && google.maps && google.maps.places) {
+          patchFlutterGoogleMapConstructor();
           return Promise.resolve();
         }
         if (mapsLoadPromise) {
@@ -104,7 +109,10 @@
             'https://maps.googleapis.com/maps/api/js?key=' +
             encodeURIComponent(apiKey) +
             '&libraries=places';
-          script.onload = function () { resolve(); };
+          script.onload = function () {
+            patchFlutterGoogleMapConstructor();
+            resolve();
+          };
           script.onerror = function () {
             reject(new Error('Google Maps script failed'));
           };
@@ -113,6 +121,7 @@
           if (!window.google || !google.maps || !google.maps.places) {
             throw new Error('Places library not loaded');
           }
+          patchFlutterGoogleMapConstructor();
         });
 
         return mapsLoadPromise;
@@ -478,7 +487,8 @@
       align-items: center;
       justify-content: center;
       color: #5d4037;
-      font: 16px/1.4 sans-serif;
+      font-family: 'Noto Sans Thai', 'Segoe UI', sans-serif;
+      font: 16px/1.4 'Noto Sans Thai', 'Segoe UI', sans-serif;
       padding: 24px;
       text-align: center;
     }
@@ -647,7 +657,7 @@
       }
       showFlutterLoadRecovery(
         "โหลดนานผิดปกติ",
-        "ถ้าใช้ iPhone ลองล้างข้อมูลเว็บ van2.web.app แล้วกดโหลดใหม่"
+        "ถ้าใช้ iPhone ลองล้างข้อมูลเว็บ vantalad.web.app แล้วกดโหลดใหม่"
       );
     }, 25000);
 
@@ -687,7 +697,7 @@
           '<p id="flutter-load-recovery-detail"></p>' +
           '<ol>' +
           '<li>เปิดใน Safari (ไม่ใช่เบราว์เซอร์ใน LINE/Facebook)</li>' +
-          '<li>iPhone: ตั้งค่า → Safari → ขั้นสูง → ข้อมูลเว็บ → ค้นหา van2.web.app → ลบ</li>' +
+          '<li>iPhone: ตั้งค่า → Safari → ขั้นสูง → ข้อมูลเว็บ → ค้นหา vantalad.web.app → ลบ</li>' +
           '<li>ลอง Wi‑Fi หรือ 4G/5G อีกครั้ง</li>' +
           '</ol>' +
           '<button type="button" class="retry-btn" id="flutter-load-retry">โหลดใหม่</button>' +

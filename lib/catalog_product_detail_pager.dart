@@ -73,12 +73,8 @@ class _CatalogProductDetailPagerState
     super.dispose();
   }
 
-  String get _shopName {
-    final current = widget.products[_currentIndex];
-    return current.shopName?.trim().isNotEmpty == true
-        ? current.shopName!.trim()
-        : 'ร้านค้า';
-  }
+  String get _shopName =>
+      LocalizedProductText.shopNameForProduct(widget.products[_currentIndex]);
 
   void _handleAddToCart(CartProductSelection selection) {
     widget.onConfirmOrder?.call(selection);
@@ -95,6 +91,12 @@ class _CatalogProductDetailPagerState
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge(<Listenable>[
+        LocaleService.instance,
+        ProductTranslationService.instance,
+      ]),
+      builder: (context, _) {
     final total = widget.products.length;
     final showPagerHint = total > 1;
     final showCartBar = _lastAddedQuantity != null && _lastAddedQuantity! > 0;
@@ -113,7 +115,7 @@ class _CatalogProductDetailPagerState
             ),
             if (showPagerHint)
               Text(
-                'ปัดซ้าย/ขวาเพื่อดูสินค้าอื่น (${_currentIndex + 1}/$total)',
+                L10n.catalogSwipeProductHint(_currentIndex + 1, total),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -145,9 +147,11 @@ class _CatalogProductDetailPagerState
           );
         },
         itemBuilder: (context, index) {
+          final isNeighbor = (index - _currentIndex).abs() <= 1;
           return _CatalogProductDetailPage(
             product: widget.products[index],
             isCurrentProduct: index == _currentIndex,
+            warmVideoPlayback: isNeighbor,
             customerLatitude: widget.customerLatitude,
             customerLongitude: widget.customerLongitude,
             onAddToCart: _handleAddToCart,
@@ -162,6 +166,8 @@ class _CatalogProductDetailPagerState
               onOpenCart: widget.onNavigateToCart != null ? _openCart : null,
             )
           : null,
+    );
+      },
     );
   }
 }
@@ -181,7 +187,7 @@ class _CatalogAddedToCartBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = productName?.trim().isNotEmpty == true
         ? productName!.trim()
-        : 'สินค้า';
+        : L10n.productFallback;
 
     return Material(
       elevation: 12,
@@ -216,7 +222,7 @@ class _CatalogAddedToCartBar extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'เพิ่ม $quantity ชิ้นลงตะกร้าแล้ว',
+                      L10n.catalogAddedToCart(quantity),
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w800,
                         color: const Color(0xFF111827),
@@ -248,9 +254,9 @@ class _CatalogAddedToCartBar extends StatelessWidget {
                     ),
                   ),
                   icon: const Icon(Icons.shopping_cart_outlined),
-                  label: const Text(
-                    'ไปที่ตะกร้า',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  label: Text(
+                    L10n.catalogGoToCart,
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
                   ),
                 ),
               ],
@@ -266,6 +272,7 @@ class _CatalogProductDetailPage extends StatefulWidget {
   const _CatalogProductDetailPage({
     required this.product,
     required this.isCurrentProduct,
+    this.warmVideoPlayback = false,
     this.customerLatitude,
     this.customerLongitude,
     required this.onAddToCart,
@@ -274,6 +281,7 @@ class _CatalogProductDetailPage extends StatefulWidget {
 
   final PublicCatalogProduct product;
   final bool isCurrentProduct;
+  final bool warmVideoPlayback;
   final double? customerLatitude;
   final double? customerLongitude;
   final ValueChanged<CartProductSelection> onAddToCart;
@@ -290,6 +298,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
   String? _selectedColor;
   String? _selectedSize;
   String? _selectedVariantId;
+  int _mediaPageIndex = 0;
 
   List<ProductVariant> get _variants =>
       ProductVariantSupport.parseList(widget.product.data['variants']);
@@ -309,12 +318,139 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
   @override
   void initState() {
     super.initState();
-    if (_hasVariants && _variants.length == 1) {
-      final only = _variants.first;
-      _selectedVariantId = only.id;
-      _selectedColor = only.color.trim().isEmpty ? null : only.color.trim();
-      _selectedSize = only.size.trim().isEmpty ? null : only.size.trim();
+    _applyDefaultVariantSelection();
+    _warmShareImage(widget.product.data);
+  }
+
+  @override
+  void didUpdateWidget(covariant _CatalogProductDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.product.id != widget.product.id) {
+      _selectedToppings.clear();
+      _quantity = 1;
+      _selectedColor = null;
+      _selectedSize = null;
+      _selectedVariantId = null;
+      _mediaPageIndex = 0;
+      _applyDefaultVariantSelection();
+      _warmShareImage(widget.product.data);
     }
+  }
+
+  void _applyDefaultVariantSelection() {
+    if (!_hasVariants) {
+      return;
+    }
+    final defaultVariant =
+        ProductVariantSupport.catalogDefaultVariant(widget.product.data);
+    if (defaultVariant == null) {
+      return;
+    }
+    _selectedVariantId = defaultVariant.id;
+    _selectedColor = defaultVariant.color.trim().isEmpty
+        ? null
+        : defaultVariant.color.trim();
+    _selectedSize =
+        defaultVariant.size.trim().isEmpty ? null : defaultVariant.size.trim();
+    _mediaPageIndex = _imageIndexForVariant(defaultVariant);
+  }
+
+  int _imageIndexForVariant(ProductVariant variant) {
+    return ProductVariantSupport.galleryImageIndexForVariant(_variants, variant);
+  }
+
+  ProductVariant? _variantForCarouselSync({
+    bool preferSize = false,
+    bool preferColor = false,
+  }) {
+    if (preferSize) {
+      return ProductVariantSupport.matchVariant(
+            _variants,
+            color: _selectedColor,
+            size: _selectedSize,
+          ) ??
+          ProductVariantSupport.matchVariant(
+            _variants,
+            size: _selectedSize,
+          );
+    }
+    if (preferColor) {
+      return ProductVariantSupport.matchVariant(
+            _variants,
+            color: _selectedColor,
+            size: _selectedSize,
+          ) ??
+          ProductVariantSupport.matchVariant(
+            _variants,
+            color: _selectedColor,
+          );
+    }
+    return _resolvedVariant ??
+        ProductVariantSupport.matchVariant(
+          _variants,
+          color: _selectedColor,
+          size: _selectedSize,
+        );
+  }
+
+  void _syncCarouselToVariant(ProductVariant? variant) {
+    if (variant == null) {
+      return;
+    }
+    final nextIndex = _imageIndexForVariant(variant);
+    if (nextIndex == _mediaPageIndex) {
+      return;
+    }
+    setState(() => _mediaPageIndex = nextIndex);
+  }
+
+  void _syncCarouselToSelection({
+    bool preferSize = false,
+    bool preferColor = false,
+  }) {
+    _syncCarouselToVariant(
+      _variantForCarouselSync(
+        preferSize: preferSize,
+        preferColor: preferColor,
+      ),
+    );
+  }
+
+  void _onMediaPageChanged(int index) {
+    if (!_hasVariants) {
+      setState(() => _mediaPageIndex = index);
+      return;
+    }
+
+    final urls =
+        readCatalogProductImageUrls(_displayProductData(widget.product.data));
+    if (index < 0 || index >= urls.length) {
+      return;
+    }
+
+    final scoped =
+        ProductVariantSupport.variantsForImageUrl(_variants, urls[index]);
+    if (scoped.isEmpty) {
+      setState(() => _mediaPageIndex = index);
+      return;
+    }
+
+    final picked = ProductVariantSupport.matchVariant(
+          scoped,
+          color: _selectedColor,
+          size: _selectedSize,
+        ) ??
+        scoped.first;
+
+    setState(() {
+      _mediaPageIndex = index;
+      _selectedVariantId = picked.id;
+      _selectedColor =
+          picked.color.trim().isEmpty ? null : picked.color.trim();
+      _selectedSize = picked.size.trim().isEmpty ? null : picked.size.trim();
+      _quantity = 1;
+    });
+    _warmShareImage(widget.product.data);
   }
 
   Map<String, dynamic> _pricingData(Map<String, dynamic> data) {
@@ -329,19 +465,41 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
   }
 
   Map<String, dynamic> _displayProductData(Map<String, dynamic> data) {
-    final variant = _resolvedVariant;
-    if (variant == null || variant.imageUrl.isEmpty) {
+    if (!_hasVariants) {
       return data;
     }
+
+    final gallery = ProductVariantSupport.variantGalleryFields(_variants);
+    final imageUrls = gallery['imageUrls'];
+    if (imageUrls is! List || imageUrls.isEmpty) {
+      return data;
+    }
+
     return <String, dynamic>{
       ...data,
-      'imageUrls': <String>[variant.imageUrl],
-      'thumbnailUrls': <String>[
-        variant.thumbnailUrl.isNotEmpty
-            ? variant.thumbnailUrl
-            : variant.imageUrl,
-      ],
+      'imageUrls': imageUrls,
+      'thumbnailUrls': gallery['thumbnailUrls'] ?? imageUrls,
     };
+  }
+
+  void _warmShareImage(Map<String, dynamic> data) {
+    CatalogShareImageCache.instance.warm(
+      readCatalogProductShareImageUrl(_displayProductData(data)),
+    );
+  }
+
+  String? _shareImageUrlFor(Map<String, dynamic> data) {
+    final displayData = _displayProductData(data);
+    final variant = _resolvedVariant;
+    if (variant != null) {
+      if (variant.imageUrl.trim().isNotEmpty) {
+        return variant.imageUrl.trim();
+      }
+      if (variant.thumbnailUrl.trim().isNotEmpty) {
+        return variant.thumbnailUrl.trim();
+      }
+    }
+    return readCatalogProductShareAttachmentUrl(displayData);
   }
 
   bool get _variantSelectionRequired =>
@@ -354,12 +512,10 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
     final colors = ProductVariantSupport.uniqueOptionValues(
       _variants,
       colors: true,
-      selectedSize: _selectedSize,
     );
     final sizes = ProductVariantSupport.uniqueOptionValues(
       _variants,
       colors: false,
-      selectedColor: _selectedColor,
     );
 
     return Column(
@@ -368,7 +524,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
         const SizedBox(height: 12),
         if (colors.isNotEmpty) ...[
           Text(
-            'สี',
+            L10n.catalogColor,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w800,
             ),
@@ -389,6 +545,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                     _selectedVariantId = null;
                     _quantity = 1;
                   });
+                  _syncCarouselToSelection(preferColor: true);
                 },
               );
             }).toList(growable: false),
@@ -397,7 +554,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
         ],
         if (sizes.isNotEmpty) ...[
           Text(
-            'ขนาด',
+            L10n.catalogSize,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w800,
             ),
@@ -411,12 +568,16 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               return FilterChip(
                 label: Text(size),
                 selected: selected,
-                onSelected: (_) {
+                onSelected: (selected) {
+                  if (!selected) {
+                    return;
+                  }
                   setState(() {
                     _selectedSize = size;
                     _selectedVariantId = null;
                     _quantity = 1;
                   });
+                  _syncCarouselToSelection(preferSize: true);
                 },
               );
             }).toList(growable: false),
@@ -426,7 +587,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-              'กรุณาเลือกตัวเลือกสินค้า',
+              L10n.catalogSelectVariant,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFFB45309),
                 fontWeight: FontWeight.w700,
@@ -444,9 +605,9 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
     final pricingData = _pricingData(data);
     final displayData = _displayProductData(data);
 
-    final String name = (data['name'] ?? '').toString();
+    final String name = LocalizedProductText.nameForProduct(product);
     final String description = _cleanDescriptionWithoutToppings(
-      (data['description'] ?? '').toString(),
+      LocalizedProductText.descriptionForProduct(product),
     );
     final num adjustedBasePrice =
         TaxPricingPolicy.resolveCustomerUnitPrice(pricingData);
@@ -471,9 +632,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
         DeliveryEtaPolicy.estimateTravelMinutesFromStraightDistanceKm(
       shopDistanceKm,
     );
-    final String shopName = product.shopName?.trim().isNotEmpty == true
-        ? product.shopName!.trim()
-        : 'ร้านค้า';
+    final String shopName = LocalizedProductText.shopNameForProduct(product);
 
     final List<_IndexedToppingOption> indexedToppings = <_IndexedToppingOption>[
       for (var groupIndex = 0; groupIndex < toppingGroups.length; groupIndex++)
@@ -552,19 +711,24 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               productId: product.id,
               shopId: product.shopId,
               child: CatalogProductMediaCarousel(
+                key: ValueKey<String>(product.id),
                 productData: displayData,
                 name: name,
                 enableVideo: true,
-                playbackActive: widget.isCurrentProduct,
+                playbackActive: widget.isCurrentProduct || widget.warmVideoPlayback,
+                playVideo: widget.isCurrentProduct,
                 fixedHeight: 280,
-                fit: BoxFit.contain,
+                fit: BoxFit.cover,
                 borderRadius: 16,
+                initialPage: _mediaPageIndex,
+                pageIndex: _mediaPageIndex,
+                onPageChanged: _onMediaPageChanged,
               ),
             ),
           ),
           const SizedBox(height: 12),
           Text(
-            name.isEmpty ? 'ไม่ระบุชื่อสินค้า' : name,
+            name.isEmpty ? L10n.catalogUnnamedProduct : name,
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w800,
               color: const Color(0xFF111827),
@@ -590,7 +754,12 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                 shopId: product.shopId,
               );
             },
-            onShareTap: () => shareCatalogProduct(product, context: context),
+            onShareTap: () => shareCatalogProduct(
+              product,
+              context: context,
+              productDataForImage: displayData,
+              shareImageUrl: _shareImageUrlFor(data),
+            ),
           ),
           const SizedBox(height: 10),
           if (description.isNotEmpty) ...<Widget>[
@@ -618,7 +787,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'เวลาเตรียมสินค้า: ประมาณ $preparationTimeMinutes นาที',
+                    L10n.catalogPrepTime(preparationTimeMinutes),
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: const Color(0xFF9A3412),
                       fontWeight: FontWeight.w800,
@@ -647,8 +816,10 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'เวลาส่งถึงคุณ: ประมาณ $travelMinutes นาที'
-                      ' (ห่าง ${_formatDistanceKm(shopDistanceKm)!})',
+                      L10n.catalogDeliveryEta(
+                        travelMinutes,
+                        L10n.formatDistanceKm(shopDistanceKm),
+                      ),
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: const Color(0xFF1D4ED8),
                         fontWeight: FontWeight.w800,
@@ -665,7 +836,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               if (availableStock != null)
                 Expanded(
                   child: Text(
-                    'สต๊อกคงเหลือ: $availableStock',
+                    L10n.catalogStockRemaining(availableStock),
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: outOfStock
@@ -677,7 +848,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
               else
                 Expanded(
                   child: Text(
-                    'สต๊อกคงเหลือ: ไม่จำกัด',
+                    L10n.catalogStockUnlimited,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: const Color(0xFF1F2937),
@@ -721,8 +892,8 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
             const SizedBox(height: 4),
             Text(
               outOfStock
-                  ? 'สินค้าหมดสต๊อกชั่วคราว'
-                  : 'จะเหลือหลังสั่งครั้งนี้ $remainingAfterOrder',
+                  ? L10n.catalogOutOfStock
+                  : L10n.catalogStockAfterOrder(remainingAfterOrder),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: outOfStock
                     ? const Color(0xFFB91C1C)
@@ -734,7 +905,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
           if (toppingGroups.isNotEmpty) ...<Widget>[
             const SizedBox(height: 10),
             Text(
-              'ท็อปปิ้ง',
+              L10n.catalogToppings,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF1F2937),
@@ -841,7 +1012,7 @@ class _CatalogProductDetailPageState extends State<_CatalogProductDetailPage> {
                 shopName: shopName,
                 shopLatitude: product.shopLatitude,
                 shopLongitude: product.shopLongitude,
-                productName: name.isEmpty ? 'สินค้า' : name,
+                productName: name.isEmpty ? L10n.productFallback : name,
                 unitPrice: unitPrice,
                 merchantBasePrice: merchantBasePrice,
                 discountPercent: discountPercent,
@@ -908,9 +1079,9 @@ class _CatalogProductAddToCartBar extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.add_shopping_cart),
-              label: const Text(
-                'เพิ่มลงตะกร้า',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+              label: Text(
+                L10n.catalogAddToCart,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
               ),
             ),
           ),

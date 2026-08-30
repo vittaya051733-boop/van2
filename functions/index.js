@@ -30,10 +30,19 @@ const { createRiderAvailabilityHandlers } = require('./rider_availability');
 const { createSlipVerificationQueueHandlers } = require('./slip_verification_queue');
 const { createOmisePaymentsHandlers } = require('./omise_payments');
 const { createOmisePayoutHandlers } = require('./omise_payouts');
+const { createManualPayoutHandlers } = require('./manual_payouts');
+const {
+  createPayoutProfileLoader,
+  createPayoutLedger,
+} = require('./payout_profile');
+const { createSettlementConfigLoader } = require('./settlement_config');
 const { createPlatformFloatHandlers } = require('./platform_float');
 const { verifyStandaloneSlipCore } = require('./slipok_standalone');
 const { readClientIp, assertCallableRateLimit } = require('./callable_rate_limit');
 const { createCouponClaimsHandlers } = require('./coupon_claims');
+const { createEnsureProductTranslationHandler } = require('./product_translation');
+const { createProductSharePreviewExport } = require('./product_share_preview');
+const { createProductShareOgImageExport } = require('./product_share_og_image');
 
 admin.initializeApp({
   storageBucket: 'van-merchant-van2-storage-802503541368',
@@ -1111,30 +1120,25 @@ function computeMarketCheckoutFees(shops, rates = defaultPricingRates()) {
   const serviceFeePerOrder =
     rates.marketServiceFeePerOrder ?? DEFAULT_MARKET_SERVICE_FEE_PER_ORDER;
 
-  let qualifyingCount = 0;
+  const shopCount = shops.size;
+  let hubQualifyingCount = 0;
   for (const shop of shops.values()) {
     if (isShopNearMarketHub(shop.latitude, shop.longitude, rates)) {
-      qualifyingCount += 1;
+      hubQualifyingCount += 1;
     }
   }
 
-  if (qualifyingCount < minShops) {
-    return {
-      applies: false,
-      qualifyingShopCount: qualifyingCount,
-      marketCollectionFee: 0,
-      marketServiceFee: 0,
-      marketTotalFees: 0,
-    };
-  }
+  const marketServiceFee =
+    shopCount > 0 && serviceFeePerOrder > 0 ? serviceFeePerOrder * shopCount : 0;
+  const marketCollectionFee =
+    hubQualifyingCount >= minShops ? collectionFee : 0;
 
-  const marketServiceFee = serviceFeePerOrder * qualifyingCount;
   return {
-    applies: true,
-    qualifyingShopCount: qualifyingCount,
-    marketCollectionFee: collectionFee,
+    applies: marketServiceFee > 0 || marketCollectionFee > 0,
+    qualifyingShopCount: hubQualifyingCount,
+    marketCollectionFee,
     marketServiceFee,
-    marketTotalFees: collectionFee + marketServiceFee,
+    marketTotalFees: marketCollectionFee + marketServiceFee,
   };
 }
 
@@ -2024,6 +2028,11 @@ async function evaluateOfferConditions(offer, context, userId, rates, offerKind)
     if (userCount >= maxPerUser) {
       return { eligible: false, reason: 'คุณใช้สิทธิ์ครบแล้ว' };
     }
+  }
+
+  const assigneeUid = String(offer.assigneeUid || conditions.assigneeUid || '').trim();
+  if (assigneeUid && userId && assigneeUid !== userId) {
+    return { eligible: false, reason: 'คูปองนี้ไม่ใช่ของคุณ' };
   }
 
   return { eligible: true };
@@ -5057,6 +5066,22 @@ scheduledCreditReleases.init({
 });
 Object.assign(exports, scheduledCreditReleases.registerHandlers());
 
+const adminOrderClaims = require('./admin_order_claims');
+adminOrderClaims.init({
+  db,
+  FieldValue,
+  DEFAULT_REGION,
+});
+Object.assign(exports, adminOrderClaims.registerHandlers());
+
+const adminCreditControl = require('./admin_credit_control');
+adminCreditControl.init({
+  db,
+  FieldValue,
+  DEFAULT_REGION,
+});
+Object.assign(exports, adminCreditControl.registerHandlers());
+
 const riderOrderOps = require('./rider_order_ops');
 riderOrderOps.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
 Object.assign(exports, riderOrderOps.registerHandlers());
@@ -5094,6 +5119,22 @@ Object.assign(
   }),
 );
 
+const { findNearestRiderForShop } = require('./checkout_orders');
+const pendingOrderRiderMatch = require('./pending_order_rider_match');
+pendingOrderRiderMatch.init({
+  db,
+  FieldValue,
+  logger,
+  findNearestRiderForShop,
+});
+Object.assign(
+  exports,
+  pendingOrderRiderMatch.registerHandlers({
+    onSchedule,
+    DEFAULT_REGION,
+  }),
+);
+
 Object.assign(
   exports,
   createRiderAvailabilityHandlers({
@@ -5103,6 +5144,8 @@ Object.assign(
     onSchedule,
     onDocumentWritten,
     DEFAULT_REGION,
+    onRiderBecameAvailable: (context) =>
+      pendingOrderRiderMatch.matchPendingAwaitingRiderOrders(context),
   }),
 );
 
@@ -5115,8 +5158,29 @@ const omisePayoutHandlers = createOmisePayoutHandlers({
   logger,
   DEFAULT_REGION,
 });
+const { loadPayoutProfile } = createPayoutProfileLoader(db, HttpsError);
+const payoutLedger = createPayoutLedger({ db, FieldValue, HttpsError });
+const { loadSettlementConfig } = createSettlementConfigLoader({ db });
+const manualPayoutHandlers = createManualPayoutHandlers({
+  admin,
+  db,
+  FieldValue,
+  HttpsError,
+  onCall,
+  defineSecret,
+  logger,
+  DEFAULT_REGION,
+  payoutLedger: { loadPayoutProfile, ...payoutLedger },
+  loadSettlementConfig,
+  verifyStandaloneSlipCore,
+  slipVerificationDeps,
+});
 Object.assign(exports, {
-  getWithdrawableBalance: omisePayoutHandlers.getWithdrawableBalance,
+  getWithdrawableBalance: manualPayoutHandlers.getWithdrawableBalance,
+  requestManualWithdraw: manualPayoutHandlers.requestManualWithdraw,
+  confirmManualWithdraw: manualPayoutHandlers.confirmManualWithdraw,
+  rejectManualWithdraw: manualPayoutHandlers.rejectManualWithdraw,
+  exportWithdrawBankCsv: manualPayoutHandlers.exportWithdrawBankCsv,
   requestOmiseWithdraw: omisePayoutHandlers.requestOmiseWithdraw,
 });
 
@@ -5146,6 +5210,37 @@ Object.assign(
     DEFAULT_REGION,
   }),
 );
+
+const ensureProductTranslationHandler = createEnsureProductTranslationHandler({
+  db,
+  FieldValue,
+  HttpsError,
+  logger,
+  assertCallableRateLimit: (options) =>
+    assertCallableRateLimit(db, admin, HttpsError, options),
+});
+
+exports.ensureProductTranslation = onCall(
+  {
+    region: DEFAULT_REGION,
+    enforceAppCheck: true,
+  },
+  ensureProductTranslationHandler,
+);
+
+exports.productSharePreview = createProductSharePreviewExport({
+  db,
+  logger,
+  onRequest,
+  DEFAULT_REGION,
+});
+
+exports.productShareOgImage = createProductShareOgImageExport({
+  db,
+  logger,
+  onRequest,
+  DEFAULT_REGION,
+});
 
 // =============================================================================
 // Security roadmap (Phase 2 / Phase 3 hooks)

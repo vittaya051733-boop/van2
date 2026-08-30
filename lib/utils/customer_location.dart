@@ -117,3 +117,13 @@ Future<PickedLocation?> tryDetectCurrentLocation() async {
     fallbackTitle: 'พิกัดปัจจุบันของฉัน',
   );
 }
+
+/// Placeholder location so home can paint before geolocation finishes.
+PickedLocation startupFallbackLocation() {
+  return const PickedLocation(
+    latitude: 17.279915312140325,
+    longitude: 102.87070264132565,
+    title: 'อุดรธานี',
+    subtitle: 'จะอัปเดตเมื่อได้รับพิกัดจากอุปกรณ์',
+  );
+}

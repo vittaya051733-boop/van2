@@ -363,7 +363,10 @@ class PublicCatalogService {
         continue;
       }
 
-      final mergedData = _mergeShopMetadata(rawData, publicShops[shopId]);
+      final mergedData = Map<String, dynamic>.from(
+        _mergeShopMetadata(rawData, publicShops[shopId]),
+      );
+      mergedData['id'] = doc.id;
       final serviceType = _readServiceType(mergedData);
       if (normalizedTargetServiceType != null &&
           normalizedTargetServiceType.isNotEmpty &&
@@ -521,19 +524,32 @@ class PublicCatalogService {
       }
     }
 
-    for (var index = 0; index < missingIds.length; index += 30) {
+    for (var index = 0; index < missingIds.length; index += 10) {
       final chunk = missingIds.sublist(
         index,
-        index + 30 > missingIds.length ? missingIds.length : index + 30,
+        index + 10 > missingIds.length ? missingIds.length : index + 10,
       );
-      final snapshot = await FirebaseFirestore.instance
-          .collection('products')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get();
-      for (final doc in snapshot.docs) {
-        productDataById[doc.id] = doc.data();
-        PublicCatalogLocalCache.applyProductDoc(doc.id, doc.data());
-      }
+      await Future.wait<void>(chunk.map((id) async {
+        try {
+          final doc = await FirebaseFirestore.instance
+              .collection('products')
+              .doc(id)
+              .get();
+          if (!doc.exists) {
+            return;
+          }
+          final data = doc.data();
+          if (data == null) {
+            return;
+          }
+          productDataById[doc.id] = data;
+          PublicCatalogLocalCache.applyProductDoc(doc.id, data);
+        } on FirebaseException catch (error) {
+          if (error.code != 'permission-denied') {
+            rethrow;
+          }
+        }
+      }));
     }
 
     final results = <PublicCatalogProduct>[];
@@ -726,7 +742,10 @@ class PublicCatalogService {
       return null;
     }
 
-    final mergedData = _mergeShopMetadata(rawData, publicShops[shopId]);
+    final mergedData = Map<String, dynamic>.from(
+      _mergeShopMetadata(rawData, publicShops[shopId]),
+    );
+    mergedData['id'] = id;
     final publicShopImage = publicShops[shopId]?['shopImageUrl'];
     final shopImageUrl = _preferRegistrationImage(
       publicShopImage is String ? publicShopImage : null,
@@ -764,30 +783,21 @@ class PublicCatalogService {
   static bool isHomeRetailCatalogProduct(
     PublicCatalogProduct product, {
     Set<String>? enabledServiceTypes,
-    bool nationwideEnabled = true,
   }) {
     final normalized = _normalizeServiceType(_readServiceType(product.data));
     final allowed = enabledServiceTypes ?? homeRetailServiceTypes;
-    if (!allowed.contains(normalized)) {
-      return false;
-    }
-    if (!nationwideEnabled && _isEligibleForNationwideShipping(product.data)) {
-      return false;
-    }
-    return true;
+    return allowed.contains(normalized);
   }
 
   static List<PublicCatalogProduct> filterHomeRetailProducts(
     List<PublicCatalogProduct> products, {
     Set<String>? enabledServiceTypes,
-    bool nationwideEnabled = true,
   }) {
     return products
         .where(
           (product) => isHomeRetailCatalogProduct(
             product,
             enabledServiceTypes: enabledServiceTypes,
-            nationwideEnabled: nationwideEnabled,
           ),
         )
         .toList(growable: false);

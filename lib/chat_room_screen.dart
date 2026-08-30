@@ -10,10 +10,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'models/chat_message.dart';
 import 'models/user_profile.dart';
+import 'l10n/l10n.dart';
 import 'services/chat_service.dart';
 import 'services/friend_service.dart';
 import 'services/chat_warmup.dart';
 import 'services/chat_warmup_cache.dart';
+import 'services/locale_service.dart';
 import 'widgets/cached_app_avatar.dart';
 import 'widgets/cached_app_image.dart';
 
@@ -94,7 +96,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       uid: user.uid,
       displayName: displayName != null && displayName.isNotEmpty
           ? displayName
-          : 'ลูกค้า',
+          : L10n.customer,
       phoneNumber: user.phoneNumber,
       photoUrl: user.photoURL,
     );
@@ -103,7 +105,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   Future<void> _loadProfileFast() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      setState(() => _error = 'โปรดเข้าสู่ระบบอีกครั้ง');
+      setState(() => _error = L10n.pleaseSignInAgain);
       return;
     }
 
@@ -117,7 +119,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
           await _friendService.ensureCurrentUserProfile(user);
       if (profile == null) {
         if (!mounted) return;
-        setState(() => _error = 'ไม่พบข้อมูลผู้ใช้ปัจจุบัน');
+        setState(() => _error = L10n.currentUserNotFound);
         return;
       }
 
@@ -138,12 +140,15 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       setState(() => _currentProfile = profile);
     } catch (e) {
       if (!mounted || _currentProfile != null) return;
-      setState(() => _error = 'ไม่สามารถเริ่มห้องแชทได้: $e');
+      setState(() => _error = L10n.cannotStartChatRoom(e));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final profile = _currentProfile;
     final friendName = widget.friendProfile.displayName.trim();
     final friendInitial =
@@ -183,6 +188,8 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
               ],
             ),
     );
+      },
+    );
   }
 
   String _buildChatTitle() {
@@ -191,7 +198,9 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       return widget.friendProfile.displayName;
     }
     final shortOrderId = orderId.length > 8 ? orderId.substring(0, 8) : orderId;
-    return '${widget.friendProfile.displayName} • Order $shortOrderId';
+    return L10n.en
+        ? '${widget.friendProfile.displayName} • Order $shortOrderId'
+        : '${widget.friendProfile.displayName} • ออเดอร์ $shortOrderId';
   }
 
   Widget _buildMessageList(UserProfile profile) {
@@ -205,7 +214,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
         }
         _scheduleMarkAsRead(profile);
         if (messages.isEmpty) {
-          return const Center(child: Text('เริ่มต้นสนทนาก่อนเลย'));
+          return Center(child: Text(L10n.startConversationFirst));
         }
         return ListView.builder(
           reverse: true,
@@ -253,8 +262,8 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                 textInputAction: TextInputAction.send,
                 minLines: 1,
                 maxLines: 4,
-                decoration: const InputDecoration(
-                  hintText: 'พิมพ์ข้อความ',
+                decoration: InputDecoration(
+                  hintText: L10n.typeMessageHint,
                   border: InputBorder.none,
                 ),
                 onSubmitted: (_) => _handleSend(profile),
@@ -290,7 +299,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('ส่งข้อความไม่สำเร็จ: $e')));
+            .showSnackBar(SnackBar(content: Text(L10n.sendMessageFailed(e))));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -300,12 +309,14 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   Future<void> _openAttachmentSheet(UserProfile profile) async {
     await showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
+      builder: (ctx) => ListenableBuilder(
+        listenable: LocaleService.instance,
+        builder: (context, _) => SafeArea(
         child: Wrap(
           children: [
             ListTile(
               leading: const Icon(Icons.photo_library),
-              title: const Text('เลือกรูปจากคลังภาพ'),
+              title: Text(L10n.pickFromGallery),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickImage(ImageSource.gallery, profile);
@@ -313,7 +324,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.photo_camera),
-              title: const Text('ถ่ายรูป'),
+              title: Text(L10n.takePhoto),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickImage(ImageSource.camera, profile);
@@ -321,7 +332,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.videocam),
-              title: const Text('บันทึก/เลือกรูปแบบวิดีโอ'),
+              title: Text(L10n.pickVideoFile),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickVideo(profile);
@@ -329,7 +340,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.attach_file),
-              title: const Text('เลือกไฟล์เอกสาร'),
+              title: Text(L10n.pickDocument),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickFile(profile);
@@ -337,6 +348,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -389,7 +401,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('อัปโหลดไฟล์ไม่สำเร็จ: $e')));
+            .showSnackBar(SnackBar(content: Text(L10n.uploadFileFailed(e))));
       }
     } finally {
       if (mounted) setState(() => _uploading = false);
@@ -445,7 +457,7 @@ class _MessageBubble extends StatelessWidget {
       case 'video':
         return _buildAttachmentTile(context,
             icon: Icons.videocam,
-            label: message.fileName ?? 'ไฟล์วิดีโอ',
+            label: message.fileName ?? L10n.videoFile,
             url: message.mediaUrl);
       case 'call':
         final callIcon = message.callType == 'video'
@@ -468,7 +480,7 @@ class _MessageBubble extends StatelessWidget {
       case 'file':
         return _buildAttachmentTile(context,
             icon: Icons.description,
-            label: message.fileName ?? 'ไฟล์แนบ',
+            label: message.fileName ?? L10n.attachmentFile,
             url: message.mediaUrl,
             subtitle: _formatSize(message.fileSize));
       default:
@@ -478,15 +490,15 @@ class _MessageBubble extends StatelessWidget {
 
   String _buildCallLabel(ChatMessage message) {
     final status = message.callStatus;
-    if (status == 'declined') return 'ยกเลิกสาย';
-    if (status == 'missed') return 'ไม่ได้รับสาย';
+    if (status == 'declined') return L10n.callDeclined;
+    if (status == 'missed') return L10n.callMissed;
     if (status == 'answered') {
       final duration = message.callDurationSeconds ?? 0;
       final minutes = (duration ~/ 60).toString().padLeft(2, '0');
       final seconds = (duration % 60).toString().padLeft(2, '0');
-      return 'สนทนา $minutes:$seconds';
+      return L10n.callDuration(int.parse(minutes), seconds);
     }
-    return message.text ?? 'บันทึกการโทร';
+    return message.text ?? L10n.callLogDefault;
   }
 
   Widget _buildAttachmentTile(

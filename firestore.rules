@@ -10,7 +10,9 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+      return signedIn()
+          && ('admin' in request.auth.token)
+          && request.auth.token.admin == true;
     }
 
     function isAdminFromRegistry() {
@@ -28,8 +30,13 @@ service cloud.firestore {
       return signedIn() && uid() == userId;
     }
 
+    function isAnonymous() {
+      return signedIn()
+          && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
     function authEmail() {
-      return signedIn() ? request.auth.token.email : null;
+      return signedIn() && ('email' in request.auth.token) ? request.auth.token.email : null;
     }
 
     function isRegistrationCollection(collection) {
@@ -60,7 +67,57 @@ service cloud.firestore {
     }
 
     function isPublicProductVisible(data) {
-      return data != null && data.isActive == true;
+      return data != null
+          && (
+            data.isActive == true
+            || data.canShipNationwide == true
+          );
+    }
+
+    function productCatalogAiFieldKeys() {
+      return [
+        'catalogType',
+        'catalogTypeSlug',
+        'catalogTypeSort',
+        'catalogHeading',
+        'catalogHeadingSlug',
+        'catalogHeadingSort',
+        'catalogTypeConfidence',
+        'catalogHeadingConfidence',
+        'catalogReviewStatus',
+        'catalogReviewReasons',
+        'catalogReviewReasonLabels',
+        'catalogReviewedAt',
+        'catalogReviewedBy',
+        'catalogAdminLocked',
+        'aiCatalogClassifiedAt',
+        'aiCatalogClassifierVersion',
+        'aiCatalogInputHash',
+      ];
+    }
+
+    function productCatalogAiFieldsAbsent() {
+      return !request.resource.data.keys().hasAny(productCatalogAiFieldKeys());
+    }
+
+    function productCatalogAiFieldsUnchanged() {
+      return request.resource.data.get('catalogType', null) == resource.data.get('catalogType', null)
+          && request.resource.data.get('catalogTypeSlug', null) == resource.data.get('catalogTypeSlug', null)
+          && request.resource.data.get('catalogTypeSort', null) == resource.data.get('catalogTypeSort', null)
+          && request.resource.data.get('catalogHeading', null) == resource.data.get('catalogHeading', null)
+          && request.resource.data.get('catalogHeadingSlug', null) == resource.data.get('catalogHeadingSlug', null)
+          && request.resource.data.get('catalogHeadingSort', null) == resource.data.get('catalogHeadingSort', null)
+          && request.resource.data.get('catalogTypeConfidence', null) == resource.data.get('catalogTypeConfidence', null)
+          && request.resource.data.get('catalogHeadingConfidence', null) == resource.data.get('catalogHeadingConfidence', null)
+          && request.resource.data.get('catalogReviewStatus', null) == resource.data.get('catalogReviewStatus', null)
+          && request.resource.data.get('catalogReviewReasons', null) == resource.data.get('catalogReviewReasons', null)
+          && request.resource.data.get('catalogReviewReasonLabels', null) == resource.data.get('catalogReviewReasonLabels', null)
+          && request.resource.data.get('catalogReviewedAt', null) == resource.data.get('catalogReviewedAt', null)
+          && request.resource.data.get('catalogReviewedBy', null) == resource.data.get('catalogReviewedBy', null)
+          && request.resource.data.get('catalogAdminLocked', null) == resource.data.get('catalogAdminLocked', null)
+          && request.resource.data.get('aiCatalogClassifiedAt', null) == resource.data.get('aiCatalogClassifiedAt', null)
+          && request.resource.data.get('aiCatalogClassifierVersion', null) == resource.data.get('aiCatalogClassifierVersion', null)
+          && request.resource.data.get('aiCatalogInputHash', null) == resource.data.get('aiCatalogInputHash', null);
     }
 
     function isOrderParticipant(data) {
@@ -87,20 +144,25 @@ service cloud.firestore {
           && data != null
           && (
             (data.customerId != null && data.customerId == uid())
+            || (data.driverId != null && data.driverId == uid())
             || (
               !isUnverifiedPromptPayOrder(data)
               && (
                 (data.shopId != null && data.shopId == uid())
                 || (data.shopOwnerId != null && data.shopOwnerId == uid())
-                || (data.driverId != null && data.driverId == uid())
               )
             )
           );
     }
 
+    function hasNotificationOrderId() {
+      return request.resource.data.keys().hasAll(['orderId'])
+          && request.resource.data.orderId is string
+          && request.resource.data.orderId != '';
+    }
+
     function canCreateVan3NotificationForOrder() {
-      return request.resource.data.orderId is string
-          && request.resource.data.orderId != ''
+      return hasNotificationOrderId()
           && exists(/databases/$(database)/documents/orders/$(request.resource.data.orderId))
           && signedIn()
           && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data != null
@@ -113,13 +175,70 @@ service cloud.firestore {
           && !isUnverifiedPromptPayOrder(get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data);
     }
 
+    function canCreateRiderOrderAppNotification() {
+      return signedIn()
+          && request.resource.data.sourceApp == 'van3'
+          && hasNotificationOrderId()
+          && request.resource.data.recipientUid is string
+          && request.resource.data.recipientUid != ''
+          && request.resource.data.action is string
+          && exists(/databases/$(database)/documents/orders/$(request.resource.data.orderId))
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data != null
+          && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId == uid()
+          && (
+            request.resource.data.recipientUid
+                == get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.shopOwnerId
+            || request.resource.data.recipientUid
+                == get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.shopId
+            || request.resource.data.recipientUid
+                == get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.customerId
+          );
+    }
+
+    function canCreateRiderSelfPayoutNotification() {
+      return signedIn()
+          && request.resource.data.sourceApp == 'van3'
+          && request.resource.data.recipientUid == uid()
+          && request.resource.data.action in ['payout_pending', 'payout_paid']
+          && request.resource.data.targetApp == 'van3';
+    }
+
+    function canCreateAdminAppNotification() {
+      return isPrivilegedAdmin()
+          && request.resource.data.sourceApp == 'van4_admin'
+          && request.resource.data.action is string
+          && request.resource.data.recipientUid is string
+          && request.resource.data.recipientUid != '';
+    }
+
     function canCreateAppNotification() {
       return signedIn()
           && (
-            request.resource.data.targetApp != 'van3'
-            || request.resource.data.sourceApp != 'van2_customer'
+            canCreateAdminAppNotification()
             || canCreateVan3NotificationForOrder()
+            || canCreateRiderOrderAppNotification()
+            || canCreateRiderSelfPayoutNotification()
           );
+    }
+
+    function canWriteFriendPreview(userId, friendId) {
+      return isSelf(userId)
+          || (
+            signedIn()
+            && uid() == friendId
+            && request.resource.data.uid == friendId
+          );
+    }
+
+    function canMarkOwnNotificationRead() {
+      return signedIn()
+          && resource.data.recipientUid == uid()
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isRead',
+            'readAt',
+            'read'
+          ]);
     }
 
     function isCallParticipant(data) {
@@ -129,6 +248,510 @@ service cloud.firestore {
             (data.callerId != null && data.callerId == uid())
             || (data.calleeId != null && data.calleeId == uid())
           );
+    }
+
+    function isChatParticipant(chatId) {
+      return signedIn()
+          && exists(/databases/$(database)/documents/chats/$(chatId))
+          && uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function canDeleteExpiredChatMessage(chatId) {
+      return isChatParticipant(chatId)
+          && resource.data.expiresAt != null
+          && resource.data.expiresAt <= request.time;
+    }
+
+    function isDeliveredCustomerOrder(orderId) {
+      return signedIn()
+          && exists(/databases/$(database)/documents/orders/$(orderId))
+          && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == uid()
+          && get(/databases/$(database)/documents/orders/$(orderId)).data.status == 'delivered';
+    }
+
+    function reviewRatingIsValid(data) {
+      return data.rating is number && data.rating >= 1 && data.rating <= 5;
+    }
+
+    function reviewCommentIsValid(data) {
+      return !('comment' in data)
+          || (data.comment is string && data.comment.size() <= 1000);
+    }
+
+    function reviewImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    // รองรับออเดอร์เก่าที่ shopOwnerId ไม่ได้บันทึก แต่ยังผูกกับ shopId เดิม
+    function orderShopOwnerMatches(order, shopOwnerId) {
+      return shopOwnerId is string
+          && (
+            ('shopOwnerId' in order && order.shopOwnerId == shopOwnerId)
+            || (
+              !('shopOwnerId' in order)
+              && 'shopId' in order
+              && order.shopId == shopOwnerId
+            )
+          );
+    }
+
+    // รองรับออเดอร์เก่าที่ไม่มี productIds[] แต่มี products ในออเดอร์
+    function orderIncludesProductId(order, productId) {
+      return !('productIds' in order)
+          || (order.productIds is list && productId in order.productIds);
+    }
+
+    // รองรับ driverId หรือ deliveryProofCapturedById หลังไรเดอร์ส่งสำเร็จ
+    function orderRiderMatches(order, riderId) {
+      return riderId is string
+          && (
+            ('driverId' in order && order.driverId == riderId)
+            || (
+              'deliveryProofCapturedById' in order
+              && order.deliveryProofCapturedById == riderId
+            )
+          );
+    }
+
+    function canCreateProductReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.productId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.productId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && order.shopId == request.resource.data.shopId
+          && orderShopOwnerMatches(order, request.resource.data.shopOwnerId)
+          && orderIncludesProductId(order, request.resource.data.productId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canCreateShopReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.shopId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && order.shopId == request.resource.data.shopId
+          && orderShopOwnerMatches(order, request.resource.data.shopOwnerId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnReview() {
+      return signedIn()
+          && resource.data.customerId == uid()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.orderId == resource.data.orderId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.shopOwnerId == resource.data.shopOwnerId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'rating',
+            'comment',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canReadReview(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.customerId == uid())
+          || (signedIn() && data.shopOwnerId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function canCreateRiderReview(reviewId) {
+      let order = get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data;
+      return request.resource.data.orderId is string
+          && request.resource.data.riderId is string
+          && request.resource.data.customerId == uid()
+          && reviewId == request.resource.data.orderId + '_' + request.resource.data.riderId
+          && isDeliveredCustomerOrder(request.resource.data.orderId)
+          && orderRiderMatches(order, request.resource.data.riderId)
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnRiderReview() {
+      return signedIn()
+          && resource.data.customerId == uid()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.orderId == resource.data.orderId
+          && request.resource.data.riderId == resource.data.riderId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'rating',
+            'comment',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && reviewRatingIsValid(request.resource.data)
+          && reviewCommentIsValid(request.resource.data)
+          && reviewImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canReadRiderReview(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.customerId == uid())
+          || (signedIn() && data.riderId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function productCommentTextIsValid(data) {
+      return !('text' in data)
+          || (data.text is string && data.text.size() <= 1000);
+    }
+
+    function productCommentImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    function canReadProductComment(data) {
+      return data.status == 'visible'
+          || (signedIn() && data.authorId == uid())
+          || isPrivilegedAdmin();
+    }
+
+    function canCreateProductComment() {
+      return signedIn()
+          && request.resource.data.authorId == uid()
+          && request.resource.data.productId is string
+          && request.resource.data.shopId is string
+          && request.resource.data.authorName is string
+          && productCommentTextIsValid(request.resource.data)
+          && productCommentImageUrlsIsValid(request.resource.data)
+          && (
+            (request.resource.data.text is string && request.resource.data.text.size() > 0)
+            || (
+              'imageUrls' in request.resource.data
+              && request.resource.data.imageUrls is list
+              && request.resource.data.imageUrls.size() > 0
+            )
+          )
+          && request.resource.data.status == 'visible'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateOwnProductComment() {
+      return signedIn()
+          && resource.data.authorId == uid()
+          && request.resource.data.authorId == resource.data.authorId
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'text',
+            'imageUrls',
+            'updatedAt',
+          ])
+          && productCommentTextIsValid(request.resource.data)
+          && productCommentImageUrlsIsValid(request.resource.data)
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function productReactionTypeIsValid(data) {
+      return data.type == 'like' || data.type == 'dislike' || data.type == 'love';
+    }
+
+    function canCreateProductReactionStats(productId) {
+      return signedIn()
+          && request.resource.data.productId == productId
+          && request.resource.data.shopId is string
+          && request.resource.data.likeCount is int
+          && request.resource.data.dislikeCount is int
+          && request.resource.data.loveCount is int
+          && request.resource.data.likeCount >= 0
+          && request.resource.data.dislikeCount >= 0
+          && request.resource.data.loveCount >= 0
+          && (!('shareCount' in request.resource.data)
+              || (request.resource.data.shareCount is int
+                  && request.resource.data.shareCount >= 0))
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canCreateProductReactionStatsForShare(productId) {
+      return request.resource.data.productId == productId
+          && request.resource.data.shopId is string
+          && request.resource.data.likeCount == 0
+          && request.resource.data.dislikeCount == 0
+          && request.resource.data.loveCount == 0
+          && request.resource.data.shareCount == 1
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canUpdateProductReactionStats() {
+      return signedIn()
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'likeCount',
+            'dislikeCount',
+            'loveCount',
+            'updatedAt',
+          ])
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function canIncrementProductShareCount() {
+      return request.resource.data.productId == resource.data.productId
+          && request.resource.data.shopId == resource.data.shopId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'shareCount',
+            'updatedAt',
+          ])
+          && request.resource.data.shareCount is int
+          && request.resource.data.shareCount
+              == resource.data.get('shareCount', 0) + 1
+          && request.resource.data.updatedAt == request.time;
+    }
+
+    function adminSupportSourceIsValid(sourceApp) {
+      return sourceApp == 'van1' || sourceApp == 'van2' || sourceApp == 'van3';
+    }
+
+    function adminSupportImageUrlsIsValid(data) {
+      return !('imageUrls' in data)
+          || (data.imageUrls is list && data.imageUrls.size() <= 4);
+    }
+
+    function canCreateAdminSupportTicket() {
+      return signedIn()
+          && request.resource.data.requesterUid == uid()
+          && adminSupportSourceIsValid(request.resource.data.sourceApp)
+          && request.resource.data.sourceLabel is string
+          && request.resource.data.sourceLabel.size() > 0
+          && request.resource.data.sourceLabel.size() <= 40
+          && request.resource.data.requesterName is string
+          && request.resource.data.requesterName.size() <= 120
+          && request.resource.data.topicKey is string
+          && request.resource.data.topicKey.size() > 0
+          && request.resource.data.topicKey.size() <= 64
+          && request.resource.data.topicLabel is string
+          && request.resource.data.topicLabel.size() > 0
+          && request.resource.data.topicLabel.size() <= 120
+          && request.resource.data.message is string
+          && request.resource.data.message.size() > 0
+          && request.resource.data.message.size() <= 2000
+          && request.resource.data.status == 'open'
+          && adminSupportImageUrlsIsValid(request.resource.data)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && (!('requesterPhone' in request.resource.data)
+              || request.resource.data.requesterPhone is string)
+          && (!('unreadForRequester' in request.resource.data)
+              || request.resource.data.unreadForRequester == false)
+          && (!('unreadForAdmin' in request.resource.data)
+              || request.resource.data.unreadForAdmin is bool)
+          && (!('lastMessagePreview' in request.resource.data)
+              || request.resource.data.lastMessagePreview is string)
+          && (!('lastMessageRole' in request.resource.data)
+              || request.resource.data.lastMessageRole == 'requester')
+          && (!('lastMessageAt' in request.resource.data)
+              || request.resource.data.lastMessageAt == request.time)
+          && (!('orderId' in request.resource.data)
+              || (request.resource.data.orderId is string
+                  && request.resource.data.orderId.size() > 0
+                  && request.resource.data.orderId.size() <= 80));
+    }
+
+    function adminSupportTicketDoc(ticketId) {
+      return get(/databases/$(database)/documents/admin_support_tickets/$(ticketId));
+    }
+
+    function canReadAdminSupportTicket(ticketId) {
+      return isPrivilegedAdmin()
+          || (
+            signedIn()
+            && adminSupportTicketDoc(ticketId).data != null
+            && adminSupportTicketDoc(ticketId).data.requesterUid == uid()
+          );
+    }
+
+    function adminSupportTicketIsOpen(ticketId) {
+      let ticket = adminSupportTicketDoc(ticketId).data;
+      return ticket != null
+          && ticket.status != 'closed'
+          && (!('contactClosed' in ticket) || ticket.contactClosed != true);
+    }
+
+    function canCreateAdminSupportMessage(ticketId) {
+      let ticket = adminSupportTicketDoc(ticketId).data;
+      return signedIn()
+          && adminSupportTicketIsOpen(ticketId)
+          && ticket != null
+          && request.resource.data.senderUid == uid()
+          && request.resource.data.senderRole in ['admin', 'requester']
+          && request.resource.data.senderName is string
+          && request.resource.data.senderName.size() > 0
+          && request.resource.data.senderName.size() <= 120
+          && request.resource.data.message is string
+          && request.resource.data.message.size() > 0
+          && request.resource.data.message.size() <= 2000
+          && adminSupportImageUrlsIsValid(request.resource.data)
+          && request.resource.data.createdAt == request.time
+          && (
+            (isPrivilegedAdmin() && request.resource.data.senderRole == 'admin')
+            || (ticket.requesterUid == uid() && request.resource.data.senderRole == 'requester')
+          );
+    }
+
+    function canRequesterUpdateAdminSupportTicket() {
+      return signedIn()
+          && resource.data.requesterUid == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'lastMessageAt',
+            'lastMessagePreview',
+            'lastMessageRole',
+            'unreadForAdmin',
+            'unreadForRequester',
+            'updatedAt'
+          ])
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['unreadForRequester'])
+            || request.resource.data.unreadForRequester == false
+          );
+    }
+
+    function canAdminUpdateAdminSupportTicket() {
+      return isPrivilegedAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'lastMessageAt',
+            'lastMessagePreview',
+            'lastMessageRole',
+            'unreadForRequester',
+            'unreadForAdmin',
+            'assignedAdminUid',
+            'contactClosed',
+            'closedAt',
+            'closedByAdminUid',
+            'claimRequest',
+            'updatedAt'
+          ]);
+    }
+
+    function canCreateAdminSupportKnowledge(ticketId) {
+      return isPrivilegedAdmin()
+          && request.resource.data.ticketId == ticketId
+          && request.resource.data.sourceApp is string
+          && request.resource.data.topicKey is string
+          && request.resource.data.topicLabel is string
+          && request.resource.data.question is string
+          && request.resource.data.question.size() > 0
+          && request.resource.data.transcript is list
+          && request.resource.data.qaPairs is list
+          && request.resource.data.status == 'closed'
+          && request.resource.data.closedAt == request.time;
+    }
+
+    function merchantUserPrivilegedFieldKeys() {
+      return [
+        'merchantSecurityDepositPaid',
+        'merchantSecurityDepositPaidAt',
+        'merchantSecurityDepositAmount',
+        'omiseRecipientId',
+        'omiseRecipientUpdatedAt',
+        'contractStatus',
+        'contractCancelledAt',
+        'bankName',
+        'accountNumber',
+        'accountName',
+        'bankAccountNumber',
+        'merchantPenaltyBlocked',
+        'merchantPenaltyUncollectedTotal',
+        'merchantPenaltyBlockedAt',
+      ];
+    }
+
+    function merchantUserPrivilegedFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+        merchantUserPrivilegedFieldKeys(),
+      );
+    }
+
+    function merchantUserPrivilegedFieldsAbsentOnCreate() {
+      return !request.resource.data.keys().hasAny(merchantUserPrivilegedFieldKeys());
+    }
+
+    function contractPrivilegedFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'cancelledAt',
+        'contractCancelledAt',
+        'terminatedAt',
+        'approvedAt',
+        'approvedBy',
+        'rejectedAt',
+        'rejectedBy',
+      ]);
+    }
+
+    function contractSelfUpdateAllowed() {
+      return contractPrivilegedFieldsUnchanged()
+          && (
+            request.resource.data.get('status', resource.data.get('status', ''))
+                == resource.data.get('status', '')
+            || (
+              request.resource.data.get('status', '') != 'cancelled'
+              && request.resource.data.get('status', '') != 'terminated'
+              && request.resource.data.get('status', '') == 'accepted'
+              && (
+                resource.data.get('status', '') == ''
+                || resource.data.get('status', '') == 'pending'
+                || resource.data.get('status', '') == 'pending_acceptance'
+                || resource.data.get('status', '') == 'pending_contract'
+              )
+            )
+          );
+    }
+
+    function registrationPrivilegedFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'status',
+        'approvedAt',
+        'approvedBy',
+        'rejectedAt',
+        'rejectedBy',
+        'bankName',
+        'accountNumber',
+        'accountOwner',
+        'accountName',
+        'bankAccountNumber',
+        'omiseRecipientId',
+        'omiseRecipientUpdatedAt',
+      ]);
+    }
+
+    function registrationCreateStatusAllowed() {
+      return !request.resource.data.keys().hasAny(['status'])
+          || request.resource.data.status == 'pending'
+          || isPrivilegedAdmin();
     }
 
     // แอปเช็คอัปเดต ต้องอ่านได้ก่อนล็อกอิน (ใช้ใน AppUpdateGate)
@@ -149,24 +772,64 @@ service cloud.firestore {
       allow create, update, delete: if isPrivilegedAdmin();
     }
 
-    // ชั้นสินค้า/ปุ่มหน้าแรก van2 (แอดมินแก้ไข / ลูกค้าอ่านได้)
-    match /platform_catalog/{docId} {
+    // โปรโมชั่นอัตโนมัติ — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน
+    match /promotions/{promotionId} {
+      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // คูปอง — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน (ตรวจโค้ดจริงบน Cloud Functions)
+    match /coupons/{couponId} {
+      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // บันทึกการใช้คูปอง/โปร — เขียนผ่าน Cloud Functions เท่านั้น
+    match /coupon_redemptions/{redemptionId} {
+      allow get: if signedIn() && resource.data.userId == uid();
+      allow list: if isPrivilegedAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // รูปแบบแสดงโปร/คูปองบน van2
+    match /promotion_display_config/{docId} {
       allow get, list: if true;
       allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตะกร้า van2 — อ่านได้เฉพาะเจ้าของ (เขียน/คืนสต๊อกผ่าน Cloud Functions เท่านั้น)
+    match /van2_cart_sessions/{customerUid} {
+      allow get: if signedIn() && uid() == customerUid;
+      allow list: if false;
+      allow create, update, delete: if false;
     }
 
     // สินค้า (แอปโหลดจาก collection('products'))
     match /products/{productId} {
       allow get, list: if (signedIn() && resource.data.ownerUid == uid())
-          || isPublicProductVisible(resource.data);
+          || isPublicProductVisible(resource.data)
+          || isPrivilegedAdmin();
 
-      allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow create: if signedIn()
+          && !isAnonymous()
+          && (
+            (request.resource.data.ownerUid == uid()
+                && productCatalogAiFieldsAbsent())
+            || isPrivilegedAdmin()
+          );
 
       allow update: if signedIn()
-          && resource.data.ownerUid == uid()
-          && request.resource.data.ownerUid == uid();
+          && !isAnonymous()
+          && (
+            (resource.data.ownerUid == uid()
+                && request.resource.data.ownerUid == uid()
+                && productCatalogAiFieldsUnchanged())
+            || isPrivilegedAdmin()
+          );
 
-      allow delete: if signedIn() && resource.data.ownerUid == uid();
+      allow delete: if signedIn()
+          && !isAnonymous()
+          && (resource.data.ownerUid == uid() || isPrivilegedAdmin());
 
       match /specifications/{specId} {
         allow get, list: if signedIn()
@@ -174,6 +837,65 @@ service cloud.firestore {
         allow create, update, delete: if signedIn()
             && get(/databases/$(database)/documents/products/$(productId)).data.ownerUid == uid();
       }
+    }
+
+    match /product_reviews/{reviewId} {
+      allow get, list: if canReadReview(resource.data);
+      allow create: if canCreateProductReview(reviewId);
+      allow update: if canUpdateOwnReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /shop_reviews/{reviewId} {
+      allow get, list: if canReadReview(resource.data);
+      allow create: if canCreateShopReview(reviewId);
+      allow update: if canUpdateOwnReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /rider_reviews/{reviewId} {
+      allow get, list: if canReadRiderReview(resource.data);
+      allow create: if canCreateRiderReview(reviewId);
+      allow update: if canUpdateOwnRiderReview() || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    match /product_review_stats/{productId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    match /shop_review_stats/{shopId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    match /product_reaction_stats/{productId} {
+      allow get, list: if true;
+      allow create: if canCreateProductReactionStats(productId)
+          || canCreateProductReactionStatsForShare(productId);
+      allow update: if canUpdateProductReactionStats()
+          || canIncrementProductShareCount()
+          || isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+
+      match /user_reactions/{userId} {
+        allow get, list: if signedIn();
+        allow create, update: if signedIn()
+            && userId == uid()
+            && productReactionTypeIsValid(request.resource.data)
+            && request.resource.data.updatedAt == request.time;
+        allow delete: if signedIn() && userId == uid();
+      }
+    }
+
+    match /product_comments/{commentId} {
+      allow get, list: if canReadProductComment(resource.data);
+      allow create: if canCreateProductComment();
+      allow update: if canUpdateOwnProductComment()
+          || isPrivilegedAdmin();
+      allow delete: if (signedIn() && resource.data.authorId == uid())
+          || isPrivilegedAdmin();
     }
 
     // โปรไฟล์ผู้ใช้ฝั่งลูกค้า (ใช้เก็บ fcmToken ฯลฯ)
@@ -184,27 +906,60 @@ service cloud.firestore {
 
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
-        allow create, update, delete: if isSelf(userId);
+        allow create, update: if canWriteFriendPreview(userId, friendId);
+        allow delete: if isSelf(userId);
+      }
+
+      match /saved_payment_methods/{cardId} {
+        allow get, list: if isSelf(userId);
+        allow write: if false;
+      }
+
+      // คูปองที่ลูกค้ากดรับเอง — เขียนผ่าน Cloud Functions เท่านั้น
+      match /claimed_coupons/{couponId} {
+        allow get, list: if isSelf(userId);
+        allow create, update, delete: if false;
       }
     }
 
     // โปรไฟล์ผู้ใช้เดิม (รองรับช่วง migration)
     match /users/{userId} {
       allow get: if isSelf(userId) || isPrivilegedAdmin();
-      allow create, update, delete: if isSelf(userId);
+      allow create: if isSelf(userId) && merchantUserPrivilegedFieldsAbsentOnCreate();
+      allow update: if isPrivilegedAdmin()
+          || (isSelf(userId) && merchantUserPrivilegedFieldsUnchanged());
+      allow delete: if isSelf(userId);
       allow list: if isPrivilegedAdmin();
 
       match /friends/{friendId} {
         allow get, list: if isSelf(userId);
-        allow create, update, delete: if isSelf(userId);
+        allow create, update: if canWriteFriendPreview(userId, friendId);
+        allow delete: if isSelf(userId);
       }
     }
 
     // สถานะไรเดอร์ออนไลน์ (ใช้ในหน้าตะกร้าฝั่งลูกค้า และอัปเดตจากแอปไรเดอร์)
     match /riders/{riderId} {
-      allow get, list: if signedIn();
+      allow get: if isSelf(riderId) || isPrivilegedAdmin();
+      allow list: if isPrivilegedAdmin()
+          || (
+            signedIn()
+            && request.query.limit <= 50
+            && resource.data.onlineReady == true
+          );
       allow create: if isSelf(riderId);
-      allow update: if isSelf(riderId) || isPrivilegedAdmin();
+      allow update: if isPrivilegedAdmin()
+          || (isSelf(riderId) && riderPrivilegedFieldsUnchanged());
+      allow delete: if isPrivilegedAdmin();
+    }
+
+    // เอกสารลงทะเบียนไรเดอร์ (van3 RiderOnboardingGate)
+    match /rider_registrations/{riderId} {
+      allow get: if isSelf(riderId) || isPrivilegedAdmin();
+      allow list: if isPrivilegedAdmin();
+      allow create: if isSelf(riderId);
+      allow update: if isPrivilegedAdmin()
+          || (isSelf(riderId) && riderPrivilegedFieldsUnchanged());
       allow delete: if isPrivilegedAdmin();
     }
 
@@ -213,22 +968,67 @@ service cloud.firestore {
       allow get: if isSelf(userId) || isPrivilegedAdmin();
       allow list: if isPrivilegedAdmin();
       allow create: if isSelf(userId);
-      allow update: if isSelf(userId) || isPrivilegedAdmin();
+      allow update: if isPrivilegedAdmin()
+          || (isSelf(userId) && contractSelfUpdateAllowed());
       allow delete: if isPrivilegedAdmin();
+    }
+
+    // แคชผล AI — เขียนโดย Cloud Function (Admin SDK) เท่านั้น
+    match /catalog_ai_cache/{hashId} {
+      allow get, list: if true;
+      allow write: if false;
+    }
+
+    match /product_ai_cache/{hashId} {
+      allow get, list: if false;
+      allow write: if false;
+    }
+
+    // คิว AI — ร้านค้าอ่านสถานะคิวของตัวเองได้ (เขียนโดย Cloud Function เท่านั้น)
+    match /ai_processing_queue/{jobId} {
+      allow get: if signedIn() && resource.data.uid == uid();
+      allow list: if false;
+      allow write: if false;
+    }
+
+    match /product_ai_jobs/{jobId} {
+      allow get: if signedIn() && resource.data.uid == uid();
+      allow list: if false;
+      allow write: if false;
+    }
+
+    match /product_drafts/{ownerUid}/items/{draftId} {
+      allow get, list: if signedIn() && uid() == ownerUid;
+      allow create, update, delete: if signedIn() && uid() == ownerUid;
     }
 
     // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
     match /public_shops/{shopId} {
-      allow get, list: if signedIn();
-      allow create: if isSelf(shopId);
-      allow update, delete: if isSelf(shopId) || isPrivilegedAdmin();
+      allow get, list: if true;
+      allow create: if !isAnonymous() && (isSelf(shopId) || isPrivilegedAdmin());
+      allow update, delete: if !isAnonymous() && (isSelf(shopId) || isPrivilegedAdmin());
+
+      match /catalog_types/{typeId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
+
+      match /catalog_headings/{headingId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
     }
 
     // เอกสารลงทะเบียนร้านค้า
-    // - get (single doc): ผู้ใช้ที่ล็อกอินอ่านได้ (ข้อมูลร้านสำหรับลูกค้า/ไรเดอร์)
+    // - get (single doc): เจ้าของหรือ admins เท่านั้น (ข้อมูลส่วนตัว เช่น email/phone)
     // - list/query: เจ้าของหรือadmins
     match /{collection}/{docId} {
-      allow get: if isRegistrationCollection(collection) && signedIn();
+      allow get: if isRegistrationCollection(collection)
+          && signedIn()
+          && (
+            isPrivilegedAdmin()
+            || isRegistrationOwner(docId)
+          );
 
       allow list: if isRegistrationCollection(collection)
           && signedIn()
@@ -239,14 +1039,20 @@ service cloud.firestore {
 
       allow create: if isRegistrationCollection(collection)
           && signedIn()
-          && isRegistrationCreateOwner(docId);
+          && isRegistrationCreateOwner(docId)
+          && registrationCreateStatusAllowed();
 
       allow update: if isRegistrationCollection(collection)
           && signedIn()
           && (
-            docId == uid()
-            || (resource.data.ownerId != null && resource.data.ownerId == uid())
-            || isPrivilegedAdmin()
+            isPrivilegedAdmin()
+            || (
+              (
+                docId == uid()
+                || (resource.data.ownerId != null && resource.data.ownerId == uid())
+              )
+              && registrationPrivilegedFieldsUnchanged()
+            )
           );
 
       allow delete: if isRegistrationCollection(collection)
@@ -274,20 +1080,185 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
 
       match /messages/{messageId} {
-        allow get, list: if signedIn()
-            && (uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants);
-        allow create: if signedIn()
-            && (uid() in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+        allow get, list: if isChatParticipant(chatId);
+        allow create: if isChatParticipant(chatId)
             && request.resource.data.senderId == uid();
-        allow update, delete: if isPrivilegedAdmin();
+        allow update: if isPrivilegedAdmin();
+        allow delete: if isPrivilegedAdmin() || canDeleteExpiredChatMessage(chatId);
       }
+    }
+
+    function isVan2CustomerDirectOrder(data) {
+      return signedIn()
+          && data != null
+          && data.customerId == uid()
+          && data.sourceApp == 'van2_customer';
+    }
+
+    function canClientCreateOrder(data) {
+      return isOrderParticipant(data)
+          && !isVan2CustomerDirectOrder(data);
+    }
+
+    function orderSensitiveFieldsUnchanged() {
+      return request.resource.data.get('paymentStatus', null) == resource.data.get('paymentStatus', null)
+          && request.resource.data.get('paymentMethod', null) == resource.data.get('paymentMethod', null)
+          && request.resource.data.get('paymentMethodLabel', null) == resource.data.get('paymentMethodLabel', null)
+          && request.resource.data.get('paymentStatusLabel', null) == resource.data.get('paymentStatusLabel', null)
+          && request.resource.data.get('grandTotal', null) == resource.data.get('grandTotal', null)
+          && request.resource.data.get('subtotal', null) == resource.data.get('subtotal', null)
+          && request.resource.data.get('totalPrice', null) == resource.data.get('totalPrice', null)
+          && request.resource.data.get('shippingFee', null) == resource.data.get('shippingFee', null)
+          && request.resource.data.get('paymentVerification', null) == resource.data.get('paymentVerification', null)
+          && request.resource.data.get('paymentSlip', null) == resource.data.get('paymentSlip', null)
+          && request.resource.data.get('paymentSessionId', null) == resource.data.get('paymentSessionId', null)
+          && request.resource.data.get('paymentGroupId', null) == resource.data.get('paymentGroupId', null)
+          && request.resource.data.get('driverId', null) == resource.data.get('driverId', null)
+          && request.resource.data.get('driverName', null) == resource.data.get('driverName', null)
+          && request.resource.data.get('driverPhone', null) == resource.data.get('driverPhone', null)
+          && request.resource.data.get('assignedRiderAt', null) == resource.data.get('assignedRiderAt', null)
+          && request.resource.data.get('orderType', null) == resource.data.get('orderType', null)
+          && request.resource.data.get('serviceType', null) == resource.data.get('serviceType', null)
+          && request.resource.data.get('customerId', null) == resource.data.get('customerId', null)
+          && request.resource.data.get('shopOwnerId', null) == resource.data.get('shopOwnerId', null)
+          && request.resource.data.get('shopId', null) == resource.data.get('shopId', null)
+          && request.resource.data.get('sourceApp', null) == resource.data.get('sourceApp', null)
+          && request.resource.data.get('riderNotifyReady', null) == resource.data.get('riderNotifyReady', null)
+          && request.resource.data.get('customerConfirmed', null) == resource.data.get('customerConfirmed', null)
+          && request.resource.data.get('customerConfirmedAt', null) == resource.data.get('customerConfirmedAt', null);
+    }
+
+    function orderFinancialFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'settlement',
+        'deliveryFinancials',
+        'deliverySettlementType',
+        'deliveryGrossShippingFee',
+        'deliveryPlatformFee',
+        'deliveryRiderNetIncome',
+        'deliveryCollectedAmount',
+        'deliveryCreditReleaseAmount',
+        'deliveryCompletedSource',
+        'penalty',
+        'penaltyCharged',
+        'penaltyUncollected',
+        'penaltyUpdatedAt',
+        'penaltyLastCharge',
+      ]);
+    }
+
+    function riderPrivilegedFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'registrationStatus',
+        'role',
+        'userType',
+        'omiseRecipientId',
+        'omiseRecipientUpdatedAt',
+        'approvedAt',
+        'approvedBy',
+        'rating',
+        'bankName',
+        'accountNumber',
+        'accountName',
+        'accountOwner',
+      ]);
+    }
+
+    function clientCannotAcceptOrDeliverOrder() {
+      let newStatus = request.resource.data.status;
+      let oldStatus = resource.data.status;
+      return (newStatus == 'delivered' && oldStatus != 'delivered')
+          || (newStatus == 'accepted' && oldStatus != 'accepted');
+    }
+
+    function clientCannotMutateOrderLifecycle() {
+      let newStatus = request.resource.data.get('status', '');
+      let oldStatus = resource.data.get('status', '');
+      let statusChangedToCancelOrRefund =
+          newStatus != oldStatus && (newStatus == 'cancelled' || newStatus == 'refund');
+      let lifecycleFieldsChanged = request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'refundRequested',
+        'refundRequestedAt',
+        'refundRequestedBy',
+        'refundStatus',
+        'refundBankAccountNumber',
+        'refundAccountName',
+        'refundBankName',
+        'cancelledAt',
+        'cancelledBy',
+        'cancelReason',
+        'customerCancelledAt',
+        'customerShopChoice',
+        'customerNoRiderChoice',
+        'customerWaitUntil',
+        'customerShopWaitUntil',
+        'customerWaitRequestedAt',
+        'customerShopWaitRequestedAt',
+      ]);
+      return statusChangedToCancelOrRefund || lifecycleFieldsChanged;
+    }
+
+    function resolveOrderShopUid(order) {
+      return order.get('shopOwnerId', order.get('shopId', ''));
+    }
+
+    function isShopAcceptingOrderUpdate() {
+      let oldStatus = resource.data.get('status', '');
+      let newStatus = request.resource.data.get('status', '');
+      let shopUid = resolveOrderShopUid(resource.data);
+      return shopUid is string
+          && shopUid != ''
+          && uid() == shopUid
+          && newStatus == 'preparing'
+          && oldStatus != 'preparing';
+    }
+
+    function merchantPenaltyBlocksOrderAccept() {
+      let shopUid = resolveOrderShopUid(resource.data);
+      return isShopAcceptingOrderUpdate()
+          && (
+            (
+              exists(/databases/$(database)/documents/users/$(shopUid))
+              && get(/databases/$(database)/documents/users/$(shopUid)).data.get('merchantPenaltyBlocked', false) == true
+            )
+            || (
+              exists(/databases/$(database)/documents/shop_operations/$(shopUid))
+              && get(/databases/$(database)/documents/shop_operations/$(shopUid)).data.get('penaltyBlocked', false) == true
+            )
+          );
+    }
+
+    function shopOperationsPenaltyFieldKeys() {
+      return ['penaltyBlocked', 'penaltyBlockReason', 'acceptingOrders'];
+    }
+
+    function shopOperationsPenaltyFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+        shopOperationsPenaltyFieldKeys(),
+      );
+    }
+
+    function shopOperationsPenaltyFieldsAbsentOnCreate() {
+      return !request.resource.data.keys().hasAny(shopOperationsPenaltyFieldKeys());
+    }
+
+    function canRiderAcceptAwaitingOrder() {
+      return false;
     }
 
     // ออเดอร์
     match /orders/{orderId} {
       allow read: if canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin();
-      allow create: if isOrderParticipant(request.resource.data);
-      allow update: if canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin();
+      allow create: if canClientCreateOrder(request.resource.data);
+      allow update: if isPrivilegedAdmin()
+          || (
+            (canAccessOrderAsParticipant(resource.data))
+            && orderSensitiveFieldsUnchanged()
+            && orderFinancialFieldsUnchanged()
+            && !clientCannotAcceptOrDeliverOrder()
+            && !clientCannotMutateOrderLifecycle()
+            && !merchantPenaltyBlocksOrderAccept()
+          );
       allow delete: if isPrivilegedAdmin();
 
       match /timeline/{timelineId} {
@@ -308,20 +1279,38 @@ service cloud.firestore {
     // ตั้งค่าการทำงานของร้าน
     match /shop_operations/{shopId} {
       allow read: if isSelf(shopId) || isPrivilegedAdmin();
-      allow write: if isSelf(shopId) || isPrivilegedAdmin();
+      allow create: if isPrivilegedAdmin()
+          || (isSelf(shopId) && shopOperationsPenaltyFieldsAbsentOnCreate());
+      allow update: if isPrivilegedAdmin()
+          || (isSelf(shopId) && shopOperationsPenaltyFieldsUnchanged());
+      allow delete: if isPrivilegedAdmin();
     }
 
-    // เครดิต
+    // เครดิต — top-up / hold / withdraw ผ่าน Cloud Function เท่านั้น
     match /credits/{creditId} {
-      allow read: if signedIn() && resource.data.uid == uid();
-      allow create: if signedIn() && request.resource.data.uid == uid();
-      allow update, delete: if isPrivilegedAdmin();
+      // Allow get on own doc id even when the wallet doc does not exist yet
+      // (resource == null). List still requires recipient field match.
+      allow get: if signedIn()
+          && (creditId == uid()
+              || (resource != null && resource.data.uid == uid())
+              || isPrivilegedAdmin());
+      allow list: if signedIn()
+          && resource.data.uid == uid();
+      allow create, update, delete: if isPrivilegedAdmin();
     }
 
-    // คำขอถอนเงิน
+    // กระเป๋าเงินร้านค้า — คำนวณและบันทึกโดย Cloud Function เท่านั้น
+    match /merchant_wallets/{merchantUid} {
+      allow get: if isSelf(merchantUid) || isPrivilegedAdmin();
+      allow list: if isPrivilegedAdmin();
+      allow write: if false;
+    }
+
+    // คำขอถอนเงิน — สร้างผ่าน Cloud Function เท่านั้น
     match /withdraw_requests/{requestId} {
-      allow read: if signedIn() && resource.data.uid == uid();
-      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow read: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.uid == uid());
+      allow create: if false;
       allow update: if isPrivilegedAdmin();
       allow delete: if isPrivilegedAdmin();
     }
@@ -334,13 +1323,22 @@ service cloud.firestore {
       allow delete: if isPrivilegedAdmin();
     }
 
+    // ประกาศแพลตฟอร์มจาก van4 — บันทึกประวัติ + fan-out ไป app_notifications
+    match /platform_announcements/{announcementId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if isPrivilegedAdmin()
+          && request.resource.data.sourceApp == 'van4_admin'
+          && request.resource.data.title is string
+          && request.resource.data.body is string
+          && request.resource.data.targetApps is list;
+      allow update, delete: if isPrivilegedAdmin();
+    }
+
     // การแจ้งเตือนข้ามแอป (van1/van2/van3)
     match /app_notifications/{notificationId} {
       allow create: if canCreateAppNotification();
       allow get, list: if signedIn() && resource.data.recipientUid == uid();
-      allow update: if signedIn()
-          && resource.data.recipientUid == uid()
-          && request.resource.data.recipientUid == resource.data.recipientUid;
+      allow update: if canMarkOwnNotificationRead();
       allow delete: if isPrivilegedAdmin();
     }
 
@@ -349,11 +1347,195 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // รายชื่อadmins van4 — doc id = อีเมลตัวพิมพ์เล็ก, จัดการผ่าน Firebase Console เท่านั้น
+    // รายชื่อadmins van4 — doc id = อีเมลตัวพิมพ์เล็ก; สร้าง/ลบผ่าน Console เท่านั้น
+    function adminSelfPresenceFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'authUid',
+        'email',
+        'displayName',
+        'lastSeenAt',
+      ]);
+    }
+
     match /admins/{emailId} {
-      allow get: if signedIn() && authEmail() != null && authEmail().lower() == emailId;
+      allow get: if signedIn()
+          && (
+            isPrivilegedAdmin()
+            || (
+              authEmail() != null
+              && authEmail().lower() == emailId
+            )
+          );
+      allow list: if isPrivilegedAdmin();
+      allow create, delete: if false;
+      allow update: if signedIn()
+          && authEmail() != null
+          && authEmail().lower() == emailId
+          && adminSelfPresenceFieldsOnly();
+    }
+
+    // สินค้าที่ AI ประเมินว่าผิดกฎหมาย — รอแอดมินอนุมัติก่อนขึ้น products
+    match /product_admin_reviews/{reviewId} {
+      allow create: if signedIn()
+          && (
+            request.resource.data.ownerUid == uid()
+            || isPrivilegedAdmin()
+          )
+          && request.resource.data.adminReviewStatus == 'pending'
+          && (
+            request.resource.data.aiIsLegalInThailand == false
+            || request.resource.data.aiRequiresAdminReview == true
+          );
+
+      allow get: if signedIn()
+          && (
+            resource.data.ownerUid == uid()
+            || isPrivilegedAdmin()
+          );
+
+      allow list: if isPrivilegedAdmin();
+
+      allow update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตั้งค่าแอดมิน van4 (อนุมัติอัตโนมัติ ฯลฯ)
+    match /admin_config/{docId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ชั้นสินค้าหน้าแรก van2 (แอดมินแก้ไข / ลูกค้าอ่านได้)
+    match /platform_catalog/{docId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // ยอดขายสินค้า (Cloud Function เขียน / ลูกค้าอ่านได้)
+    match /product_stats/{productId} {
+      allow get, list: if true;
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // เคลมสินค้า — เขียนผ่าน Cloud Functions เท่านั้น
+    match /order_claims/{claimId} {
+      allow read: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.customerId == uid());
+      allow create, update, delete: if false;
+    }
+
+    // ติดต่อแอดมิน — van1/van2/van3 ส่ง / van4 อ่านและตอบกลับ
+    match /admin_support_tickets/{ticketId} {
+      allow get: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.requesterUid == uid());
+      allow list: if isPrivilegedAdmin()
+          || (signedIn() && resource.data.requesterUid == uid());
+      allow create: if canCreateAdminSupportTicket();
+      allow update: if canAdminUpdateAdminSupportTicket()
+          || canRequesterUpdateAdminSupportTicket();
+      allow delete: if isPrivilegedAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if canReadAdminSupportTicket(ticketId);
+        allow create: if canCreateAdminSupportMessage(ticketId);
+        allow update, delete: if isPrivilegedAdmin();
+      }
+    }
+
+    // คลัง Q&A จากเคสที่ปิดแล้ว — สำหรับแชทบอทในอนาคต (แอดมินเท่านั้น)
+    match /admin_support_knowledge/{ticketId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if canCreateAdminSupportKnowledge(ticketId);
+      allow update, delete: if isPrivilegedAdmin();
+    }
+
+    // ตั้งค่าแพลตฟอร์ม (GP / ไลด์เดอร์ / settlement — van4 แอดมิน)
+    match /platform_config/{docId} {
+      allow get: if signedIn();
+      allow list: if isPrivilegedAdmin();
+      allow create, update, delete: if isPrivilegedAdmin();
+    }
+
+    // สรุปไรเดอร์ออนไลน์ (van2 scale — อ่านได้ทุก signed-in, เขียนเฉพาะ Cloud Functions)
+    match /system/rider_availability {
+      allow read: if signedIn();
+      allow create, update, delete: if false;
+    }
+
+    match /auth_rate_limits/{limitId} {
+      allow read, write: if false;
+    }
+
+    // คิวตรวจสลิป SlipOK (ลูกค้าอ่าน job ของตัวเองได้ — เขียนเฉพาะ Cloud Functions)
+    match /slip_verification_jobs/{jobId} {
+      allow get: if signedIn()
+        && resource.data.customerUid == uid();
       allow list: if false;
       allow create, update, delete: if false;
+    }
+
+    match /payment_sessions/{sessionId} {
+      allow get: if signedIn()
+        && resource.data.uid == uid();
+      allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /float_advances/{advanceId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // บัญชีโปรเจกต / ROI (van4 — admin เท่านั้น)
+    match /project_finance/{docId} {
+      allow read, write: if isPrivilegedAdmin();
+    }
+
+    // แชทภายในแอดมิน van4
+    match /admin_internal_threads/{threadId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update: if isPrivilegedAdmin();
+      allow delete: if isPrivilegedAdmin();
+
+      match /messages/{messageId} {
+        allow get, list: if isPrivilegedAdmin();
+        allow create: if isPrivilegedAdmin();
+        allow update, delete: if isPrivilegedAdmin();
+      }
+    }
+
+    // สถานะออนไลน์ + FCM สำหรับโทรระหว่างแอดมิน
+    match /admin_presence/{uid} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update: if isPrivilegedAdmin() && uid() == uid;
+      allow delete: if isPrivilegedAdmin() && uid() == uid;
+    }
+
+    // Heartbeat จาก van1/van2/van3/van4 → van4 dashboard สุขภาพระบบ
+    // path: ecosystem_heartbeats/{appId}/sessions/{uid}
+    match /ecosystem_heartbeats/{appId} {
+      allow read: if isPrivilegedAdmin();
+      allow write: if false;
+
+      match /sessions/{sessionUid} {
+        allow get: if isPrivilegedAdmin() || isSelf(sessionUid);
+        allow list: if isPrivilegedAdmin();
+        allow create, update: if signedIn()
+            && isSelf(sessionUid)
+            && appId in ['van1', 'van2', 'van3', 'van4']
+            && request.resource.data.uid == uid()
+            && request.resource.data.appId == appId
+            && request.resource.data.keys().hasOnly([
+              'appId',
+              'uid',
+              'firestoreOk',
+              'updatedAt',
+              'platform',
+              'points',
+              'lastError',
+              'errorCode',
+            ]);
+        allow delete: if isSelf(sessionUid) || isPrivilegedAdmin();
+      }
     }
 
     // Default deny

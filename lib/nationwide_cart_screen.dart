@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cart_screen.dart';
+import 'l10n/l10n.dart';
 import 'map_picker_screen.dart';
 import 'services/nationwide_shipping_service.dart';
 import 'storage_helper.dart';
@@ -246,7 +247,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('บันทึกที่อยู่นี้ไว้ใช้ครั้งต่อไปแล้ว')),
+      SnackBar(content: Text(L10n.addressSavedForLater)),
     );
   }
 
@@ -261,7 +262,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     }
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('ยืนยันที่อยู่จัดส่งแล้ว')));
+    ).showSnackBar(SnackBar(content: Text(L10n.deliveryAddressConfirmed)));
   }
 
   Future<void> _deleteSavedAddress(_SavedNationwideAddress savedAddress) async {
@@ -302,16 +303,16 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  'ที่อยู่จัดส่ง',
+                  L10n.deliveryAddress,
                   style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w900,
                   ),
                 ),
                 const SizedBox(height: 10),
                 if (_savedAddresses.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('ยังไม่มีที่อยู่ที่บันทึกไว้'),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(L10n.noSavedAddresses),
                   )
                 else
                   ConstrainedBox(
@@ -334,7 +335,9 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                           ),
                           title: Text(
                             isPrimary
-                                ? '${savedAddress.address.recipientName} • หลัก'
+                                ? L10n.savedAddressPrimary(
+                                    savedAddress.address.recipientName,
+                                  )
                                 : savedAddress.address.recipientName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -360,7 +363,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: <Widget>[
                                 IconButton(
-                                  tooltip: 'แก้ไขที่อยู่นี้',
+                                  tooltip: L10n.editThisAddress,
                                   onPressed: () {
                                     Navigator.of(sheetContext).pop();
                                     _editSavedAddress(savedAddress);
@@ -368,7 +371,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                                   icon: const Icon(Icons.edit_outlined),
                                 ),
                                 IconButton(
-                                  tooltip: 'ลบที่อยู่นี้',
+                                  tooltip: L10n.deleteThisAddress,
                                   onPressed: () {
                                     Navigator.of(sheetContext).pop();
                                     unawaited(
@@ -396,7 +399,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                       _startAddingAddress();
                     },
                     icon: const Icon(Icons.add_location_alt_outlined),
-                    label: const Text('เพิ่มที่อยู่ใหม่'),
+                    label: Text(L10n.addNewAddress),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -408,7 +411,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                       unawaited(_saveCurrentAddressFromButton());
                     },
                     icon: const Icon(Icons.save_outlined),
-                    label: const Text('บันทึกฟอร์มปัจจุบันเป็นที่อยู่หลัก'),
+                    label: Text(L10n.saveCurrentFormAsPrimary),
                   ),
                 ),
               ],
@@ -427,8 +430,8 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     final picked = await Navigator.of(context).push<PickedLocation>(
       MaterialPageRoute<PickedLocation>(
         builder: (context) => MapPickerScreen(
-          title: 'ปักพิกัดจัดส่ง',
-          confirmLabel: 'ใช้พิกัดนี้',
+          title: L10n.pinDeliveryLocation,
+          confirmLabel: L10n.useTheseCoordinates,
           initialLocation:
               _deliveryLatitude != null && _deliveryLongitude != null
               ? PickedLocation(
@@ -436,7 +439,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                   longitude: _deliveryLongitude!,
                   title: _googleFormattedAddress?.trim().isNotEmpty == true
                       ? _googleFormattedAddress!.trim()
-                      : 'พิกัดจัดส่ง',
+                      : L10n.deliveryCoordinates,
                 )
               : null,
         ),
@@ -495,8 +498,8 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       }
       setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('ดึงที่อยู่จากพิกัดแล้ว กรุณาตรวจสอบอีกครั้ง'),
+        SnackBar(
+          content: Text(L10n.addressFetchedFromCoordinates),
         ),
       );
     } catch (error) {
@@ -505,7 +508,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('ดึงที่อยู่ไม่สำเร็จ: $error')));
+      ).showSnackBar(SnackBar(content: Text(L10n.addressFetchFailed(error))));
     } finally {
       if (mounted) {
         setState(() => _isResolvingAddress = false);
@@ -560,15 +563,15 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'สแกนจ่าย',
+                      L10n.scanPay,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      'ระบบจะสร้างออเดอร์และแจ้งร้านค้าหลังตรวจสลิปผ่านเท่านั้น',
-                      style: TextStyle(
+                    Text(
+                      L10n.nationwideScanPayHint,
+                      style: const TextStyle(
                         color: Color(0xFF6B7280),
                         fontWeight: FontWeight.w600,
                       ),
@@ -591,7 +594,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                       alignment: Alignment.centerRight,
                       child: FilledButton(
                         onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('ปิด'),
+                        child: Text(L10n.close),
                       ),
                     ),
                   ],
@@ -608,19 +611,19 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
     PaymentSlipSubmissionRequest request,
   ) async {
     if (_isSubmitting || widget.cartItems.isEmpty) {
-      throw Exception('ไม่มีสินค้าในตะกร้าส่งทั่วประเทศ');
+      throw Exception(L10n.nationwideCartEmptyError);
     }
     final address = _readCheckoutAddress();
     if (address == null) {
-      throw Exception('กรุณายืนยันที่อยู่จัดส่งก่อนสแกนจ่าย');
+      throw Exception(L10n.confirmAddressBeforePay);
     }
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
-      throw Exception('กรุณาเข้าสู่ระบบก่อนสั่งซื้อ');
+      throw Exception(L10n.signInRequiredBeforeOrder);
     }
     if (request.bytes.isEmpty) {
-      throw Exception('ไฟล์สลิปว่างเปล่า');
+      throw Exception(L10n.emptySlipFile);
     }
 
     setState(() => _isSubmitting = true);
@@ -664,7 +667,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
         return PaymentSlipSubmissionResult(
           orderIds: const <String>[],
           verificationStatus: status,
-          message: message.isEmpty ? 'สลิปยังไม่ผ่านการตรวจสอบ' : message,
+          message: message.isEmpty ? L10n.slipNotVerified : message,
         );
       }
 
@@ -688,8 +691,11 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
         orderIds: orderIds,
         verificationStatus: status,
         message: message.isEmpty
-            ? 'ตรวจสลิปผ่านและสร้างออเดอร์ส่งทั่วประเทศแล้ว'
-            : '$message\nสร้างออเดอร์ส่งทั่วประเทศแล้ว ${orderIds.length} รายการ',
+            ? L10n.nationwideSlipVerifiedAndCreated(widget.cartItems.length)
+            : L10n.nationwideOrderCreatedWithMessage(
+                message,
+                orderIds.length,
+              ),
       );
     } catch (error) {
       rethrow;
@@ -767,7 +773,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
             .toList(growable: false) ??
         const <String>[];
     if (orderIds.isEmpty) {
-      throw Exception('ไม่สามารถสร้างออเดอร์ส่งทั่วประเทศได้');
+      throw Exception(L10n.createNationwideOrderFailed);
     }
     return orderIds;
   }
@@ -812,7 +818,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                   ),
                   Expanded(
                     child: Text(
-                      'ตะกร้าส่งทั่วประเทศ',
+                      L10n.nationwideCartTitle,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w900,
                         color: const Color(0xFF111827),
@@ -824,14 +830,14 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                         ? null
                         : _showSavedAddressSheet,
                     icon: const Icon(Icons.location_on_outlined),
-                    label: const Text('ที่อยู่'),
+                    label: Text(L10n.deliveryAddress),
                   ),
                 ],
               ),
             ),
             Expanded(
               child: widget.cartItems.isEmpty
-                  ? const Center(child: Text('ยังไม่มีสินค้าส่งทั่วประเทศ'))
+                  ? Center(child: Text(L10n.nationwideCartEmpty))
                   : ListView(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       children: <Widget>[
@@ -891,7 +897,7 @@ class _NationwideCartScreenState extends State<NationwideCartScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.qr_code_2_rounded),
-                    label: const Text('สแกนจ่าย'),
+                    label: Text(L10n.scanPay),
                   ),
                 ),
               ),
@@ -1059,7 +1065,7 @@ class _NationwideCartItemTile extends StatelessWidget {
                   if (item.selectedToppings.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 4),
                     Text(
-                      'ตัวเลือก: ${item.selectedToppings.join(', ')}',
+                      L10n.optionsLine(item.selectedToppings.join(', ')),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1074,16 +1080,17 @@ class _NationwideCartItemTile extends StatelessWidget {
                     children: <Widget>[
                       _InfoPill(
                         icon: Icons.sell_outlined,
-                        label: '฿${_formatMoney(item.unitPrice)} / ชิ้น',
+                        label: L10n.pricePerPiece(item.unitPrice),
                       ),
                       _InfoPill(
                         icon: Icons.shopping_bag_outlined,
-                        label: '${item.quantity} ชิ้น',
+                        label: L10n.quantityPieces(item.quantity),
                       ),
                       _InfoPill(
                         icon: Icons.scale_outlined,
-                        label:
-                            '${(item.parcelWeightGrams * item.quantity / 1000).toStringAsFixed(1)} กก.',
+                        label: L10n.parcelWeightKg(
+                          item.parcelWeightGrams * item.quantity / 1000,
+                        ),
                       ),
                       if (_dimensionLabel.isNotEmpty)
                         _InfoPill(
@@ -1095,9 +1102,9 @@ class _NationwideCartItemTile extends StatelessWidget {
                   const SizedBox(height: 10),
                   Row(
                     children: <Widget>[
-                      const Text(
-                        'รวมรายการนี้',
-                        style: TextStyle(
+                      Text(
+                        L10n.lineSubtotal,
+                        style: const TextStyle(
                           color: Color(0xFF6B7280),
                           fontWeight: FontWeight.w700,
                         ),
@@ -1129,7 +1136,9 @@ class _NationwideCartItemTile extends StatelessWidget {
     if (length == null || width == null || height == null) {
       return '';
     }
-    return '${_formatDimension(length)}x${_formatDimension(width)}x${_formatDimension(height)} ซม.';
+    return L10n.parcelDimensions(
+      '${_formatDimension(length)}x${_formatDimension(width)}x${_formatDimension(height)}',
+    );
   }
 
   String _formatMoney(num amount) {
@@ -1220,7 +1229,7 @@ class _AddressForm extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'ที่อยู่จัดส่ง',
+                L10n.deliveryAddress,
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -1239,15 +1248,18 @@ class _AddressForm extends StatelessWidget {
                       : const Icon(Icons.add_location_alt_outlined),
                   label: Text(
                     isResolvingAddress
-                        ? 'กำลังดึงที่อยู่จาก Google...'
-                        : 'ปักพิกัดและกรอกที่อยู่อัตโนมัติ',
+                        ? L10n.fetchingAddressFromGoogle
+                        : L10n.pinAndAutoFillAddress,
                   ),
                 ),
               ),
               if (deliveryLatitude != null && deliveryLongitude != null) ...[
                 const SizedBox(height: 6),
                 Text(
-                  'พิกัดจัดส่ง: ${deliveryLatitude!.toStringAsFixed(6)}, ${deliveryLongitude!.toStringAsFixed(6)}',
+                  L10n.deliveryCoordinatesFormatted(
+                    deliveryLatitude!,
+                    deliveryLongitude!,
+                  ),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF6B7280),
                     fontWeight: FontWeight.w600,
@@ -1255,28 +1267,28 @@ class _AddressForm extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 10),
-              _field(recipientController, 'ชื่อผู้รับ'),
+              _field(recipientController, L10n.recipientName),
               _field(
                 phoneController,
-                'เบอร์โทร',
+                L10n.phoneNumber,
                 keyboardType: TextInputType.phone,
               ),
-              _field(addressController, 'บ้านเลขที่ / ถนน / หมู่บ้าน'),
+              _field(addressController, L10n.streetAddress),
               Row(
                 children: <Widget>[
-                  Expanded(child: _field(subDistrictController, 'ตำบล/แขวง')),
+                  Expanded(child: _field(subDistrictController, L10n.subDistrict)),
                   const SizedBox(width: 8),
-                  Expanded(child: _field(districtController, 'อำเภอ/เขต')),
+                  Expanded(child: _field(districtController, L10n.district)),
                 ],
               ),
               Row(
                 children: <Widget>[
-                  Expanded(child: _field(provinceController, 'จังหวัด')),
+                  Expanded(child: _field(provinceController, L10n.province)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: _field(
                       postalCodeController,
-                      'รหัสไปรษณีย์',
+                      L10n.postalCode,
                       keyboardType: TextInputType.number,
                     ),
                   ),
@@ -1288,7 +1300,7 @@ class _AddressForm extends StatelessWidget {
                 child: FilledButton.icon(
                   onPressed: isResolvingAddress ? null : onConfirmAddress,
                   icon: const Icon(Icons.check_circle_outline),
-                  label: const Text('ยืนยันที่อยู่จัดส่ง'),
+                  label: Text(L10n.confirmDeliveryAddress),
                 ),
               ),
             ],
@@ -1311,7 +1323,7 @@ class _AddressForm extends StatelessWidget {
         onChanged: (_) => onChanged(),
         validator: (value) {
           if ((value ?? '').trim().isEmpty) {
-            return 'กรุณากรอก$label';
+            return L10n.fieldRequired(label);
           }
           return null;
         },
@@ -1343,13 +1355,13 @@ class _NationwideQuoteCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Column(
           children: <Widget>[
-            _row('ค่าสินค้า', subtotal),
-            _row('ค่าส่งประมาณการ', quote.shippingFee),
+            _row(L10n.subtotalLabel, subtotal),
+            _row(L10n.estimatedShippingFee, quote.shippingFee),
             const Divider(height: 20),
-            _row('ยอดรวม', grandTotal, isTotal: true),
+            _row(L10n.total, grandTotal, isTotal: true),
             const SizedBox(height: 6),
             Text(
-              'ค่าส่งนี้เป็น mock/manual ระหว่างรอเชื่อมต่อ ShipPop',
+              L10n.mockShippingNote,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFFB45309),
                 fontWeight: FontWeight.w600,

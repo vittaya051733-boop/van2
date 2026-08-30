@@ -39,9 +39,11 @@ Ride-hailing service
 • Base fee: ${_fmtBaht(config.travelBaseFee)}
 • After ${_fmtKm(config.travelMinBillableKm)} km: ${_fmtBaht(config.travelPerKmFee)} per km
 
+Platform fee
+• ${_fmtBaht(config.marketServiceFeePerOrder)} per shop bill (all categories)
+
 Multi-shop market orders (within ${_fmtMeters(config.marketHubRadiusMeters)} m, at least ${config.marketMultiShopMinShops} shops)
 • Collection fee: ${_fmtBaht(config.marketMultiShopCollectionFee)} per checkout
-• Service fee: ${_fmtBaht(config.marketServiceFeePerOrder)} per shop order
 
 The exact amount in your cart depends on distance, weight, and items — review before confirming.''';
     }
@@ -58,9 +60,11 @@ The exact amount in your cart depends on distance, weight, and items — review 
 • ค่าโดยสารฐาน: ${_fmtBaht(config.travelBaseFee)}
 • หลังระยะขั้นต่ำ ${_fmtKm(config.travelMinBillableKm)} กม.: ${_fmtBaht(config.travelPerKmFee)} ต่อกม.
 
+ค่าธรรมเนียมแพลตฟอร์ม
+• ${_fmtBaht(config.marketServiceFeePerOrder)} ต่อบิล (ทุกหมวดหมู่)
+
 สั่งหลายร้านในตลาด (รัศมี ${_fmtMeters(config.marketHubRadiusMeters)} ม., อย่างน้อย ${config.marketMultiShopMinShops} ร้าน)
-• ค่ารวบรวมสินค้า: ${_fmtBaht(config.marketMultiShopCollectionFee)} ต่างร้าน
-• ค่าบริการ: ${_fmtBaht(config.marketServiceFeePerOrder)} ต่อบิล
+• ค่ารวบรวมสินค้า: ${_fmtBaht(config.marketMultiShopCollectionFee)} ต่อครั้ง
 
 ยอดในตะกร้าคำนวณจากระยะทาง น้ำหนัก และรายการจริง — ตรวจสอบก่อนยืนยันสั่งซื้อ''';
   }

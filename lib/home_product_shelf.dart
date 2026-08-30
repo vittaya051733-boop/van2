@@ -1,16 +1,56 @@
 import 'package:flutter/material.dart';
 
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
+import 'services/locale_service.dart';
+import 'services/product_translation_service.dart';
 import 'home_product_discovery_service.dart';
 import 'public_catalog_service.dart';
 import 'services/home_product_image_prefetch.dart';
 
+import 'widgets/home_shelf_infinite_carousel.dart';
 import 'widgets/product_discount_badge.dart';
 import 'widgets/product_discount_price.dart';
 import 'utils/catalog_product_image_url.dart';
+import 'utils/localized_product_text.dart';
 import 'widgets/cached_app_image.dart';
 
 typedef HomeShelfProductTap = void Function(PublicCatalogProduct product);
+
+Widget buildHomeShelfCatalogCard({
+  required BuildContext context,
+  required PublicCatalogProduct product,
+  double? customerLatitude,
+  double? customerLongitude,
+  ValueChanged<CartProductSelection>? onConfirmOrder,
+  VoidCallback? onNavigateToCart,
+  List<PublicCatalogProduct>? shopProducts,
+}) {
+  final cardSize = catalogHomeShelfCardSize(context);
+  final shopDistanceKm = computeCatalogShopDistanceKm(
+    customerLatitude: customerLatitude,
+    customerLongitude: customerLongitude,
+    shopLatitude: product.shopLatitude,
+    shopLongitude: product.shopLongitude,
+  );
+
+  return SizedBox(
+    width: cardSize.width,
+    height: cardSize.height,
+    child: CatalogProductCard(
+      product: product,
+      shopProducts: shopProducts,
+      shopLatitude: product.shopLatitude,
+      shopLongitude: product.shopLongitude,
+      shopDistanceKm: shopDistanceKm,
+      customerLatitude: customerLatitude,
+      customerLongitude: customerLongitude,
+      onConfirmOrder: onConfirmOrder,
+      onNavigateToCart: onNavigateToCart,
+      pinPriceToBottom: true,
+    ),
+  );
+}
 
 class HomeProductShelfSection extends StatelessWidget {
   const HomeProductShelfSection({
@@ -35,6 +75,7 @@ class HomeProductShelfSection extends StatelessWidget {
     this.onNavigateToCart,
     this.showWhenEmpty = false,
     this.emptyMessage,
+    this.enableInfiniteCarousel = false,
   });
 
   final String title;
@@ -55,6 +96,7 @@ class HomeProductShelfSection extends StatelessWidget {
   final VoidCallback? onNavigateToCart;
   final bool showWhenEmpty;
   final String? emptyMessage;
+  final bool enableInfiniteCarousel;
 
   static const double _catalogSpacing = 12;
 
@@ -113,6 +155,25 @@ class HomeProductShelfSection extends StatelessWidget {
                   )
                 : products.isEmpty
                 ? _HomeShelfEmptyMessage(message: emptyMessage)
+                : enableInfiniteCarousel
+                ? HomeShelfInfiniteCarousel(
+                    itemCount: products.length,
+                    itemWidth: cardSize.width,
+                    spacing: _catalogSpacing,
+                    height: cardSize.height,
+                    itemBuilder: (context, index) {
+                      final product = products[index];
+
+                      return buildHomeShelfCatalogCard(
+                        context: context,
+                        product: product,
+                        customerLatitude: customerLatitude,
+                        customerLongitude: customerLongitude,
+                        onConfirmOrder: onConfirmOrder,
+                        onNavigateToCart: onNavigateToCart,
+                      );
+                    },
+                  )
                 : ListView.separated(
                     scrollDirection: Axis.horizontal,
 
@@ -128,39 +189,13 @@ class HomeProductShelfSection extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final product = products[index];
 
-                      final shopDistanceKm = computeCatalogShopDistanceKm(
+                      return buildHomeShelfCatalogCard(
+                        context: context,
+                        product: product,
                         customerLatitude: customerLatitude,
-
                         customerLongitude: customerLongitude,
-
-                        shopLatitude: product.shopLatitude,
-
-                        shopLongitude: product.shopLongitude,
-                      );
-
-                      return Align(
-                        alignment: Alignment.topCenter,
-                        child: SizedBox(
-                          width: cardSize.width,
-                          child: CatalogProductCard(
-                            product: product,
-
-                            shopLatitude: product.shopLatitude,
-
-                            shopLongitude: product.shopLongitude,
-
-                            shopDistanceKm: shopDistanceKm,
-
-                            customerLatitude: customerLatitude,
-
-                            customerLongitude: customerLongitude,
-
-                            onConfirmOrder: onConfirmOrder,
-
-                            onNavigateToCart: onNavigateToCart,
-                            pinPriceToBottom: true,
-                          ),
-                        ),
+                        onConfirmOrder: onConfirmOrder,
+                        onNavigateToCart: onNavigateToCart,
                       );
                     },
                   ),
@@ -256,7 +291,9 @@ class _HomeShelfEmptyMessage extends StatelessWidget {
         border: Border.all(color: const Color(0xFFFDE68A)),
       ),
       child: Text(
-        message?.trim().isNotEmpty == true ? message!.trim() : 'ยังไม่มีสินค้า',
+        message?.trim().isNotEmpty == true
+            ? message!.trim()
+            : L10n.catalogNoProductsYet,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
           color: const Color(0xFF92400E),
           fontWeight: FontWeight.w700,
@@ -322,7 +359,7 @@ class _HomeDiscountProductFeedSectionState
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Text(
-                'สินค้าส่วนลด',
+                L10n.catalogDiscountProducts,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: const Color(0xFF111827),
                   fontWeight: FontWeight.w800,
@@ -373,37 +410,16 @@ class _HomeDiscountFeedCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cardSize = catalogHomeShelfCardSize(context);
-    final shopDistanceKm = computeCatalogShopDistanceKm(
-      customerLatitude: customerLatitude,
-      customerLongitude: customerLongitude,
-      shopLatitude: product.shopLatitude,
-      shopLongitude: product.shopLongitude,
-    );
-
     return Align(
       alignment: Alignment.centerLeft,
-      child: SizedBox(
-        width: cardSize.width,
-        height: cardSize.height,
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: SizedBox(
-            width: cardSize.width,
-            child: CatalogProductCard(
-              product: product,
-              shopProducts: shopProducts,
-              shopLatitude: product.shopLatitude,
-              shopLongitude: product.shopLongitude,
-              shopDistanceKm: shopDistanceKm,
-              customerLatitude: customerLatitude,
-              customerLongitude: customerLongitude,
-              onConfirmOrder: onConfirmOrder,
-              onNavigateToCart: onNavigateToCart,
-              pinPriceToBottom: true,
-            ),
-          ),
-        ),
+      child: buildHomeShelfCatalogCard(
+        context: context,
+        product: product,
+        shopProducts: shopProducts,
+        customerLatitude: customerLatitude,
+        customerLongitude: customerLongitude,
+        onConfirmOrder: onConfirmOrder,
+        onNavigateToCart: onNavigateToCart,
       ),
     );
   }
@@ -424,15 +440,24 @@ class HomeShelfProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Widget tile = _buildTile(context);
+    if (LocaleService.instance.isEnglish) {
+      tile = ListenableBuilder(
+        listenable: ProductTranslationService.instance,
+        builder: (context, _) => _buildTile(context),
+      );
+    }
+    return tile;
+  }
+
+  Widget _buildTile(BuildContext context) {
     final data = product.data;
 
     final imageUrl = readCatalogProductImageUrl(data);
 
-    final name = (data['name'] ?? '').toString().trim();
+    final name = LocalizedProductText.nameForProduct(product);
 
-    final shopName = product.shopName?.trim().isNotEmpty == true
-        ? product.shopName!.trim()
-        : 'ร้านค้า';
+    final shopName = LocalizedProductText.shopNameForProduct(product);
 
     return SizedBox(
       width: 124,
@@ -514,7 +539,7 @@ class HomeShelfProductTile extends StatelessWidget {
                       children: <Widget>[
                         Expanded(
                           child: Text(
-                            name.isEmpty ? 'สินค้า' : name,
+                            name.isEmpty ? L10n.productFallback : name,
 
                             maxLines: 2,
 

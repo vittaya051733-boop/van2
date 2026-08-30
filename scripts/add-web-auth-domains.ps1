@@ -2,12 +2,12 @@
 # Run once from repo root with gcloud auth logged in as project admin.
 #
 # Firebase Console alternative:
-# Authentication -> Settings -> Authorized domains -> Add domain -> van2.web.app
+# Authentication -> Settings -> Authorized domains -> Add domain -> vantalad.web.app
 
 $projectId = 'van-merchant'
 $domainsToEnsure = @(
   'van1.web.app',
-  'van2.web.app',
+  'vantalad.web.app',
   'van3.web.app',
   'van4.web.app'
 )

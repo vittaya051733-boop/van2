@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'phone_login_helper.dart';
+import 'l10n/l10n.dart';
 import 'utils/app_check_guard.dart';
 
 enum VerificationChannel { phone, email }
@@ -169,7 +170,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
   Future<void> _startEmailVerification() async {
     if (!widget.firebaseEnabled) {
       _showSnackBar(
-        'Firebase ยังไม่พร้อมใช้งานบนแพลตฟอร์มนี้',
+        L10n.firebaseNotReady,
         backgroundColor: Colors.red,
       );
       return;
@@ -196,21 +197,18 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       });
       _startCountdown();
       _showSnackBar(
-        'ส่ง OTP ไปที่ $_email แล้ว',
+        L10n.otpSentToEmail(_email),
         backgroundColor: Colors.green,
       );
     } on FirebaseFunctionsException catch (error) {
       _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
     } on MissingPluginException {
-      _showSnackBar(
-        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ Email OTP',
-        backgroundColor: Colors.red,
-      );
+      _showSnackBar(L10n.emailOtpRestartApp, backgroundColor: Colors.red);
     } catch (error) {
       _showSnackBar(
-        _mapUnexpectedFunctionError(
+        L10n.unexpectedFunctionError(
           error,
-          fallback: 'ไม่สามารถส่ง OTP ทางอีเมลได้',
+          fallback: L10n.cannotSendEmailOtpGeneric,
         ),
         backgroundColor: Colors.red,
       );
@@ -235,7 +233,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     _syncNormalizedOtp(otp);
 
     if (otp.length != 6) {
-      _showSnackBar('กรุณากรอกรหัส OTP 6 หลัก', backgroundColor: Colors.red);
+      _showSnackBar(L10n.pleaseEnterOtpSixDigits, backgroundColor: Colors.red);
       return;
     }
 
@@ -287,15 +285,12 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     } on FirebaseFunctionsException catch (error) {
       _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
     } on MissingPluginException {
-      _showSnackBar(
-        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ Email OTP',
-        backgroundColor: Colors.red,
-      );
+      _showSnackBar(L10n.emailOtpRestartApp, backgroundColor: Colors.red);
     } catch (error) {
       _showSnackBar(
-        _mapUnexpectedFunctionError(
+        L10n.unexpectedFunctionError(
           error,
-          fallback: 'ตรวจสอบสถานะอีเมลไม่สำเร็จ',
+          fallback: L10n.verifyEmailStatusFailed,
         ),
         backgroundColor: Colors.red,
       );
@@ -312,14 +307,14 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
 
     if (targetPassword.length < 6) {
       _showSnackBar(
-        'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร',
+        L10n.newPasswordMinSix,
         backgroundColor: Colors.red,
       );
       return;
     }
     if (targetPassword != confirmPassword) {
       _showSnackBar(
-        'รหัสผ่านใหม่และรหัสยืนยันไม่ตรงกัน',
+        L10n.newPasswordMismatch,
         backgroundColor: Colors.red,
       );
       return;
@@ -365,15 +360,12 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       }
       _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
     } on MissingPluginException {
-      _showSnackBar(
-        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ Email OTP',
-        backgroundColor: Colors.red,
-      );
+      _showSnackBar(L10n.emailOtpRestartApp, backgroundColor: Colors.red);
     } catch (error) {
       _showSnackBar(
-        _mapUnexpectedFunctionError(
+        L10n.unexpectedFunctionError(
           error,
-          fallback: 'ตั้งรหัสผ่านใหม่ไม่สำเร็จ',
+          fallback: L10n.resetPasswordFailed,
         ),
         backgroundColor: Colors.red,
       );
@@ -403,19 +395,16 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         _isResetOtpVerified = true;
         _verifiedResetOtp = otp;
       });
-      _showSnackBar('OTP ถูกต้อง กรุณาตั้งรหัสผ่านใหม่', backgroundColor: Colors.green);
+      _showSnackBar(L10n.otpVerifiedSetNewPassword, backgroundColor: Colors.green);
     } on FirebaseFunctionsException catch (error) {
       _showSnackBar(_mapEmailFunctionError(error), backgroundColor: Colors.red);
     } on MissingPluginException {
-      _showSnackBar(
-        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ Email OTP',
-        backgroundColor: Colors.red,
-      );
+      _showSnackBar(L10n.emailOtpRestartApp, backgroundColor: Colors.red);
     } catch (error) {
       _showSnackBar(
-        _mapUnexpectedFunctionError(
+        L10n.unexpectedFunctionError(
           error,
-          fallback: 'ตรวจสอบ OTP ไม่สำเร็จ',
+          fallback: L10n.verifyOtpFailed,
         ),
         backgroundColor: Colors.red,
       );
@@ -429,46 +418,46 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
   String _mapEmailFunctionError(FirebaseFunctionsException error) {
     switch (error.code) {
       case 'invalid-argument':
-        return 'รูปแบบอีเมลหรือรหัส OTP ไม่ถูกต้อง';
+        return L10n.invalidEmailOrOtp;
       case 'resource-exhausted':
-        return 'กรุณารอก่อนขอรหัสใหม่';
+        return L10n.waitBeforeNewCode;
       case 'deadline-exceeded':
-        return 'OTP หมดอายุแล้ว กรุณาขอรหัสใหม่';
+        return L10n.otpExpired;
       case 'permission-denied':
-        return error.message ?? 'รหัส OTP ไม่ถูกต้อง';
+        return error.message ?? L10n.invalidOtp;
       case 'not-found':
-        return error.message ?? 'ไม่พบข้อมูลสำหรับอีเมลนี้';
+        return error.message ?? L10n.emailNotFoundForOtp;
       case 'failed-precondition':
-        return error.message ??
-            'ระบบ Email OTP ยังไม่ได้ตั้งค่า SMTP บนเซิร์ฟเวอร์';
+        return error.message ?? L10n.emailOtpSmtpNotConfigured;
       case 'unavailable':
       case 'internal':
-        return error.message ??
-            'ระบบ Email OTP ฝั่งเซิร์ฟเวอร์ยังไม่พร้อม กรุณาตรวจสอบการ deploy';
+        return error.message ?? L10n.emailOtpServerNotReady;
       default:
-        return error.message ?? 'เกิดข้อผิดพลาดในการยืนยันอีเมล';
+        return error.message ?? L10n.emailVerificationFailed;
     }
   }
 
-  String _mapUnexpectedFunctionError(Object error, {required String fallback}) {
-    final message = error.toString();
-    if (error is PlatformException ||
-        message.contains('Unable to establish connection on channel') ||
-        message.contains('CloudFunctionsHostApi.call')) {
-      return 'ต้องปิดแอปแล้วเปิดใหม่ก่อนใช้งาน Email OTP';
+  String _mapPhoneFunctionError(FirebaseFunctionsException error) {
+    switch (error.code) {
+      case 'invalid-argument':
+        return error.message ?? L10n.invalidOtp;
+      case 'failed-precondition':
+        return error.message ?? L10n.sendOtpBeforeVerify;
+      case 'deadline-exceeded':
+        return error.message ?? L10n.otpExpiredResend;
+      case 'resource-exhausted':
+        return error.message ?? L10n.otpTooFrequent;
+      case 'unavailable':
+        return error.message ?? L10n.smsUnavailable;
+      default:
+        return error.message ?? L10n.sendOtpFailed;
     }
-    if (message.contains('NOT_FOUND') ||
-        message.contains('failed-precondition') ||
-        message.contains('unavailable')) {
-      return 'ระบบ Email OTP ยังไม่พร้อม กรุณาตรวจ SMTP secrets และ deploy Cloud Functions';
-    }
-    return '$fallback: $error';
   }
 
   Future<void> _sendPhoneOtp() async {
     if (!widget.firebaseEnabled) {
       _showSnackBar(
-        'Firebase ยังไม่พร้อมใช้งานบนแพลตฟอร์มนี้',
+        L10n.firebaseNotReady,
         backgroundColor: Colors.red,
       );
       return;
@@ -476,7 +465,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
 
     if (!_normalizedPhone.startsWith('+')) {
       _showSnackBar(
-        'รูปแบบเบอร์โทรไม่ถูกต้อง เช่น 0812345678 หรือ +66812345678',
+        L10n.invalidPhoneFormat,
         backgroundColor: Colors.red,
       );
       return;
@@ -501,7 +490,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       });
       _startCountdown();
       _showSnackBar(
-        'ส่ง OTP SMS ไปที่ $_normalizedPhone แล้ว',
+        L10n.otpSmsSentTo(_normalizedPhone),
         backgroundColor: Colors.green,
       );
     } on FirebaseFunctionsException catch (error) {
@@ -515,37 +504,16 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
         return;
       }
       setState(() => _isLoading = false);
-      _showSnackBar(
-        'ต้องปิดแอปแล้วรันใหม่ 1 ครั้ง เพื่อโหลดระบบ OTP',
-        backgroundColor: Colors.red,
-      );
+      _showSnackBar(L10n.otpRestartApp, backgroundColor: Colors.red);
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() => _isLoading = false);
       _showSnackBar(
-        'ไม่สามารถส่ง OTP ได้: $error',
+        L10n.cannotSendOtp(error),
         backgroundColor: Colors.red,
       );
-    }
-  }
-
-  String _mapPhoneFunctionError(FirebaseFunctionsException error) {
-    switch (error.code) {
-      case 'invalid-argument':
-        return error.message ?? 'รหัส OTP ไม่ถูกต้อง';
-      case 'failed-precondition':
-        return error.message ?? 'กรุณากดส่ง OTP ก่อนยืนยัน';
-      case 'deadline-exceeded':
-        return error.message ?? 'OTP หมดอายุ กรุณาขอรหัสใหม่';
-      case 'resource-exhausted':
-        return error.message ?? 'ขอ OTP บ่อยเกินไป กรุณารอแล้วลองใหม่';
-      case 'unavailable':
-        return error.message ??
-            'ไม่สามารถส่ง SMS ได้ ตรวจ Firebase Billing (Blaze) และเปิด Phone sign-in';
-      default:
-        return error.message ?? 'ส่ง OTP ไม่สำเร็จ';
     }
   }
 
@@ -554,7 +522,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
     _syncNormalizedOtp(otp);
 
     if (otp.length != 6) {
-      _showSnackBar('กรุณากรอกรหัส OTP 6 หลัก', backgroundColor: Colors.red);
+      _showSnackBar(L10n.pleaseEnterOtpSixDigits, backgroundColor: Colors.red);
       return;
     }
 
@@ -575,7 +543,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       if (customToken is String && customToken.trim().isNotEmpty) {
         await FirebaseAuth.instance.signInWithCustomToken(customToken);
       } else {
-        throw Exception('ไม่พบ custom token หลังยืนยัน OTP');
+        throw Exception(L10n.customTokenNotFoundAfterOtp);
       }
 
       if (!mounted) {
@@ -594,7 +562,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       }
       setState(() => _isLoading = false);
       _showSnackBar(
-        error.message ?? 'ยืนยัน OTP ไม่สำเร็จ',
+        error.message ?? L10n.verifyOtpFailedGeneric,
         backgroundColor: Colors.red,
       );
     } catch (error) {
@@ -603,7 +571,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       }
       setState(() => _isLoading = false);
       _showSnackBar(
-        'ยืนยัน OTP ไม่สำเร็จ: $error',
+        L10n.verifyOtpFailedWithError(error),
         backgroundColor: Colors.red,
       );
     }
@@ -619,14 +587,14 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
       appBar: AppBar(
         title: Text(
           _isPhoneFlow
-              ? 'ยืนยันรหัส OTP'
+              ? L10n.verifyOtpTitle
               : _isRegisterFlow
-              ? 'ยืนยันอีเมลเพื่อสมัครสมาชิก'
+              ? L10n.verifyEmailRegisterTitle
               : showResetPasswordFormOnly
-              ? 'ตั้งรหัสผ่านใหม่'
+              ? L10n.setNewPasswordTitle
               : _isResetPasswordFlow
-              ? 'ตั้งรหัสผ่านใหม่'
-              : 'ยืนยันอีเมล',
+              ? L10n.setNewPasswordTitle
+              : L10n.verifyEmailTitle,
         ),
         backgroundColor: const Color(0xFFF57C00),
         foregroundColor: Colors.white,
@@ -640,12 +608,12 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
               if (!showResetPasswordFormOnly) ...<Widget>[
                 Text(
                   _isPhoneFlow
-                      ? 'ยืนยันตัวตนด้วยเบอร์โทร'
+                      ? L10n.verifyPhoneIdentity
                       : _isRegisterFlow
-                      ? 'ยืนยันอีเมลเพื่อเปิดบัญชีใหม่'
+                      ? L10n.verifyEmailNewAccount
                       : _isResetPasswordFlow
-                      ? 'ยืนยัน OTP เพื่อตั้งรหัสผ่านใหม่'
-                      : 'ยืนยันตัวตนด้วยอีเมล',
+                      ? L10n.verifyOtpResetPassword
+                      : L10n.verifyEmailIdentity,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF9A3412),
@@ -655,13 +623,13 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                 Text(
                   _isPhoneFlow
                       ? (_isRegisterFlow
-                        ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_normalizedPhone เพื่อยืนยันเบอร์โทรของผู้ใช้ใหม่'
-                        : 'กรอกรหัส 6 หลักที่ส่งไปที่ $_normalizedPhone ก่อนเข้าสู่ระบบ')
+                        ? L10n.phoneRegisterOtpHint(_normalizedPhone)
+                        : L10n.phoneSignInOtpHint(_normalizedPhone))
                       : _isResetPasswordFlow
-                      ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email แล้วตั้งรหัสผ่านใหม่ จากนั้นระบบจะพาเข้าหน้าแรกทันที'
+                      ? L10n.resetPasswordOtpHint(_email)
                       : _isRegisterFlow
-                      ? 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email เพื่อยืนยันอีเมล จากนั้นระบบจะเปิดบัญชีใหม่และพาเข้าหน้าแรก'
-                      : 'กรอกรหัส 6 หลักที่ส่งไปที่ $_email ก่อนเข้าสู่ระบบ',
+                      ? L10n.registerEmailOtpHint(_email)
+                      : L10n.signInEmailOtpHint(_email),
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: const Color(0xFF7C2D12),
                   ),
@@ -682,7 +650,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                     LengthLimitingTextInputFormatter(6),
                   ],
                   decoration: InputDecoration(
-                    labelText: 'รหัส OTP 6 หลัก',
+                    labelText: L10n.otpSixDigits,
                     prefixIcon: const Icon(Icons.password_outlined),
                     filled: true,
                     fillColor: Colors.white,
@@ -717,7 +685,9 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                             ),
                           )
                         : Text(
-                          _isRegisterFlow ? 'ยืนยันเบอร์โทร' : 'ยืนยันและเข้าสู่ระบบ',
+                          _isRegisterFlow
+                              ? L10n.verifyPhone
+                              : L10n.verifyAndSignIn,
                         ),
                   ),
                 ),
@@ -728,8 +698,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                       : _sendPhoneOtp,
                   child: Text(
                     _countdownSeconds > 0
-                        ? 'ส่งรหัสอีกครั้งใน $_countdownSeconds วินาที'
-                        : 'ส่งรหัส OTP อีกครั้ง',
+                        ? L10n.resendOtpIn(_countdownSeconds)
+                        : L10n.resendOtp,
                   ),
                 ),
               ] else ...<Widget>[
@@ -742,7 +712,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                       LengthLimitingTextInputFormatter(6),
                     ],
                     decoration: InputDecoration(
-                      labelText: 'รหัส OTP 6 หลักจากอีเมล',
+                      labelText: L10n.otpSixDigitsFromEmail,
                       prefixIcon: const Icon(Icons.mark_email_read_outlined),
                       filled: true,
                       fillColor: Colors.white,
@@ -753,14 +723,14 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'ถ้ายังไม่เจออีเมล ให้ตรวจสอบโฟลเดอร์ Spam หรือ Promotions ด้วย',
+                  Text(
+                    L10n.checkSpamFolder,
                     style: TextStyle(color: Color(0xFF7C2D12)),
                   ),
                 ],
                 if (showResetPasswordFormOnly) ...<Widget>[
                   Text(
-                    'ตั้งรหัสผ่านใหม่สำหรับ $_email',
+                    L10n.setNewPasswordFor(_email),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w800,
                       color: const Color(0xFF9A3412),
@@ -774,7 +744,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                     controller: _newPasswordController,
                     obscureText: true,
                     decoration: InputDecoration(
-                      labelText: 'รหัสผ่านใหม่',
+                      labelText: L10n.newPassword,
                       prefixIcon: const Icon(Icons.lock_reset_outlined),
                       filled: true,
                       fillColor: Colors.white,
@@ -789,7 +759,7 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                     controller: _confirmPasswordController,
                     obscureText: true,
                     decoration: InputDecoration(
-                      labelText: 'ยืนยันรหัสผ่านใหม่',
+                      labelText: L10n.confirmNewPassword,
                       prefixIcon: const Icon(Icons.verified_user_outlined),
                       filled: true,
                       fillColor: Colors.white,
@@ -827,11 +797,11 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                         : Text(
                           _isResetPasswordFlow
                             ? (_isResetOtpVerified
-                              ? 'ตั้งรหัสผ่านใหม่'
-                              : 'ตรวจสอบ OTP')
+                              ? L10n.setNewPassword
+                              : L10n.checkOtp)
                             : _isRegisterFlow
-                            ? 'ยืนยันอีเมลและเปิดบัญชี'
-                            : 'ยืนยันและเข้าสู่ระบบ',
+                            ? L10n.verifyEmailAndCreateAccount
+                            : L10n.verifyAndSignIn,
                           ),
                   ),
                 ),
@@ -854,8 +824,8 @@ class _AuthVerificationScreenState extends State<AuthVerificationScreen> {
                       ),
                       child: Text(
                         _countdownSeconds > 0
-                            ? 'ส่งรหัสอีกครั้งใน $_countdownSeconds วินาที'
-                            : 'ส่งรหัส OTP อีกครั้ง',
+                            ? L10n.resendOtpIn(_countdownSeconds)
+                            : L10n.resendOtp,
                       ),
                     ),
                   ),

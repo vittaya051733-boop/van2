@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
+import '../services/locale_service.dart';
 import '../services/omise_payment_service.dart';
 
 /// Waits for redirect-based Omise payments (Mobile Banking, 3DS).
@@ -28,7 +30,7 @@ Future<OmisePaymentSession> showOmiseAuthorizePaymentDialog({
     },
   ).then((value) {
     if (value == null) {
-      throw const PaymentCheckoutCancelled('ยกเลิกการชำระเงิน');
+      throw PaymentCheckoutCancelled(L10n.paymentCancelledMessage);
     }
     return value;
   });
@@ -163,6 +165,9 @@ class _OmiseAuthorizePaymentDialogState
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final referenceLabel = _referenceLabel;
 
     return AlertDialog(
@@ -175,7 +180,7 @@ class _OmiseAuthorizePaymentDialogState
           if (referenceLabel != null) ...<Widget>[
             const SizedBox(height: 8),
             Text(
-              'รหัสอ้างอิง: $referenceLabel',
+              L10n.referenceCode(referenceLabel),
               style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
@@ -195,8 +200,8 @@ class _OmiseAuthorizePaymentDialogState
               Expanded(
                 child: Text(
                   _status == 'paid'
-                      ? 'ชำระเงินสำเร็จ'
-                      : 'กำลังรอการชำระเงิน...',
+                      ? L10n.paymentSuccess
+                      : L10n.waitingForPayment,
                 ),
               ),
             ],
@@ -207,13 +212,15 @@ class _OmiseAuthorizePaymentDialogState
         if (!_completed)
           TextButton(
             onPressed: _isPolling ? null : _pollSession,
-            child: const Text('ตรวจสอบอีกครั้ง'),
+            child: Text(L10n.checkAgain),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('ยกเลิก'),
+          child: Text(L10n.cancel),
         ),
       ],
+    );
+      },
     );
   }
 }

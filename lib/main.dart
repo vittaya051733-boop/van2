@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
@@ -23,7 +24,9 @@ import 'home_product_discovery_service.dart';
 import 'home_product_shelf.dart';
 import 'public_catalog_local_cache.dart';
 import 'services/home_catalog_bootstrap.dart';
+import 'services/open_catalog_product_link.dart';
 import 'services/rider_availability_service.dart';
+import 'services/app_image_prefetch.dart';
 import 'services/home_product_image_prefetch.dart';
 import 'login_screen.dart';
 import 'map_picker_screen.dart';
@@ -40,6 +43,7 @@ import 'models/home_shelves_config.dart';
 import 'services/omise_payment_service.dart';
 import 'pricing_config_service.dart';
 import 'services/locale_service.dart';
+import 'l10n/l10n.dart';
 import 'services/promotion_catalog_service.dart';
 import 'services/promotion_display_config_service.dart';
 import 'services/home_quick_action_config_service.dart';
@@ -53,6 +57,8 @@ import 'widgets/claimable_coupon_strip.dart';
 import 'widgets/my_coupons_sheet.dart';
 import 'public_catalog_service.dart';
 import 'services/cart_session_service.dart';
+import 'services/catalog_product_deep_link.dart';
+import 'services/catalog_product_link.dart';
 import 'storage_helper.dart';
 import 'services/favorites_service.dart';
 import 'services/notification_service.dart';
@@ -69,6 +75,7 @@ import 'travel_vehicle_type.dart';
 import 'utils/app_check_guard.dart'
     show AppCheckGuard, kAppCheckRecaptchaSiteKey, kVan2AppCheckDebugToken;
 import 'utils/customer_location.dart';
+import 'utils/web_font_bootstrap.dart';
 
 const bool kAppCheckForceDebug = bool.fromEnvironment(
   'APP_CHECK_DEBUG',
@@ -85,6 +92,9 @@ const bool kDebugMapPicker = bool.fromEnvironment(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
 
   try {
     if (Firebase.apps.isEmpty) {
@@ -99,59 +109,69 @@ Future<void> main() async {
     }
   }
 
+  unawaited(_initializeObservability());
+  if (kIsWeb) {
+    unawaited(_activateWebAppCheckInBackground());
+  } else {
+    unawaited(_activateNativeAppCheckInBackground());
+    unawaited(
+      NotificationService().initialize().catchError((Object _, StackTrace __) {}),
+    );
+  }
+  unawaited(_ensureAnonymousAuth());
+  try {
+    await LocaleService.instance.load();
+  } catch (_) {}
+  if (kIsWeb) {
+    await WebFontBootstrap.ensureReady();
+  }
+  unawaited(_warmVan2StartupServices(deferHeavyImagePrefetch: true));
+  unawaited(HomeCatalogBootstrap.warmForHome());
+  unawaited(RiderAvailabilityService.instance.warmUp());
+  unawaited(CatalogProductDeepLinkService.instance.initialize());
+  runApp(const MyApp());
+}
+
+Future<void> _initializeObservability() async {
   try {
     await ObservabilityService.instance.initialize(appName: 'van2_customer');
   } catch (_) {}
+}
 
+Future<void> _ensureAnonymousAuth() async {
+  try {
+    if (FirebaseAuth.instance.currentUser == null) {
+      await FirebaseAuth.instance.signInAnonymously();
+    }
+  } catch (_) {}
+}
+
+Future<void> _activateNativeAppCheckInBackground() async {
   final useDebugAppCheck = !kReleaseMode || kAppCheckForceDebug;
   try {
-    if (kIsWeb) {
-      if (kAppCheckRecaptchaSiteKey.isNotEmpty) {
-        await FirebaseAppCheck.instance
-            .activate(
-              providerWeb: ReCaptchaV3Provider(kAppCheckRecaptchaSiteKey),
-            )
-            .timeout(const Duration(seconds: 5));
-        await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
-        try {
-          await FirebaseAppCheck.instance
-              .getToken(true)
-              .timeout(const Duration(seconds: 5));
-        } catch (error, stack) {
-          if (kDebugMode) {
-            debugPrint('Could not get App Check token on web startup: $error');
-          } else {
-            unawaited(
-              ObservabilityService.instance.recordError(error, stack),
-            );
-          }
-        }
-      }
-    } else {
-      await FirebaseAppCheck.instance
-          .activate(
-            providerAndroid: useDebugAppCheck
-                ? AndroidDebugProvider(debugToken: kVan2AppCheckDebugToken)
-                : const AndroidPlayIntegrityProvider(),
-            providerApple: useDebugAppCheck
-                ? const AppleDebugProvider()
-                : const AppleDeviceCheckProvider(),
-          )
-          .timeout(const Duration(seconds: 5));
-      await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+    await FirebaseAppCheck.instance
+        .activate(
+          providerAndroid: useDebugAppCheck
+              ? AndroidDebugProvider(debugToken: kVan2AppCheckDebugToken)
+              : const AndroidPlayIntegrityProvider(),
+          providerApple: useDebugAppCheck
+              ? const AppleDebugProvider()
+              : const AppleDeviceCheckProvider(),
+        )
+        .timeout(const Duration(seconds: 8));
+    await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
 
-      if (useDebugAppCheck) {
-        debugPrint(
-          'App Check debug token (register once in Firebase Console): '
-          '$kVan2AppCheckDebugToken',
-        );
-      }
+    if (useDebugAppCheck) {
+      debugPrint(
+        'App Check debug token (register once in Firebase Console): '
+        '$kVan2AppCheckDebugToken',
+      );
+    }
 
-      try {
-        await FirebaseAppCheck.instance
-            .getToken(true)
-            .timeout(const Duration(seconds: 5));
-      } catch (error, stack) {
+    unawaited(
+      FirebaseAppCheck.instance.getToken(true).timeout(
+        const Duration(seconds: 8),
+      ).catchError((Object error, StackTrace stack) {
         if (useDebugAppCheck) {
           debugPrint('Could not get App Check token on startup: $error');
         } else {
@@ -159,8 +179,9 @@ Future<void> main() async {
             ObservabilityService.instance.recordError(error, stack),
           );
         }
-      }
-    }
+        return null;
+      }),
+    );
   } catch (error, stack) {
     if (useDebugAppCheck) {
       debugPrint('App Check activate failed: $error');
@@ -170,27 +191,49 @@ Future<void> main() async {
       );
     }
   }
+}
 
-  // Catalog/product reads require a signed-in user in Firestore rules.
-  // Keep van2 usable by ensuring a lightweight anonymous session exists.
+Future<void> _activateWebAppCheckInBackground() async {
+  if (kAppCheckRecaptchaSiteKey.isEmpty) {
+    return;
+  }
+
+  final useDebugAppCheck = !kReleaseMode || kAppCheckForceDebug;
   try {
-    if (FirebaseAuth.instance.currentUser == null) {
-      await FirebaseAuth.instance.signInAnonymously();
+    await FirebaseAppCheck.instance
+        .activate(
+          providerWeb: ReCaptchaV3Provider(kAppCheckRecaptchaSiteKey),
+        )
+        .timeout(const Duration(seconds: 8));
+    await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+    unawaited(
+      FirebaseAppCheck.instance.getToken(true).timeout(
+        const Duration(seconds: 8),
+      ).catchError((Object error, StackTrace stack) {
+        if (kDebugMode) {
+          debugPrint('Could not get App Check token on web startup: $error');
+        } else {
+          unawaited(
+            ObservabilityService.instance.recordError(error, stack),
+          );
+        }
+        return null;
+      }),
+    );
+  } catch (error, stack) {
+    if (useDebugAppCheck) {
+      debugPrint('App Check activate failed on web: $error');
+    } else {
+      unawaited(
+        ObservabilityService.instance.recordError(error, stack),
+      );
     }
-  } catch (_) {
-    // If anonymous auth is disabled, app can still proceed and surface errors in UI.
   }
+}
 
-  if (!kIsWeb) {
-    try {
-      await NotificationService().initialize();
-    } catch (_) {}
-  }
-
-  try {
-    await LocaleService.instance.load();
-  } catch (_) {}
-
+Future<void> _warmVan2StartupServices({
+  required bool deferHeavyImagePrefetch,
+}) async {
   try {
     await PricingConfigService.instance.loadAndApplyOnce();
   } catch (_) {}
@@ -198,16 +241,28 @@ Future<void> main() async {
   try {
     await PublicCatalogLocalCache.ensureProductsHydrated();
     await PublicCatalogLocalCache.ensurePublicShopsHydrated();
+    await HomeCatalogBootstrap.hydrateShelfSnapshotsFromDisk();
+  } catch (_) {}
+
+  if (deferHeavyImagePrefetch) {
+    unawaited(_deferredQuickActionImageWarm());
+    return;
+  }
+
+  try {
     await AppImagePrefetch.warmBootstrapQuickActionCategories().timeout(
       const Duration(seconds: 15),
     );
-  } catch (_) {
-    // Home + catalog still warm images after launch.
-  }
+  } catch (_) {}
+}
 
-  unawaited(HomeCatalogBootstrap.warmForHome());
-  unawaited(RiderAvailabilityService.instance.warmUp());
-  runApp(const MyApp());
+Future<void> _deferredQuickActionImageWarm() async {
+  await Future<void>.delayed(Duration(seconds: kIsWeb ? 4 : 3));
+  try {
+    await AppImagePrefetch.warmBootstrapQuickActionCategories().timeout(
+      const Duration(seconds: 20),
+    );
+  } catch (_) {}
 }
 
 bool supportsEmbeddedMap() {
@@ -288,7 +343,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'แว๊นตลาด',
+      title: L10n.appTitle,
       debugShowCheckedModeBanner: false,
       navigatorKey: MyApp.navigatorKey,
       locale: LocaleService.instance.locale,
@@ -298,16 +353,36 @@ class _MyAppState extends State<MyApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF57C00)),
-        scaffoldBackgroundColor: const Color(0xFFFFF7ED),
+      theme: WebFontBootstrap.applyTheme(
+        ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFF57C00)),
+          scaffoldBackgroundColor: const Color(0xFFFFF7ED),
+        ),
       ),
       home: kDebugMapPicker
-          ? const MapPickerScreen(
+          ? MapPickerScreen(
               title: 'Debug Map Picker',
-              confirmLabel: 'ยืนยัน',
+              confirmLabel: L10n.confirm,
             )
+          : kIsWeb
+          ? const _Van2WebHomeLauncher()
           : const SplashScreen(),
+    );
+  }
+}
+
+/// Web skips splash — paint home on the first Flutter frame.
+class _Van2WebHomeLauncher extends StatelessWidget {
+  const _Van2WebHomeLauncher();
+
+  @override
+  Widget build(BuildContext context) {
+    return PrivacyLaunchGate(
+      app: PrivacyAppKey.van2Customer,
+      child: HomeScreen(
+        userLocation: startupFallbackLocation(),
+        refineLocationInBackground: true,
+      ),
     );
   }
 }
@@ -321,16 +396,32 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   Timer? _navigationTimer;
+  PickedLocation? _detectedLocation;
+  bool _navigated = false;
 
-  Future<void> _proceedFromSplash() async {
-    PickedLocation? detectedLocation;
+  Duration get _splashDelay =>
+      kIsWeb ? Duration.zero : const Duration(milliseconds: 700);
+
+  Future<void> _detectLocationForSplash() async {
     try {
-      detectedLocation = await tryDetectCurrentLocation().timeout(
-        const Duration(seconds: 10),
+      _detectedLocation = await tryDetectCurrentLocation().timeout(
+        Duration(seconds: kIsWeb ? 3 : 5),
       );
     } catch (_) {
-      detectedLocation = null;
+      _detectedLocation = null;
     }
+  }
+
+  Future<void> _proceedFromSplash() async {
+    if (_navigated || !mounted) {
+      return;
+    }
+    _navigated = true;
+    _navigationTimer?.cancel();
+
+    final detectedLocation = _detectedLocation;
+    final provisional = detectedLocation == null;
+    final location = detectedLocation ?? startupFallbackLocation();
 
     if (!mounted) {
       return;
@@ -340,9 +431,10 @@ class _SplashScreenState extends State<SplashScreen> {
       MaterialPageRoute<void>(
         builder: (context) => PrivacyLaunchGate(
           app: PrivacyAppKey.van2Customer,
-          child: detectedLocation == null
-              ? const LocationSetupScreen(autoDetectionFailed: true)
-              : HomeScreen(userLocation: detectedLocation),
+          child: HomeScreen(
+            userLocation: location,
+            refineLocationInBackground: provisional,
+          ),
         ),
       ),
     );
@@ -351,8 +443,16 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    unawaited(HomeCatalogBootstrap.warmForHome());
-    _navigationTimer = Timer(const Duration(seconds: 2), _proceedFromSplash);
+    unawaited(_detectLocationForSplash());
+    if (kIsWeb || _splashDelay == Duration.zero) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_proceedFromSplash());
+      });
+      return;
+    }
+    _navigationTimer = Timer(_splashDelay, () {
+      unawaited(_proceedFromSplash());
+    });
   }
 
   @override
@@ -396,7 +496,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'ตลาดโนนสูง ออนไลน์ เดลิเวอรี่',
+                  L10n.splashTagline,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.w700,
@@ -450,7 +550,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
     WidgetsBinding.instance.addObserver(this);
     if (widget.autoDetectionFailed) {
       _statusMessage =
-          'ไม่สามารถระบุตำแหน่งอัตโนมัติได้ กรุณาเลือกพิกัดบนแผนที่แล้วกดยืนยัน';
+          L10n.locationAutoDetectFailed;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) {
           return;
@@ -490,25 +590,25 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         }
         if (kIsWeb) {
           _showSnackBar(
-            'เบราว์เซอร์ไม่รองรับการระบุตำแหน่ง กรุณาเลือกพิกัดบนแผนที่แทน',
+            L10n.browserLocationUnsupported,
           );
           return;
         }
         final openLocation = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('เปิดตำแหน่งลูกค้า'),
-            content: const Text(
-              'ระบบยังปิดตำแหน่งอยู่ ต้องเปิด Location ก่อนจึงจะระบุตำแหน่งอัตโนมัติได้',
+            title: Text(L10n.enableCustomerLocationTitle),
+            content: Text(
+              L10n.enableCustomerLocationBody,
             ),
             actions: <Widget>[
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('ยกเลิก'),
+                child: Text(L10n.cancel),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('ไปเปิดตำแหน่ง'),
+                child: Text(L10n.goEnableLocation),
               ),
             ],
           ),
@@ -518,10 +618,10 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
           final opened = await Geolocator.openLocationSettings();
           if (opened) {
             _retryAutoDetectOnResume = true;
-            _showSnackBar('กลับเข้าแอปแล้วระบบจะลองระบุตำแหน่งให้อัตโนมัติ');
+            _showSnackBar(L10n.resumeAppAutoDetectLocation);
           } else {
             _showSnackBar(
-              'ไม่สามารถเปิดหน้าตั้งค่าตำแหน่งได้ กรุณาเปิด Location ในเครื่องด้วยตนเอง',
+              L10n.cannotOpenLocationSettings,
             );
           }
         }
@@ -539,25 +639,25 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         }
         if (kIsWeb) {
           _showSnackBar(
-            'กรุณากดไอคอนแม่กุญแจในแถบที่อยู่ของเบราว์เซอร์ แล้วอนุญาตการเข้าถึงตำแหน่ง',
+            L10n.browserLocationPermissionHint,
           );
           return;
         }
         final openAppSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('ต้องอนุญาตสิทธิ์ตำแหน่ง'),
-            content: const Text(
-              'คุณปิดสิทธิ์ตำแหน่งแบบถาวรไว้ กรุณาไปที่ตั้งค่าแอปเพื่ออนุญาตสิทธิ์ตำแหน่ง',
+            title: Text(L10n.locationPermissionRequiredTitle),
+            content: Text(
+              L10n.locationPermissionDeniedForeverBody,
             ),
             actions: <Widget>[
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('ยกเลิก'),
+                child: Text(L10n.cancel),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(true),
-                child: const Text('ไปตั้งค่าแอป'),
+                child: Text(L10n.goAppSettings),
               ),
             ],
           ),
@@ -567,10 +667,10 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
           final opened = await Geolocator.openAppSettings();
           if (opened) {
             _retryAutoDetectOnResume = true;
-            _showSnackBar('กลับเข้าแอปแล้วระบบจะลองระบุตำแหน่งให้อัตโนมัติ');
+            _showSnackBar(L10n.resumeAppAutoDetectLocation);
           } else {
             _showSnackBar(
-              'ไม่สามารถเปิดหน้า App Settings ได้ กรุณาเปิดสิทธิ์ตำแหน่งในตั้งค่าแอปด้วยตนเอง',
+              L10n.cannotOpenAppSettings,
             );
           }
         }
@@ -580,8 +680,8 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       if (permission == LocationPermission.denied) {
         _showSnackBar(
           kIsWeb
-              ? 'กรุณาอนุญาตตำแหน่งเมื่อเบราว์เซอร์ถาม หรือเลือกพิกัดบนแผนที่'
-              : 'ยังไม่ได้รับสิทธิ์ตำแหน่ง กรุณาอนุญาตเพื่อใช้งานต่อ',
+              ? L10n.locationPermissionDeniedWeb
+              : L10n.locationPermissionDeniedNative,
         );
         return;
       }
@@ -597,7 +697,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
   Future<void> _detectLocationAutomatically() async {
     setState(() {
       _isDetectingLocation = true;
-      _statusMessage = 'กำลังค้นหาพิกัดปัจจุบันของคุณ...';
+      _statusMessage = L10n.searchingCurrentCoordinates;
     });
 
     try {
@@ -605,7 +705,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       if (location == null) {
         setState(() {
           _statusMessage =
-              'ไม่สามารถระบุตำแหน่งอัตโนมัติได้ กรุณาเลือกพิกัดบนแผนที่แล้วกดยืนยัน';
+              L10n.locationAutoDetectFailed;
         });
         await _requestCustomerLocationPermission();
         return;
@@ -627,9 +727,9 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       }
       setState(() {
         _statusMessage =
-            'ไม่สามารถระบุตำแหน่งอัตโนมัติได้ กรุณาเลือกพิกัดบนแผนที่แล้วกดยืนยัน';
+            L10n.locationAutoDetectFailed;
       });
-      _showSnackBar('ดึงตำแหน่งอัตโนมัติไม่สำเร็จ: $error');
+      _showSnackBar(L10n.autoDetectLocationFailedWithError(error));
       await _requestCustomerLocationPermission();
     } finally {
       if (mounted) {
@@ -650,8 +750,8 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
     final selected = await Navigator.of(context).push<PickedLocation>(
       MaterialPageRoute<PickedLocation>(
         builder: (context) => MapPickerScreen(
-          title: 'เลือกพิกัดของคุณ',
-          confirmLabel: 'ยืนยันพิกัดนี้',
+          title: L10n.pickYourLocationTitle,
+          confirmLabel: L10n.confirmThisLocation,
           initialLocation: _selectedLocation,
         ),
       ),
@@ -670,7 +770,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
     final longitude = double.tryParse(_longitudeController.text.trim());
 
     if (latitude == null || longitude == null) {
-      _showSnackBar('กรุณากรอกละติจูดและลองจิจูดให้ถูกต้อง');
+      _showSnackBar(L10n.enterValidLatLng);
       return;
     }
 
@@ -678,7 +778,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         latitude > 90 ||
         longitude < -180 ||
         longitude > 180) {
-      _showSnackBar('ค่าพิกัดอยู่นอกช่วงที่ใช้งานได้');
+      _showSnackBar(L10n.coordinatesOutOfRange);
       return;
     }
 
@@ -688,7 +788,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
       final location = await buildPickedLocation(
         latitude: latitude,
         longitude: longitude,
-        fallbackTitle: 'พิกัดที่กรอกเอง',
+        fallbackTitle: L10n.manualCoordinatesFallback,
       );
 
       if (!mounted) {
@@ -707,7 +807,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
   void _enterHomeScreen() {
     final selectedLocation = _selectedLocation;
     if (selectedLocation == null) {
-      _showSnackBar('กรุณาระบุตำแหน่งก่อนเข้าสู่หน้าหลัก');
+      _showSnackBar(L10n.specifyLocationBeforeHome);
       return;
     }
 
@@ -740,8 +840,8 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
-        title: const Text(
-          'ยืนยันตำแหน่ง',
+        title: Text(
+          L10n.confirmLocationTitle,
           style: TextStyle(
             color: Color(0xFF9A3412),
             fontWeight: FontWeight.w700,
@@ -764,7 +864,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
               ),
               const SizedBox(height: 20),
               Text(
-                'ระบุตำแหน่งก่อนเข้าใช้งาน',
+                L10n.specifyLocationBeforeUse,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w700,
@@ -774,7 +874,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
               const SizedBox(height: 10),
               Text(
                 _statusMessage ??
-                    'แอพจะลองหาพิกัดของคุณอัตโนมัติก่อน หากไม่ได้คุณสามารถเลือกพิกัดเองแล้วกดยืนยันเพื่อเข้าสู่หน้าหลัก',
+                    L10n.locationSetupHint,
                 textAlign: TextAlign.center,
                 style: Theme.of(
                   context,
@@ -798,8 +898,8 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      const Text(
-                        'ตำแหน่งที่พร้อมใช้งาน',
+                      Text(
+                        L10n.readyLocationLabel,
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF9A3412),
@@ -807,7 +907,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        _selectedLocation?.title ?? 'ยังไม่มีตำแหน่งที่ยืนยัน',
+                        _selectedLocation?.title ?? L10n.noConfirmedLocationYet,
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(
                               fontWeight: FontWeight.w700,
@@ -844,7 +944,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
                   icon: const Icon(Icons.map_outlined),
-                  label: const Text('เลือกพิกัดเองบนแผนที่'),
+                  label: Text(L10n.pickLocationOnMap),
                 )
               else
                 DecoratedBox(
@@ -901,7 +1001,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                                   ),
                                 )
                               : const Icon(Icons.pin_drop_outlined),
-                          label: const Text('บันทึกพิกัดที่กรอกเอง'),
+                          label: Text(L10n.saveManualCoordinates),
                         ),
                       ],
                     ),
@@ -924,7 +1024,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.refresh),
-                label: const Text('ลองระบุตำแหน่งอัตโนมัติอีกครั้ง'),
+                label: Text(L10n.retryAutoDetectLocation),
               ),
               const SizedBox(height: 20),
               FilledButton.icon(
@@ -935,7 +1035,7 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
                   padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
                 icon: const Icon(Icons.check_circle),
-                label: const Text('ยืนยันและเข้าสู่หน้าหลัก'),
+                label: Text(L10n.confirmAndEnterHome),
               ),
             ],
           ),
@@ -946,9 +1046,14 @@ class _LocationSetupScreenState extends State<LocationSetupScreen>
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.userLocation});
+  const HomeScreen({
+    super.key,
+    required this.userLocation,
+    this.refineLocationInBackground = false,
+  });
 
   final PickedLocation userLocation;
+  final bool refineLocationInBackground;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -964,6 +1069,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   StreamSubscription<User?>? _authStateSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _unreadNotificationSubscription;
+  StreamSubscription<CatalogProductLinkTarget>? _productDeepLinkSubscription;
   _ActiveCatalog? _activeCatalog;
   final List<CartLineItem> _cartItems = <CartLineItem>[];
   final List<CartLineItem> _nationwideCartItems = <CartLineItem>[];
@@ -981,56 +1087,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const List<_QuickActionItem> _quickActions = <_QuickActionItem>[
     _QuickActionItem(
       id: 'travel',
-      label: 'เดินทาง',
       icon: Icons.directions_car_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'travel',
     ),
     _QuickActionItem(
       id: 'restaurant',
-      label: 'ร้านอาหาร',
       icon: Icons.restaurant_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านอาหาร',
     ),
     _QuickActionItem(
       id: 'market',
-      label: 'ตลาด',
       icon: Icons.storefront_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ตลาด',
     ),
     _QuickActionItem(
       id: 'shop',
-      label: 'ร้านค้า',
       icon: Icons.shopping_bag_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านค้า',
     ),
     _QuickActionItem(
       id: 'pharmacy',
-      label: 'ร้านขายยา',
       icon: Icons.local_pharmacy_outlined,
       iconColor: _quickActionIconColor,
       serviceType: 'ร้านขายยา',
     ),
     _QuickActionItem(
       id: 'shop-map',
-      label: 'แผนที่',
       icon: Icons.location_on_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'shop-map',
     ),
     _QuickActionItem(
       id: 'nationwide-shipping',
-      label: 'สินค้าส่งทั่วประเทศ',
       icon: Icons.inventory_2_outlined,
       iconColor: _quickActionIconColor,
       actionKey: 'nationwide-shipping',
     ),
     _QuickActionItem(
       id: 'more',
-      label: 'เพิ่มเติม',
       icon: Icons.grid_view_rounded,
       iconColor: Color(0xFFEF8A17),
     ),
@@ -1055,6 +1153,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (FirebaseAuth.instance.currentUser != null) {
       EcosystemHeartbeatService.instance.start();
     }
+    if (widget.refineLocationInBackground) {
+      unawaited(_refreshLocationInBackground());
+    }
+    unawaited(_bindProductDeepLinks());
+  }
+
+  Future<void> _bindProductDeepLinks() async {
+    final pending = CatalogProductDeepLinkService.instance.consumePending();
+    if (pending != null && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_openSharedProductLink(pending));
+      });
+    }
+
+    _productDeepLinkSubscription =
+        CatalogProductDeepLinkService.instance.targets.listen((target) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_openSharedProductLink(target));
+    });
+  }
+
+  Future<void> _openSharedProductLink(CatalogProductLinkTarget target) async {
+    await _ensureCatalogFirebaseSession();
+    if (!mounted) {
+      return;
+    }
+
+    final opened = await openCatalogProductFromShareLink(
+      context: context,
+      target: target,
+      customerLatitude: _userLocation.latitude,
+      customerLongitude: _userLocation.longitude,
+      onConfirmOrder: _addToCart,
+      onNavigateToCart: _openCartTab,
+    );
+    if (!opened && mounted) {
+      _showSnackBar(L10n.sharedProductUnavailable);
+    }
+  }
+
+  Future<void> _refreshLocationInBackground() async {
+    try {
+      final detected = await tryDetectCurrentLocation().timeout(
+        const Duration(seconds: 8),
+      );
+      if (!mounted || detected == null) {
+        return;
+      }
+      setState(() => _userLocation = detected);
+    } catch (_) {}
   }
 
   @override
@@ -1065,6 +1215,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _authStateSubscription?.cancel();
     _unreadNotificationSubscription?.cancel();
+    _productDeepLinkSubscription?.cancel();
     unawaited(
       CartSessionService.saveLocalCart(
         cartItems: List<CartLineItem>.from(_cartItems),
@@ -1129,7 +1280,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _selectedBottomTab = 0;
       }
     });
-    _showSnackBar('ตะกร้าหมดเวลา 1 ชั่วโมง คืนสต๊อกสินค้าแล้ว');
+    _showSnackBar(L10n.cartExpiredRestoredStock);
   }
 
   void _scheduleCartSessionSync() {
@@ -1162,14 +1313,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final message = error.message?.trim();
       _showSnackBar(
         message == null || message.isEmpty
-            ? 'ไม่สามารถจองสต๊อกสินค้าได้'
-            : 'ไม่สามารถจองสต๊อกสินค้าได้ ($message)',
+            ? L10n.cannotReserveStock
+            : L10n.cannotReserveStockWithMessage(message),
       );
     } catch (error) {
       if (!mounted) {
         return;
       }
-      _showSnackBar('ไม่สามารถจองสต๊อกสินค้าได้');
+      _showSnackBar(L10n.cannotReserveStock);
     }
   }
 
@@ -1187,7 +1338,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _nationwideCartItems.clear();
           _showNationwideCart = false;
         });
-        _showSnackBar('ตะกร้าหมดเวลา 1 ชั่วโมง คืนสต๊อกสินค้าแล้ว');
+        _showSnackBar(L10n.cartExpiredRestoredStock);
       }
       return;
     }
@@ -1248,7 +1399,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return false;
     }
     _lastRootBackPressAt = now;
-    _showSnackBar('กดปุ่มกลับอีกครั้งเพื่อออกจากแอป');
+    _showSnackBar(L10n.pressBackAgainToExit);
     return true;
   }
 
@@ -1304,8 +1455,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final selected = await Navigator.of(context).push<PickedLocation>(
       MaterialPageRoute<PickedLocation>(
         builder: (context) => MapPickerScreen(
-          title: 'เปลี่ยนพิกัดปลายทาง',
-          confirmLabel: 'ใช้พิกัดนี้',
+          title: L10n.changeDeliveryLocation,
+          confirmLabel: L10n.useTheseCoordinates,
           initialLocation: _userLocation,
         ),
       ),
@@ -1318,7 +1469,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {
       _userLocation = selected;
     });
-    _showSnackBar('อัปเดตพิกัดปลายทางเรียบร้อยแล้ว');
+    _showSnackBar(L10n.destinationUpdated);
   }
 
   Future<void> _startTravelPlannerFresh() async {
@@ -1347,7 +1498,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _travelRideSelection = result.rideSelection;
     });
 
-    _showSnackBar('ตั้งค่าจุดรับ จุดส่ง เวลา และประเภทรถเรียบร้อยแล้ว');
+    _showSnackBar(L10n.travelPlannerConfigured);
   }
 
   Future<void> _reorderProductsFromHistory(
@@ -1367,7 +1518,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _showSnackBar(
         result.messages.isNotEmpty
             ? result.messages.first
-            : 'ไม่พบสินค้าที่สั่งซ้ำได้',
+            : L10n.noReorderableProducts,
       );
       return;
     }
@@ -1408,7 +1559,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (result.messages.isNotEmpty) {
       _showSnackBar(result.messages.first);
     } else {
-      _showSnackBar('เพิ่มสินค้าในตะกร้าแล้ว — ตรวจสอบราคาปัจจุบันก่อนชำระเงิน');
+      _showSnackBar(L10n.addedToCartCheckPrice);
     }
   }
 
@@ -1438,7 +1589,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _travelRideSelection = result.rideSelection;
     });
 
-    _showSnackBar('ตั้งค่าจุดรับ จุดส่ง เวลา และประเภทรถเรียบร้อยแล้ว');
+    _showSnackBar(L10n.travelPlannerConfigured);
   }
 
   Future<void> _applySharedLocationToCart() async {
@@ -1447,25 +1598,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('วางพิกัดที่แชร์มา'),
+          title: Text(L10n.pasteSharedCoordinatesTitle),
           content: TextField(
             controller: controller,
             autofocus: true,
             minLines: 1,
             maxLines: 3,
-            decoration: const InputDecoration(
-              hintText: 'เช่น 13.7563,100.5018 หรือ Google Maps URL',
+            decoration: InputDecoration(
+              hintText: L10n.pasteSharedCoordinatesHint,
             ),
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('ยกเลิก'),
+              child: Text(L10n.cancel),
             ),
             FilledButton(
               onPressed: () =>
                   Navigator.of(context).pop(controller.text.trim()),
-              child: const Text('ใช้พิกัดนี้'),
+              child: Text(L10n.useTheseCoordinates),
             ),
           ],
         );
@@ -1480,7 +1631,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final coordinates = _parseSharedCoordinates(resolvedInput);
     if (coordinates == null) {
       _showSnackBar(
-        'ไม่พบพิกัดในลิงก์นี้ ลองแชร์แบบมีพิกัดหรือปักหมุดจากแผนที่แทน',
+        L10n.sharedLinkNoCoordinates,
       );
       return;
     }
@@ -1489,7 +1640,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final picked = await buildPickedLocation(
         latitude: coordinates.$1,
         longitude: coordinates.$2,
-        fallbackTitle: 'พิกัดที่แชร์มา',
+        fallbackTitle: L10n.sharedCoordinatesFallback,
       );
 
       if (!mounted) {
@@ -1499,9 +1650,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _userLocation = picked;
       });
-      _showSnackBar('อัปเดตปลายทางจากพิกัดที่แชร์มาแล้ว');
+      _showSnackBar(L10n.destinationUpdatedFromShare);
     } catch (error) {
-      _showSnackBar('ไม่สามารถใช้พิกัดที่แชร์มาได้: $error');
+      _showSnackBar(L10n.cannotUseSharedCoordinates(error));
     }
   }
 
@@ -1785,7 +1936,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final loggedIn = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => LoginScreen(
-          categoryLabel: 'แว๊นตลาด',
+          categoryLabel: L10n.appBrand,
           firebaseEnabled: Firebase.apps.isNotEmpty,
           onLoggedIn: (loginContext) {
             Navigator.of(loginContext).pop(true);
@@ -1822,14 +1973,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _openCatalogFromQr(String rawValue) {
     final shopId = _extractShopIdFromQr(rawValue);
     if (shopId == null) {
-      _showSnackBar('QR นี้ไม่ใช่ QR ร้านค้า');
+      _showSnackBar(L10n.qrNotShopQr);
       return;
     }
 
     setState(() {
       _selectedBottomTab = 0;
       _activeCatalog = _ActiveCatalog(
-        title: 'สินค้าร้านจาก QR',
+        title: L10n.shopProductsFromQr,
         serviceType: '',
         shopIdFilter: shopId,
       );
@@ -1911,7 +2062,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (item.serviceType == null) {
-      _showSnackBar('หมวด ${item.label} ยังไม่ได้เชื่อมต่อข้อมูลร้านค้า');
+      _showSnackBar(L10n.categoryNotConnected(item.label));
       return;
     }
 
@@ -1938,9 +2089,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => CatalogProductSearchScreen(
-          title: 'ค้นหาสินค้า',
+          title: L10n.catalogSearchProducts,
           sectionsStream: PublicCatalogService.streamAllSections(),
-          searchHint: 'ค้นหาทุกสินค้าในแว๊นตลาด',
+          searchHint: L10n.searchAllProductsInBrand,
           customerLatitude: _userLocation.latitude,
           customerLongitude: _userLocation.longitude,
           onConfirmOrder: _addToCart,
@@ -1975,7 +2126,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _activeCatalog = _ActiveCatalog(
         title: product.shopName?.trim().isNotEmpty == true
             ? product.shopName!.trim()
-            : 'สินค้าร้าน',
+            : L10n.shopProductsTitle,
         shopIdFilter: product.shopId,
       );
     });
@@ -2165,23 +2316,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<User> _requireCheckoutUser() async {
     final allowed = await _ensureLoggedIn();
     if (!allowed || !mounted) {
-      throw Exception('กรุณาเข้าสู่ระบบก่อนยืนยันคำสั่งซื้อ');
+      throw Exception(L10n.signInBeforeCheckoutConfirm);
     }
 
     await AppCheckGuard.ensureCheckoutReady();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
-      throw Exception('กรุณาเข้าสู่ระบบก่อนยืนยันคำสั่งซื้อ');
+      throw Exception(L10n.signInBeforeCheckoutConfirm);
     }
 
     try {
       await user.getIdToken(true);
     } catch (_) {
-      throw Exception('ไม่สามารถยืนยันตัวตนล่าสุดได้ กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.identityVerificationFailedRetry);
     }
 
     return user;
@@ -2192,18 +2343,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     final user = await _requireCheckoutUser();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
     final result = await _createCheckoutOrders(
       user: user,
       paymentMethod: 'cash_on_delivery',
-      paymentMethodLabel: 'จ่ายปลายทาง',
+      paymentMethodLabel: L10n.cashOnDeliveryLabel,
       paymentStatus: 'cash_on_delivery',
-      paymentStatusLabel: 'ชำระปลายทาง',
+      paymentStatusLabel: L10n.cashOnDeliveryStatusLabel,
       auditSource: 'cod_confirm_dialog',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าสร้างออเดอร์แบบจ่ายปลายทาง',
+      createdEventLabel: L10n.customerCreatedCodOrder,
       checkoutContext: checkoutContext,
     );
     return result.orderIds;
@@ -2214,19 +2365,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     final user = await _requireCheckoutUser();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
     final result = await _createTravelOrder(
       user: user,
       request: request,
       paymentMethod: 'cash_on_delivery',
-      paymentMethodLabel: 'จ่ายปลายทาง',
+      paymentMethodLabel: L10n.cashOnDeliveryLabel,
       paymentStatus: 'cash_on_delivery',
-      paymentStatusLabel: 'ชำระปลายทาง',
+      paymentStatusLabel: L10n.cashOnDeliveryStatusLabel,
       auditSource: 'travel_cod_confirm_dialog',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าสร้างคำขอเดินทางแบบจ่ายปลายทาง',
+      createdEventLabel: L10n.customerCreatedTravelCodOrder,
     );
     return result.orderIds;
   }
@@ -2238,11 +2389,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     final user = await _requireCheckoutUser();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
     final checkoutQuoteId = checkoutContext.checkoutQuoteId?.trim();
     if (checkoutQuoteId == null || checkoutQuoteId.isEmpty) {
-      throw Exception('ยังไม่มี checkout quote กรุณารอระบบคำนวณยอดสักครู่');
+      throw Exception(L10n.noCheckoutQuoteYet);
     }
 
     final session = await OmisePaymentService().startCheckout(
@@ -2252,7 +2403,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       checkoutQuoteId: checkoutQuoteId,
     );
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
 
     final creation = await _createCheckoutOrders(
@@ -2260,11 +2411,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       paymentMethod: channel.methodId,
       paymentMethodLabel: channel.paymentMethodLabel,
       paymentStatus: 'verified',
-      paymentStatusLabel: 'ชำระเงินแล้ว',
+      paymentStatusLabel: L10n.paymentVerifiedStatusLabel,
       auditSource: 'omise_payment_sheet',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าชำระเงินผ่าน Omise และสร้างออเดอร์แล้ว',
+      createdEventLabel: L10n.customerPaidOmiseCreatedOrder,
       checkoutContext: checkoutContext,
       omisePayment: _OmiseVerifiedCheckout(
         paymentSessionId: session.sessionId,
@@ -2273,7 +2424,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     if (creation.orderIds.isEmpty) {
-      throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+      throw Exception(L10n.createOrderFailedGeneric);
     }
 
     return creation.orderIds;
@@ -2284,18 +2435,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     final user = await _requireCheckoutUser();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
     if (_cartItems.isEmpty) {
-      throw Exception('ไม่มีสินค้าในตะกร้า');
+      throw Exception(L10n.cartEmpty);
     }
     if (request.bytes.isEmpty) {
-      throw Exception('ไฟล์สลิปว่างเปล่า');
+      throw Exception(L10n.emptySlipFile);
     }
 
     final checkoutContext = request.checkoutContext;
     if (checkoutContext == null) {
-      throw Exception('ข้อมูล checkout ไม่ครบ');
+      throw Exception(L10n.checkoutContextIncomplete);
     }
 
     final paymentGroupId = 'V2PAY-${DateTime.now().millisecondsSinceEpoch}';
@@ -2336,24 +2487,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return PaymentSlipSubmissionResult(
         orderIds: const <String>[],
         verificationStatus: status,
-        message: message.isEmpty ? 'สลิปยังไม่ผ่านการตรวจสอบ' : message,
+        message: message.isEmpty ? L10n.slipNotVerified : message,
       );
     }
 
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
 
     final creation = await _createCheckoutOrders(
       user: user,
       paymentMethod: 'promptpay_qr',
-      paymentMethodLabel: 'สแกนจ่ายพร้อมเพย์',
+      paymentMethodLabel: L10n.scanPromptPay,
       paymentStatus: 'verified',
-      paymentStatusLabel: 'ชำระเงินแล้ว',
+      paymentStatusLabel: L10n.paymentVerifiedStatusLabel,
       auditSource: 'promptpay_slip_dialog',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าสแกนจ่ายพร้อมเพย์และสร้างออเดอร์แล้ว',
+      createdEventLabel: L10n.customerPaidPromptPayCreatedOrder,
       checkoutContext: checkoutContext,
       verifiedSlip: _VerifiedSlipCheckout(
         paymentGroupId: paymentGroupId,
@@ -2370,8 +2521,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       orderIds: creation.orderIds,
       verificationStatus: status,
       message: message.isEmpty
-          ? 'ตรวจสลิปผ่านและสร้างออเดอร์แล้ว'
-          : '$message\nสร้างออเดอร์แล้ว ${creation.orderIds.length} รายการ',
+          ? L10n.slipVerifiedAndOrderCreated
+          : L10n.slipVerifiedOrderCreatedMessage(
+              message,
+              creation.orderIds.length,
+            ),
     );
   }
 
@@ -2390,11 +2544,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     final user = await _requireCheckoutUser();
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
     final quote = await TravelFareQuoteService.fetchQuote(request);
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
 
     final paidSession = await OmisePaymentService().startCheckout(
@@ -2405,7 +2559,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       purpose: 'travel',
     );
     if (!mounted) {
-      throw Exception('กรุณาลองใหม่อีกครั้ง');
+      throw Exception(L10n.pleaseTryAgain);
     }
 
     final creation = await _createTravelOrder(
@@ -2414,11 +2568,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       paymentMethod: channel.methodId,
       paymentMethodLabel: channel.paymentMethodLabel,
       paymentStatus: 'verified',
-      paymentStatusLabel: 'ชำระเงินแล้ว',
+      paymentStatusLabel: L10n.paymentVerifiedStatusLabel,
       auditSource: 'travel_omise_payment_sheet',
       riderNotifyReady: true,
       notifyRider: true,
-      createdEventLabel: 'ลูกค้าชำระเงินผ่าน Omise และสร้างคำขอเดินทางแล้ว',
+      createdEventLabel: L10n.customerPaidOmiseCreatedTravelOrder,
       omisePayment: _OmiseVerifiedCheckout(
         paymentSessionId: paidSession.sessionId,
         omiseChargeId: paidSession.omiseChargeId,
@@ -2426,7 +2580,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     if (creation.orderIds.isEmpty) {
-      throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+      throw Exception(L10n.createTravelOrderFailed);
     }
 
     return creation.orderIds;
@@ -2475,8 +2629,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         content: Text(
           lastError is FirebaseFunctionsException
               ? (lastError.message ??
-                    'บันทึกการใช้ส่วนลดไม่สำเร็จ กรุณาติดต่อผู้ดูแลระบบ')
-              : 'บันทึกการใช้ส่วนลดไม่สำเร็จ กรุณาติดต่อผู้ดูแลระบบ',
+                    L10n.saveDiscountFailedContactAdmin)
+              : L10n.saveDiscountFailedContactAdmin,
         ),
         backgroundColor: Colors.orange,
       ),
@@ -2499,12 +2653,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _OmiseVerifiedCheckout? omisePayment,
   }) async {
     if (_cartItems.isEmpty) {
-      throw Exception('ไม่มีสินค้าในตะกร้า');
+      throw Exception(L10n.cartEmpty);
     }
 
     final checkoutQuoteId = checkoutContext?.checkoutQuoteId?.trim();
     if (checkoutQuoteId == null || checkoutQuoteId.isEmpty) {
-      throw Exception('ยังไม่มี checkout quote กรุณารอระบบคำนวณยอดสักครู่');
+      throw Exception(L10n.noCheckoutQuoteYet);
     }
 
     final cartSnapshot = List<CartLineItem>.from(_cartItems);
@@ -2588,7 +2742,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const <String>[];
 
       if (orderIds.isEmpty) {
-        throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+        throw Exception(L10n.createOrderFailedGeneric);
       }
 
       if (mounted && shopsWithoutRider.isNotEmpty) {
@@ -2602,7 +2756,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) {
         await _clearCartAfterCheckout();
         _focusRoadmapOrders(orderIds);
-        _showSnackBar('สั่งซื้อสำเร็จ — ติดตามสถานะได้ที่แท็บลูกค้า');
+        _showSnackBar(L10n.orderSuccessTrackInCustomerTab);
       }
 
       await _recordCheckoutDiscounts(
@@ -2616,7 +2770,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         combinedGrandTotal: combinedGrandTotal,
       );
     } catch (e) {
-      throw Exception('ไม่สามารถสร้างออเดอร์ได้: $e');
+      throw Exception(L10n.createOrderFailedWithError(e));
     }
   }
 
@@ -2636,7 +2790,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _OmiseVerifiedCheckout? omisePayment,
   }) async {
     if (verifiedSlip != null) {
-      throw Exception('การชำระด้วยสลิปสำหรับเดินทางยังไม่รองรับ');
+      throw Exception(L10n.travelSlipPaymentNotSupported);
     }
 
     final idempotencyKey = request.idempotencyKey.trim().isNotEmpty
@@ -2691,13 +2845,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final hasAssignedRider = payload['hasAssignedRider'] == true;
 
       if (orderIds.isEmpty) {
-        throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้');
+        throw Exception(L10n.createTravelOrderFailed);
       }
 
       if (mounted && !hasAssignedRider) {
         await showRiderUnavailableDialog(
           context,
-          shopNames: const <String>['บริการเดินทาง'],
+          shopNames: <String>[L10n.travelServiceLabel],
           orderIds: orderIds,
           isTravelOrder: true,
         );
@@ -2705,7 +2859,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       return (orderIds: orderIds, combinedGrandTotal: combinedGrandTotal);
     } catch (e) {
-      throw Exception('ไม่สามารถสร้างออเดอร์เดินทางได้: $e');
+      throw Exception(L10n.createTravelOrderFailedWithError(e));
     }
   }
 
@@ -2780,20 +2934,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return;
         }
 
-        const labels = <String>[
-          'โฮม',
-          'ตะกร้า',
-          'ลูกค้า',
-          'แจ้งเตือน',
-          'ตั้งค่า',
-        ];
-        _showSnackBar('หน้า ${labels[index]} กำลังพัฒนา');
+        final labels = L10n.bottomNavTabLabels;
+        _showSnackBar(L10n.tabUnderDevelopment(labels[index]));
       }),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final cartQuantity = _cartItems.fold<int>(
       0,
       (totalQuantity, item) => totalQuantity + item.quantity,
@@ -2883,7 +3034,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute<void>(
               builder: (_) => LoginScreen(
-                categoryLabel: 'แว๊นตลาด',
+                categoryLabel: L10n.appBrand,
                 firebaseEnabled: Firebase.apps.isNotEmpty,
                 onLoggedIn: (loginContext) {
                   Navigator.of(loginContext).pushAndRemoveUntil(
@@ -2944,76 +3095,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             stops: <double>[0.0, 0.52, 1.0],
           ),
         ),
-        child: NavigationBarTheme(
-          data: NavigationBarThemeData(
-            backgroundColor: Colors.transparent,
-            indicatorColor: const Color(0x40FFFFFF),
-            iconTheme: WidgetStateProperty.resolveWith<IconThemeData>((states) {
-              if (states.contains(WidgetState.selected)) {
-                return const IconThemeData(color: Colors.white);
-              }
-              return const IconThemeData(color: Color(0xFFFFF2D6));
-            }),
-            labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>((
-              states,
-            ) {
-              if (states.contains(WidgetState.selected)) {
-                return const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                );
-              }
-              return const TextStyle(
-                color: Color(0xFFFFF2D6),
-                fontWeight: FontWeight.w600,
-              );
-            }),
-          ),
-          child: NavigationBar(
-            height: 74,
-            selectedIndex: _selectedBottomTab,
-            onDestinationSelected: _onBottomTabSelected,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            destinations: <NavigationDestination>[
-              const NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home),
-                label: 'โฮม',
-              ),
-              NavigationDestination(
-                icon: _CartNavIcon(
-                  icon: Icons.shopping_cart_outlined,
-                  count: cartQuantity,
-                ),
-                selectedIcon: _CartNavIcon(
-                  icon: Icons.shopping_cart,
-                  count: cartQuantity,
-                ),
-                label: 'ตะกร้า',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.person_outline_rounded),
-                selectedIcon: Icon(Icons.person_rounded),
-                label: 'ลูกค้า',
-              ),
-              NavigationDestination(
-                icon: _CartNavIcon(
-                  icon: Icons.notifications_none_rounded,
-                  count: _unreadNotificationCount,
-                ),
-                selectedIcon: _CartNavIcon(
-                  icon: Icons.notifications_rounded,
-                  count: _unreadNotificationCount,
-                ),
-                label: 'แจ้งเตือน',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: 'ตั้งค่า',
-              ),
-            ],
-          ),
+        child: _Van2HomeBottomNav(
+          selectedIndex: _selectedBottomTab,
+          cartQuantity: cartQuantity,
+          unreadNotificationCount: _unreadNotificationCount,
+          onSelected: _onBottomTabSelected,
         ),
       ),
           ),
@@ -3024,6 +3110,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
         ],
       ),
+    );
+      },
     );
       },
     );
@@ -3148,7 +3236,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       const SizedBox(width: 12),
                                       Expanded(
                                         child: Text(
-                                          'ค้นหาทุกสินค้าในแว๊นตลาด',
+                                          L10n.searchAllProductsInBrand,
                                           style: Theme.of(context)
                                               .textTheme
                                               .titleMedium
@@ -3266,7 +3354,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               customerLatitude: _userLocation.latitude,
               customerLongitude: _userLocation.longitude,
               enabledServiceTypes: config.enabledRetailServiceTypes,
-              nationwideEnabled: config.nationwideEnabled,
               onProductTap: _openShopCatalogFromProduct,
               onConfirmOrder: _addToCart,
               onNavigateToCart: _openCartTab,
@@ -3283,7 +3370,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 class _QuickActionItem {
   const _QuickActionItem({
     required this.id,
-    required this.label,
     this.icon,
     this.iconColor,
     this.serviceType,
@@ -3291,7 +3377,8 @@ class _QuickActionItem {
   });
 
   final String id;
-  final String label;
+
+  String get label => L10n.quickActionLabel(id);
   final IconData? icon;
   final Color? iconColor;
   final String? serviceType;
@@ -3308,6 +3395,160 @@ class _ActiveCatalog {
   final String title;
   final String serviceType;
   final String? shopIdFilter;
+}
+
+class _Van2HomeBottomNav extends StatelessWidget {
+  const _Van2HomeBottomNav({
+    required this.selectedIndex,
+    required this.cartQuantity,
+    required this.unreadNotificationCount,
+    required this.onSelected,
+  });
+
+  static const double height = 74;
+  static const double labelSlotHeight = 14;
+
+  final int selectedIndex;
+  final int cartQuantity;
+  final int unreadNotificationCount;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: height,
+      child: Row(
+        children: <Widget>[
+          _Van2HomeBottomNavItem(
+            selected: selectedIndex == 0,
+            label: L10n.homeTab,
+            icon: const Icon(Icons.home_outlined),
+            selectedIcon: const Icon(Icons.home),
+            onTap: () => onSelected(0),
+          ),
+          _Van2HomeBottomNavItem(
+            selected: selectedIndex == 1,
+            label: L10n.cartTab,
+            icon: _CartNavIcon(
+              icon: Icons.shopping_cart_outlined,
+              count: cartQuantity,
+            ),
+            selectedIcon: _CartNavIcon(
+              icon: Icons.shopping_cart,
+              count: cartQuantity,
+            ),
+            onTap: () => onSelected(1),
+          ),
+          _Van2HomeBottomNavItem(
+            selected: selectedIndex == 2,
+            label: L10n.customerTab,
+            icon: const Icon(Icons.person_outline_rounded),
+            selectedIcon: const Icon(Icons.person_rounded),
+            onTap: () => onSelected(2),
+          ),
+          _Van2HomeBottomNavItem(
+            selected: selectedIndex == 3,
+            label: L10n.notificationsTab,
+            icon: _CartNavIcon(
+              icon: Icons.notifications_none_rounded,
+              count: unreadNotificationCount,
+            ),
+            selectedIcon: _CartNavIcon(
+              icon: Icons.notifications_rounded,
+              count: unreadNotificationCount,
+            ),
+            onTap: () => onSelected(3),
+          ),
+          _Van2HomeBottomNavItem(
+            selected: selectedIndex == 4,
+            label: L10n.settingsTab,
+            icon: const Icon(Icons.settings_outlined),
+            selectedIcon: const Icon(Icons.settings),
+            onTap: () => onSelected(4),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Van2HomeBottomNavItem extends StatelessWidget {
+  const _Van2HomeBottomNavItem({
+    required this.selected,
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final String label;
+  final Widget icon;
+  final Widget selectedIcon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color labelColor =
+        selected ? Colors.white : const Color(0xFFFFF2D6);
+    final iconTheme = IconTheme(
+      data: IconThemeData(color: labelColor),
+      child: selected ? selectedIcon : icon,
+    );
+
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? const Color(0x40FFFFFF)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    child: iconTheme,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                SizedBox(
+                  height: _Van2HomeBottomNav.labelSlotHeight,
+                  width: double.infinity,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: labelColor,
+                        fontSize: 12,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w600,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _CartNavIcon extends StatelessWidget {
@@ -3501,7 +3742,6 @@ class _HomeProductShelves extends StatefulWidget {
     required this.customerLatitude,
     required this.customerLongitude,
     required this.enabledServiceTypes,
-    required this.nationwideEnabled,
     required this.onProductTap,
     required this.onConfirmOrder,
     required this.onNavigateToCart,
@@ -3510,7 +3750,6 @@ class _HomeProductShelves extends StatefulWidget {
   final double customerLatitude;
   final double customerLongitude;
   final Set<String> enabledServiceTypes;
-  final bool nationwideEnabled;
   final ValueChanged<PublicCatalogProduct> onProductTap;
   final ValueChanged<CartProductSelection> onConfirmOrder;
   final VoidCallback onNavigateToCart;
@@ -3530,9 +3769,15 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
   _secondaryFuture;
   String? _secondaryFutureKey;
   String? _scheduledShelfPrefetchKey;
+  String? _pendingSecondaryRefreshKey;
+  bool _secondaryRefreshInFlight = false;
+  ({
+    List<PublicCatalogProduct> bestSelling,
+    List<PublicCatalogProduct> personalized,
+  })?
+  _cachedSecondary;
 
-  String get _configKey =>
-      '${widget.enabledServiceTypes.join('|')}|${widget.nationwideEnabled}';
+  String get _configKey => widget.enabledServiceTypes.join('|');
 
   List<PublicCatalogProduct> _filterHomeProducts(
     List<PublicCatalogProduct> products,
@@ -3540,30 +3785,6 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
     return PublicCatalogService.filterHomeRetailProducts(
       products,
       enabledServiceTypes: widget.enabledServiceTypes,
-      nationwideEnabled: widget.nationwideEnabled,
-    );
-  }
-
-  @override
-  void didUpdateWidget(covariant _HomeProductShelves oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.enabledServiceTypes != widget.enabledServiceTypes ||
-        oldWidget.nationwideEnabled != widget.nationwideEnabled) {
-      _secondaryFuture = null;
-      _secondaryFutureKey = null;
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(_ensureCatalogFirebaseSession());
-    _featuredFuture = HomeProductDiscoveryService.streamFeaturedShelf()
-        .first
-        .timeout(const Duration(seconds: 15));
-    HomeProductImagePrefetch.startHomeWarmOnce(
-      featuredFuture: _featuredFuture,
-      secondaryFuture: _secondaryFutureForWarm(),
     );
   }
 
@@ -3573,10 +3794,119 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
       List<PublicCatalogProduct> personalized,
     })
   >
-  _secondaryFutureForWarm() async {
-    final featured = await _featuredFuture;
-    final featuredIds = featured.map((product) => product.id).toSet();
-    return _loadSecondaryShelves(featuredIds);
+  _loadSecondarySafely({required Set<String> excludeFeaturedIds}) async {
+    try {
+      return await HomeProductDiscoveryService.loadSecondaryShelves(
+        customerLatitude: widget.customerLatitude,
+        customerLongitude: widget.customerLongitude,
+        excludeIds: excludeFeaturedIds,
+      );
+    } catch (_) {
+      return (
+        bestSelling: const <PublicCatalogProduct>[],
+        personalized: const <PublicCatalogProduct>[],
+      );
+    }
+  }
+
+  void _scheduleSecondaryRefreshIfNeeded(Set<String> excludeFeaturedIds) {
+    final key = '$_configKey|${excludeFeaturedIds.join(',')}';
+    if (_secondaryFuture != null && _secondaryFutureKey == key) {
+      return;
+    }
+    if (_pendingSecondaryRefreshKey == key || _secondaryRefreshInFlight) {
+      return;
+    }
+    _pendingSecondaryRefreshKey = key;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingSecondaryRefreshKey = null;
+      if (!mounted) {
+        return;
+      }
+      _ensureSecondaryFuture(excludeFeaturedIds: excludeFeaturedIds);
+    });
+  }
+
+  void _ensureSecondaryFuture({required Set<String> excludeFeaturedIds}) {
+    final key = '$_configKey|${excludeFeaturedIds.join(',')}';
+    if (_secondaryFuture != null && _secondaryFutureKey == key) {
+      return;
+    }
+    _secondaryFutureKey = key;
+
+    final cached = HomeProductDiscoveryService.peekCachedSecondaryShelves(
+      excludeIds: excludeFeaturedIds,
+    );
+    if (cached != null) {
+      _cachedSecondary = cached;
+      _secondaryFuture = Future.value(cached);
+      _refreshSecondaryInBackground(excludeFeaturedIds: excludeFeaturedIds);
+      return;
+    }
+
+    _secondaryFuture = _loadSecondarySafely(
+      excludeFeaturedIds: excludeFeaturedIds,
+    );
+  }
+
+  void _refreshSecondaryInBackground({
+    required Set<String> excludeFeaturedIds,
+  }) {
+    if (_secondaryRefreshInFlight) {
+      return;
+    }
+    _secondaryRefreshInFlight = true;
+
+    unawaited(
+      HomeProductDiscoveryService.loadSecondaryShelves(
+        customerLatitude: widget.customerLatitude,
+        customerLongitude: widget.customerLongitude,
+        excludeIds: excludeFeaturedIds,
+        forceRefresh: true,
+      )
+          .then((fresh) {
+            if (!mounted) {
+              return;
+            }
+            setState(() {
+              _cachedSecondary = fresh;
+              _secondaryFuture = Future.value(fresh);
+            });
+          })
+          .catchError((_) {})
+          .whenComplete(() {
+            _secondaryRefreshInFlight = false;
+          }),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeProductShelves oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabledServiceTypes != widget.enabledServiceTypes) {
+      _cachedSecondary = null;
+      _secondaryFuture = null;
+      _secondaryFutureKey = null;
+      _pendingSecondaryRefreshKey = null;
+      _secondaryRefreshInFlight = false;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _cachedSecondary =
+        HomeProductDiscoveryService.peekCachedSecondaryShelves();
+    unawaited(_ensureCatalogFirebaseSession());
+    _featuredFuture = HomeProductDiscoveryService.streamFeaturedShelf()
+        .first
+        .timeout(const Duration(seconds: 15));
+    _ensureSecondaryFuture(excludeFeaturedIds: const <String>{});
+    HomeProductImagePrefetch.startHomeWarmOnce(
+      featuredFuture: _featuredFuture,
+      secondaryFuture: _secondaryFuture!,
+    );
   }
 
   Future<void> _ensureCatalogFirebaseSession() async {
@@ -3588,52 +3918,6 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
       }
       await user.getIdToken();
     } catch (_) {}
-  }
-
-  Future<
-    ({
-      List<PublicCatalogProduct> bestSelling,
-      List<PublicCatalogProduct> personalized,
-    })
-  >
-  _loadSecondaryShelves(Set<String> excludeFeaturedIds) async {
-    final bestSelling = await HomeProductDiscoveryService.loadBestSellingShelf(
-      excludeIds: excludeFeaturedIds,
-    );
-    final combinedExclude = <String>{
-      ...excludeFeaturedIds,
-      ...bestSelling.map((product) => product.id),
-    };
-    final personalized =
-        await HomeProductDiscoveryService.loadPersonalizedShelf(
-          customerLatitude: widget.customerLatitude,
-          customerLongitude: widget.customerLongitude,
-          excludeIds: combinedExclude,
-        );
-    final fallbackPersonalized = personalized.isNotEmpty
-        ? personalized
-        : await HomeProductDiscoveryService.loadPersonalizedShelf(
-            customerLatitude: widget.customerLatitude,
-            customerLongitude: widget.customerLongitude,
-            excludeIds: excludeFeaturedIds,
-          );
-    return (bestSelling: bestSelling, personalized: fallbackPersonalized);
-  }
-
-  Future<
-    ({
-      List<PublicCatalogProduct> bestSelling,
-      List<PublicCatalogProduct> personalized,
-    })
-  >
-  _secondaryFutureForKey(Set<String> featuredIds) {
-    final key = featuredIds.join(',');
-    if (_secondaryFuture != null && _secondaryFutureKey == key) {
-      return _secondaryFuture!;
-    }
-    _secondaryFutureKey = key;
-    _secondaryFuture = _loadSecondaryShelves(featuredIds);
-    return _secondaryFuture!;
   }
 
   List<Widget> _buildVisibleShelfSections({
@@ -3663,6 +3947,7 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
           isLoading: isLoading,
           onProductTap: widget.onProductTap,
           useCatalogCardStyle: true,
+          enableInfiniteCarousel: true,
           customerLatitude: widget.customerLatitude,
           customerLongitude: widget.customerLongitude,
           onConfirmOrder: widget.onConfirmOrder,
@@ -3672,19 +3957,19 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
     }
 
     addShelf(
-      title: 'สินค้าแนะนำ',
+      title: L10n.homeFeaturedProductsShelf,
       products: featured,
       isLoading: loadingFeatured,
     );
     addShelf(
-      title: 'สินค้าขายดี',
+      title: L10n.homeBestSellingShelf,
       products: bestSelling,
-      isLoading: loadingFeatured || loadingSecondary,
+      isLoading: loadingSecondary,
     );
     addShelf(
-      title: 'สินค้าที่คุณอาจรู้จัก',
+      title: L10n.homePersonalizedShelf,
       products: personalized,
-      isLoading: loadingFeatured || loadingSecondary,
+      isLoading: loadingSecondary,
     );
 
     return sections;
@@ -3702,6 +3987,10 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
         final loadingFeatured =
             featuredSnapshot.connectionState == ConnectionState.waiting &&
             featured.isEmpty;
+        final excludeFeaturedIds = loadingFeatured ? const <String>{} : featuredIds;
+        if (!loadingFeatured) {
+          _scheduleSecondaryRefreshIfNeeded(excludeFeaturedIds);
+        }
 
         return FutureBuilder<
           ({
@@ -3709,14 +3998,21 @@ class _HomeProductShelvesState extends State<_HomeProductShelves> {
             List<PublicCatalogProduct> personalized,
           })
         >(
-          key: ValueKey<String>('$_configKey:${featuredIds.join(',')}'),
-          future: loadingFeatured
-              ? null
-              : _secondaryFutureForKey(featuredIds),
+          future: _secondaryFuture,
           builder: (context, secondarySnapshot) {
-            final secondary = secondarySnapshot.data;
+            if (secondarySnapshot.hasData) {
+              _cachedSecondary = secondarySnapshot.data;
+            }
+
+            final secondary =
+                secondarySnapshot.data ??
+                HomeProductDiscoveryService.peekCachedSecondaryShelves(
+                  excludeIds: excludeFeaturedIds,
+                ) ??
+                _cachedSecondary;
             final loadingSecondary =
-                secondarySnapshot.connectionState == ConnectionState.waiting;
+                secondarySnapshot.connectionState == ConnectionState.waiting &&
+                secondary == null;
 
             if (!loadingFeatured && featured.isNotEmpty) {
               final prefetchKey = featuredIds.join(',');

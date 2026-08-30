@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/rider_vehicle_profile.dart';
+import '../services/locale_service.dart';
 import '../utils/catalog_product_image_url.dart';
 import 'cached_app_image.dart';
 import 'travel_driver_profile_card.dart';
@@ -45,6 +47,7 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
     required this.totalAmount,
     required this.products,
     this.isBusy = false,
+    this.isClaimReplacement = false,
     this.onReorder,
   });
 
@@ -55,13 +58,19 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
   final num totalAmount;
   final List<OrderHistoryProductLine> products;
   final bool isBusy;
+  final bool isClaimReplacement;
   final VoidCallback? onReorder;
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final title = orderCode?.trim().isNotEmpty == true
-        ? 'Order $orderCode'
-        : 'Order $orderId';
+        ? (L10n.en ? 'Order $orderCode' : 'ออเดอร์ $orderCode')
+        : (L10n.en ? 'Order $orderId' : 'ออเดอร์ $orderId');
+    final orderIdLabel =
+        L10n.en ? 'Order ID: $orderId' : 'รหัสออเดอร์: $orderId';
 
     return _historyCard(
       child: Padding(
@@ -87,13 +96,25 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       SelectableText(
-                        'Order ID: $orderId',
+                        orderIdLabel,
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF6B7280),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (isClaimReplacement)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            L10n.substituteNoCharge,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF9A3412),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -101,7 +122,9 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'ร้าน: ${shopName?.trim().isNotEmpty == true ? shopName!.trim() : '-'}',
+              L10n.shopLabel(
+                shopName?.trim().isNotEmpty == true ? shopName!.trim() : '-',
+              ),
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
@@ -110,7 +133,9 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              'ยอดชำระ: THB $totalAmount',
+              isClaimReplacement
+                  ? L10n.noChargeSubstitute
+                  : L10n.paymentTotalThb(totalAmount.toDouble()),
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -119,8 +144,8 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
             ),
             if (products.isNotEmpty) ...<Widget>[
               const SizedBox(height: 10),
-              const Text(
-                'สินค้าในออเดอร์',
+              Text(
+                L10n.orderProducts,
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
@@ -151,12 +176,14 @@ class OrderHistoryCompactProductCard extends StatelessWidget {
                         ),
                       )
                     : const Icon(Icons.replay, size: 18),
-                label: const Text('สั่งซื้ออีกครั้ง'),
+                label: Text(L10n.orderAgain),
               ),
             ),
           ],
         ),
       ),
+    );
+      },
     );
   }
 }
@@ -191,9 +218,14 @@ class OrderHistoryCompactTravelCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final title = orderCode?.trim().isNotEmpty == true
-        ? 'Order $orderCode'
-        : 'Order $orderId';
+        ? (L10n.en ? 'Order $orderCode' : 'ออเดอร์ $orderCode')
+        : (L10n.en ? 'Order $orderId' : 'ออเดอร์ $orderId');
+    final orderIdLabel =
+        L10n.en ? 'Order ID: $orderId' : 'รหัสออเดอร์: $orderId';
 
     return _historyCard(
       child: Padding(
@@ -230,7 +262,7 @@ class OrderHistoryCompactTravelCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             SelectableText(
-              'Order ID: $orderId',
+              orderIdLabel,
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF6B7280),
@@ -239,29 +271,29 @@ class OrderHistoryCompactTravelCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             _HistoryDetailLine(
-              label: 'จุดรับ',
+              label: L10n.pickupPointShort,
               value: pickupLabel?.trim().isNotEmpty == true
                   ? pickupLabel!.trim()
                   : '-',
             ),
             _HistoryDetailLine(
-              label: 'จุดส่ง',
+              label: L10n.dropoffPointShort,
               value: destinationLabel?.trim().isNotEmpty == true
                   ? destinationLabel!.trim()
                   : '-',
             ),
             _HistoryDetailLine(
-              label: 'ยอดชำระ',
+              label: L10n.paymentAmountLabel,
               value: 'THB $totalAmount',
             ),
             _HistoryDetailLine(
-              label: 'ประเภทรถ',
+              label: L10n.vehicleType,
               value: vehicleLabel?.trim().isNotEmpty == true
                   ? vehicleLabel!.trim()
                   : '-',
             ),
             _HistoryDetailLine(
-              label: 'เวลาเดินทาง',
+              label: L10n.travelTime,
               value: scheduleLabel?.trim().isNotEmpty == true
                   ? scheduleLabel!.trim()
                   : '-',
@@ -272,12 +304,14 @@ class OrderHistoryCompactTravelCard extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: onTravelAgain,
                 icon: const Icon(Icons.directions_bike_outlined, size: 18),
-                label: const Text('เดินทางอีกครั้ง'),
+                label: Text(L10n.travelAgain),
               ),
             ),
           ],
         ),
       ),
+    );
+      },
     );
   }
 
@@ -289,7 +323,7 @@ class OrderHistoryCompactTravelCard extends StatelessWidget {
 
     final fallbackName = driverName?.trim().isNotEmpty == true
         ? driverName!.trim()
-        : 'ไรเดอร์';
+        : L10n.rider;
 
     try {
       final doc = await firestore.collection('riders').doc(trimmedDriverId).get();
@@ -435,7 +469,7 @@ List<OrderHistoryProductLine> buildHistoryProductLines(
     final name = (rawProduct['name'] ??
             rawProduct['productName'] ??
             rawProduct['title'] ??
-            'สินค้า')
+            L10n.productFallback)
         .toString()
         .trim();
     final imageUrl = readCatalogProductImageUrl(
@@ -448,7 +482,7 @@ List<OrderHistoryProductLine> buildHistoryProductLines(
 
     results.add(
       OrderHistoryProductLine(
-        name: name.isEmpty ? 'สินค้า' : name,
+        name: name.isEmpty ? L10n.productFallback : name,
         imageUrl: imageUrl,
         quantity: quantity.clamp(1, 99),
       ),

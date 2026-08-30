@@ -4,7 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../l10n/l10n.dart';
 import '../models/product_comment.dart';
+import '../services/locale_service.dart';
 import '../services/product_comment_service.dart';
 import 'cached_app_image.dart';
 
@@ -22,6 +24,9 @@ Future<void> showProductCommentsSheet({
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
     builder: (sheetContext) {
+      return ListenableBuilder(
+        listenable: LocaleService.instance,
+        builder: (context, _) {
       return DraggableScrollableSheet(
         expand: false,
         initialChildSize: 0.72,
@@ -48,7 +53,7 @@ Future<void> showProductCommentsSheet({
                   children: <Widget>[
                     Expanded(
                       child: Text(
-                        'ความคิดเห็น',
+                        L10n.commentsTitle,
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w900,
                               color: const Color(0xFF111827),
@@ -65,9 +70,9 @@ Future<void> showProductCommentsSheet({
                         );
                       },
                       icon: const Icon(Icons.edit_outlined, size: 18),
-                      label: const Text(
-                        'เขียนความคิดเห็น',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+                      label: Text(
+                        L10n.writeComment,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
                     ),
                   ],
@@ -85,6 +90,8 @@ Future<void> showProductCommentsSheet({
               ),
             ],
           );
+        },
+      );
         },
       );
     },
@@ -135,6 +142,9 @@ class _ProductCommentListState extends State<ProductCommentList> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return StreamBuilder<List<ProductComment>>(
       stream: ProductCommentService.watchComments(
         productId: widget.productId,
@@ -145,7 +155,7 @@ class _ProductCommentListState extends State<ProductCommentList> {
           return Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Text(
-              'โหลดความคิดเห็นไม่สำเร็จชั่วคราว',
+              L10n.commentsLoadFailed,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF92400E),
                     fontWeight: FontWeight.w600,
@@ -161,7 +171,7 @@ class _ProductCommentListState extends State<ProductCommentList> {
           return Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Text(
-              'ยังไม่มีความคิดเห็น',
+              L10n.noCommentsYet,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFF6B7280),
                     fontWeight: FontWeight.w600,
@@ -183,7 +193,7 @@ class _ProductCommentListState extends State<ProductCommentList> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'ความคิดเห็น (${comments.length}${hasMore ? '+' : ''})',
+                  L10n.commentsCount(comments.length, hasMore),
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w900,
                         color: const Color(0xFF111827),
@@ -204,10 +214,12 @@ class _ProductCommentListState extends State<ProductCommentList> {
                     _visibleLimit += ProductCommentService.defaultPageSize;
                   });
                 },
-                child: const Text('ดูความคิดเห็นเพิ่ม'),
+                child: Text(L10n.viewMoreComments),
               ),
           ],
         );
+      },
+    );
       },
     );
   }
@@ -243,7 +255,7 @@ class _ProductCommentComposerSheetState
   Future<void> _pickImages() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      _showSnackBar('เข้าสู่ระบบเพื่อแนบรูปภาพ');
+      _showSnackBar(L10n.signInToAttachPhotos);
       return;
     }
 
@@ -251,7 +263,7 @@ class _ProductCommentComposerSheetState
         ProductCommentService.maxImagesPerComment - _pendingImages.length;
     if (remaining <= 0) {
       _showSnackBar(
-        'แนบรูปได้สูงสุด ${ProductCommentService.maxImagesPerComment} รูป',
+        L10n.maxCommentImages(ProductCommentService.maxImagesPerComment),
       );
       return;
     }
@@ -289,8 +301,8 @@ class _ProductCommentComposerSheetState
       if (error is FirebaseException) {
         _showSnackBar(
           error.code == 'permission-denied'
-              ? 'ไม่มีสิทธิ์โพสต์ความคิดเห็น กรุณาลองเข้าสู่ระบบใหม่'
-              : 'โพสต์ไม่สำเร็จ: ${error.message ?? error.code}',
+              ? L10n.commentPermissionDenied
+              : L10n.commentPostFailed(error.message ?? error.code),
         );
       } else if (error is ArgumentError) {
         _showSnackBar(error.message?.toString() ?? error.toString());
@@ -317,6 +329,9 @@ class _ProductCommentComposerSheetState
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
@@ -335,7 +350,7 @@ class _ProductCommentComposerSheetState
             ),
           ),
           Text(
-            'แสดงความคิดเห็น',
+            L10n.postComment,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w900,
                   color: const Color(0xFF111827),
@@ -344,7 +359,7 @@ class _ProductCommentComposerSheetState
           const SizedBox(height: 12),
           if (user == null)
             Text(
-              'เข้าสู่ระบบเพื่อแสดงความคิดเห็น',
+              L10n.signInToComment,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: const Color(0xFF6B7280),
                     fontWeight: FontWeight.w600,
@@ -360,11 +375,13 @@ class _ProductCommentComposerSheetState
                 setState(() => _pendingImages.removeAt(index));
               },
               onSubmit: _submitComment,
-              authorName: user.displayName ?? 'ลูกค้า',
+              authorName: user.displayName ?? L10n.customer,
               authorPhotoUrl: user.photoURL,
             ),
         ],
       ),
+    );
+      },
     );
   }
 }
@@ -392,6 +409,9 @@ class _CommentComposer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -411,7 +431,7 @@ class _CommentComposer extends StatelessWidget {
                 minLines: 2,
                 maxLines: 5,
                 decoration: InputDecoration(
-                  hintText: 'เขียนความคิดเห็น...',
+                  hintText: L10n.writeCommentHint,
                   filled: true,
                   fillColor: const Color(0xFFF3F4F6),
                   border: OutlineInputBorder(
@@ -475,7 +495,7 @@ class _CommentComposer extends StatelessWidget {
               Row(
                 children: <Widget>[
                   IconButton(
-                    tooltip: 'แนบรูป',
+                    tooltip: L10n.attachPhotoTooltip,
                     onPressed: isPosting ? null : onPickImages,
                     icon: const Icon(Icons.photo_camera_outlined),
                     color: const Color(0xFF2563EB),
@@ -500,9 +520,9 @@ class _CommentComposer extends StatelessWidget {
                               color: Colors.white,
                             ),
                           )
-                        : const Text(
-                            'โพสต์',
-                            style: TextStyle(fontWeight: FontWeight.w800),
+                        : Text(
+                            L10n.postAction,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
                           ),
                   ),
                 ],
@@ -511,6 +531,8 @@ class _CommentComposer extends StatelessWidget {
           ),
         ),
       ],
+    );
+      },
     );
   }
 }
@@ -637,21 +659,21 @@ class _AuthorAvatar extends StatelessWidget {
 
 String _formatRelativeTime(DateTime? value) {
   if (value == null) {
-    return 'เมื่อสักครู่';
+    return L10n.justNow;
   }
 
   final diff = DateTime.now().difference(value);
   if (diff.inMinutes < 1) {
-    return 'เมื่อสักครู่';
+    return L10n.justNow;
   }
   if (diff.inMinutes < 60) {
-    return '${diff.inMinutes} นาที';
+    return L10n.timeAgoMinutes(diff.inMinutes);
   }
   if (diff.inHours < 24) {
-    return '${diff.inHours} ชม.';
+    return L10n.timeAgoHours(diff.inHours);
   }
   if (diff.inDays < 7) {
-    return '${diff.inDays} วัน';
+    return L10n.timeAgoDays(diff.inDays);
   }
-  return '${value.day}/${value.month}/${value.year}';
+  return L10n.timeAgoDate(value.day, value.month, value.year);
 }

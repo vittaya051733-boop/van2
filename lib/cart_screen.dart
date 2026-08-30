@@ -13,6 +13,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/payment_collection_config.dart';
+import 'l10n/l10n.dart';
 import 'config/payment_gateway_config.dart';
 import 'services/catalog_share.dart';
 import 'services/favorites_service.dart';
@@ -329,13 +330,13 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 if (item.selectedToppings.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 8),
                   Text(
-                    'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
+                    L10n.toppingsLine(item.selectedToppings.join(', ')),
                     style: Theme.of(sheetContext).textTheme.bodyMedium,
                   ),
                 ],
                 const SizedBox(height: 8),
                 Text(
-                  'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)} = ฿${lineTotal.toStringAsFixed(0)}',
+                  L10n.quantityLine(item.quantity, item.unitPrice, lineTotal),
                   style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFFE55A00),
@@ -348,7 +349,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     context: sheetContext,
                   ),
                   icon: const Icon(Icons.share_outlined),
-                  label: const Text('แชร์สินค้า'),
+                  label: Text(L10n.shareProduct),
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFFF57C00),
                     foregroundColor: Colors.white,
@@ -452,10 +453,10 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 onPickCustomerLocation: widget.onPickCustomerLocation,
                 onApplySharedLocation: widget.onApplySharedLocation,
               ),
-              const Expanded(
+              Expanded(
                 child: Center(
                   child: Padding(
-                    padding: EdgeInsets.all(24),
+                    padding: const EdgeInsets.all(24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
@@ -466,7 +467,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         ),
                         SizedBox(height: 10),
                         Text(
-                          'ตะกร้า',
+                          L10n.cartTitle,
                           style: TextStyle(
                             fontWeight: FontWeight.w800,
                             color: Color(0xFF1F2937),
@@ -475,7 +476,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         ),
                         SizedBox(height: 6),
                         Text(
-                          'ยังไม่มีสินค้าในตะกร้า',
+                          L10n.cartEmpty,
                           style: TextStyle(color: Color(0xFF6B7280)),
                         ),
                       ],
@@ -553,7 +554,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                     child: Row(
                       children: <Widget>[
                         Text(
-                          'ตะกร้าของฉัน',
+                          L10n.myCartTitle,
                           style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(
                                 fontWeight: FontWeight.w800,
@@ -562,7 +563,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         ),
                         const Spacer(),
                         Text(
-                          '$itemCount ชิ้น',
+                          L10n.itemCount(itemCount),
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: const Color(0xFF6B7280)),
                         ),
@@ -660,7 +661,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                                             .isNotEmpty) ...<Widget>[
                                           const SizedBox(height: 4),
                                           Text(
-                                            'ท็อปปิ้ง: ${item.selectedToppings.join(', ')}',
+                                            L10n.toppingsLine(item.selectedToppings.join(', ')),
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
                                             style: Theme.of(context)
@@ -675,7 +676,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                                         ],
                                         const SizedBox(height: 4),
                                         Text(
-                                          'จำนวน ${item.quantity} x ฿${item.unitPrice.toStringAsFixed(0)}',
+                                          L10n.quantityLineShort(item.quantity, item.unitPrice),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: Theme.of(context)
@@ -706,7 +707,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                                       IconButton(
                                         onPressed: () =>
                                             widget.onRemoveItem(index),
-                                        tooltip: 'ลบสินค้า',
+                                        tooltip: L10n.removeItem,
                                         icon: const Icon(
                                           Icons.delete_outline_rounded,
                                           color: Color(0xFFDC2626),
@@ -735,7 +736,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             child: TextButton.icon(
                               onPressed: widget.onOpenMyCoupons,
                               icon: const Icon(Icons.local_offer_outlined),
-                              label: const Text('คูปองของฉัน'),
+                              label: Text(L10n.myCoupons),
                             ),
                           ),
                         PromotionCartPanel(
@@ -750,7 +751,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         Row(
                           children: <Widget>[
                             Text(
-                              'รวมค่าสินค้า',
+                              L10n.subtotalLabel,
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(fontWeight: FontWeight.w700),
                             ),
@@ -769,7 +770,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         Row(
                           children: <Widget>[
                             Text(
-                              'ค่าส่ง',
+                              L10n.shippingFeeLabel,
                               style: Theme.of(context).textTheme.titleSmall
                                   ?.copyWith(
                                     fontWeight: FontWeight.w700,
@@ -779,7 +780,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             const Spacer(),
                             Text(
                               isCalculatingShipping
-                                  ? 'กำลังคำนวณ...'
+                                  ? L10n.calculating
                                   : '฿${_formatMoney(shippingFee)}',
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(
@@ -792,8 +793,15 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         const SizedBox(height: 2),
                         Text(
                           isCalculatingShipping
-                              ? 'กำลังคำนวณระยะทางจาก Google Routes API'
-                              : 'ค่าส่งรวม ${_formatDistanceKm(shippingSummary.totalDistanceKm)} กม. • เวลา ${_formatMinutes(shippingSummary.totalDurationMinutes)} นาที',
+                              ? L10n.calculatingDistanceFromGoogle
+                              : L10n.shippingSummary(
+                                  _formatDistanceKm(
+                                    shippingSummary.totalDistanceKm,
+                                  ),
+                                  _formatMinutes(
+                                    shippingSummary.totalDurationMinutes,
+                                  ),
+                                ),
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: const Color(0xFF6B7280)),
                         ),
@@ -802,7 +810,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           Row(
                             children: <Widget>[
                               Text(
-                                'ค่ารวบรวมสินค้าหลายร้าน (ตลาด)',
+                                L10n.marketCollectionFeeLabel,
                                 style: Theme.of(context).textTheme.titleSmall
                                     ?.copyWith(
                                       fontWeight: FontWeight.w700,
@@ -826,7 +834,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           Row(
                             children: <Widget>[
                               Text(
-                                'ค่าบริการ (ตลาด)',
+                                L10n.marketServiceFeeLabel,
                                 style: Theme.of(context).textTheme.titleSmall
                                     ?.copyWith(
                                       fontWeight: FontWeight.w700,
@@ -850,7 +858,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                         Row(
                           children: <Widget>[
                             Text(
-                              'ยอดชำระทั้งหมด',
+                              L10n.grandTotalLabel,
                               style: Theme.of(context).textTheme.titleMedium
                                   ?.copyWith(
                                     fontWeight: FontWeight.w800,
@@ -903,9 +911,9 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               backgroundColor: const Color(0xFFE55A00),
                             ),
-                            child: const Text(
-                              'ชำระ',
-                              style: TextStyle(
+                            child: Text(
+                              L10n.pay,
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w800,
                               ),
@@ -1026,38 +1034,38 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
 
   String? _formatServerTotalsError(Object? error) {
     if (error == null) {
-      return 'ไม่สามารถคำนวณราคาจากเซิร์ฟเวอร์ได้ กรุณาลองใหม่';
+      return L10n.serverPricingFailed;
     }
 
     if (error is FirebaseFunctionsException) {
       switch (error.code) {
         case 'unauthenticated':
-          return 'กรุณาเข้าสู่ระบบก่อนคำนวณราคา';
+          return L10n.signInRequiredBeforePricing;
         case 'invalid-argument':
-          return error.message ?? 'ข้อมูลตะกร้าหรือพิกัดจัดส่งไม่ครบ';
+          return error.message ?? L10n.cartOrLocationIncomplete;
         case 'failed-precondition':
         case 'permission-denied':
           return error.message ??
-              'ระบบยืนยันความปลอดภัยไม่ผ่าน กรุณาอัปเดตแอปหรือลองใหม่';
+              L10n.appCheckFailed;
         default:
-          return error.message ?? 'ไม่สามารถคำนวณราคาจากเซิร์ฟเวอร์ได้';
+          return error.message ?? L10n.createOrderFailedGeneric;
       }
     }
 
     final text = error.toString();
     if (text.contains('เวอร์ชันเว็บยังไม่พร้อม') ||
         text.contains('APP_CHECK_RECAPTCHA')) {
-      return 'เว็บยังไม่ได้ตั้งค่า App Check — กรุณาใช้แอปมือถือหรือติดต่อผู้ดูแล';
+      return L10n.webAppCheckNotConfigured;
     }
     if (text.contains('App Check') ||
         text.contains('app-check') ||
         text.contains('appCheck')) {
-      return 'ระบบยืนยันความปลอดภัยไม่พร้อม กรุณาลองใหม่หรือใช้แอปมือถือ';
+      return L10n.appCheckNotReady;
     }
     if (error is Exception) {
       return error.toString().replaceFirst('Exception: ', '');
     }
-    return 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ กรุณาลองใหม่';
+    return L10n.serverConnectionFailed;
   }
 
   Future<_ShippingSummary> _calculateShipping({
@@ -1381,7 +1389,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     await showPaymentCheckoutSheet(
       context: context,
       grandTotal: grandTotal,
-      subtitle: 'เลือกวิธีชำระเงินที่ต้องการ',
+      subtitle: L10n.choosePaymentMethod,
       onCashOnDelivery: widget.onConfirmCashOnDelivery == null
           ? null
           : () => _confirmCashOnDelivery(
@@ -1409,7 +1417,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 grandTotal,
               );
               if (orderIds.isEmpty) {
-                throw Exception('ไม่สามารถสร้างออเดอร์ได้');
+                throw Exception(L10n.createOrderFailedGeneric);
               }
               final openRoadmap = widget.onOpenOrderRoadmap;
               if (openRoadmap != null) {
@@ -1425,7 +1433,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     required CartCheckoutContext checkoutContext,
   }) async {
     if (widget.onSubmitPromptPaySlip == null) {
-      throw Exception('ระบบสแกนจ่ายพร้อมเพย์ยังไม่พร้อม');
+      throw Exception(L10n.promptPayNotReady);
     }
 
     await showDialog<void>(
@@ -1452,14 +1460,14 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'สแกนจ่ายพร้อมเพย์',
+                      L10n.scanPromptPay,
                       style: Theme.of(dialogContext).textTheme.titleLarge
                           ?.copyWith(fontWeight: FontWeight.w800),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      'สแกน QR ชำระเงิน แล้วแนบสลิปเพื่อยืนยันก่อนสร้างออเดอร์',
-                      style: TextStyle(
+                    Text(
+                      L10n.scanPromptPayHint,
+                      style: const TextStyle(
                         color: Color(0xFF6B7280),
                         fontWeight: FontWeight.w600,
                       ),
@@ -1489,7 +1497,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                       alignment: Alignment.centerRight,
                       child: FilledButton(
                         onPressed: () => Navigator.of(dialogContext).pop(),
-                        child: const Text('ปิด'),
+                        child: Text(L10n.close),
                       ),
                     ),
                   ],
@@ -1526,7 +1534,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('ยืนยันคำสั่งซื้อแบบจ่ายปลายทาง'),
+          title: Text(L10n.confirmCodOrderTitle),
           content: SizedBox(
             width: 420,
             child: SingleChildScrollView(
@@ -1534,7 +1542,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  const Text('รายการสินค้า'),
+                  Text(L10n.orderItems),
                   const SizedBox(height: 8),
                   for (final item in items)
                     Padding(
@@ -1558,7 +1566,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
-                              'ราคา ฿${_formatMoney(item.unitPrice)}',
+                              L10n.priceLabel(item.unitPrice),
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(color: const Color(0xFF6B7280)),
                             ),
@@ -1567,7 +1575,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                             Padding(
                               padding: const EdgeInsets.only(top: 2),
                               child: Text(
-                                'จำนวนเกินสต๊อก ${_shortfallQty(item)}',
+                                L10n.overStockBy(_shortfallQty(item)),
                                 style: Theme.of(context).textTheme.bodySmall
                                     ?.copyWith(
                                       color: const Color(0xFFB45309),
@@ -1579,14 +1587,14 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                       ),
                     ),
                   const Divider(height: 18),
-                  Text('จำนวนเกินสต๊อกรวม: $totalShortfall'),
+                  Text(L10n.totalOverStock(totalShortfall)),
                   const SizedBox(height: 8),
-                  Text('ค่าสินค้า: ฿${_formatMoney(subtotal)}'),
-                  Text('ค่าส่ง: ฿${_formatMoney(shippingFee)}'),
+                  Text(L10n.productSubtotal(subtotal)),
+                  Text(L10n.shippingFeeAmount(shippingFee)),
                   if (discounts.discountTotal > 0) ...<Widget>[
                     const SizedBox(height: 4),
                     Text(
-                      'ส่วนลดรวม: -฿${_formatMoney(discounts.discountTotal)}',
+                      L10n.totalDiscount(discounts.discountTotal),
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: const Color(0xFFE55A00),
                         fontWeight: FontWeight.w700,
@@ -1601,16 +1609,19 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
                       ),
                   ],
                   const SizedBox(height: 8),
-                  Text('จัดส่งที่: ${widget.customerLocationLabel}'),
+                  Text(L10n.deliverTo(widget.customerLocationLabel)),
                   Text(
-                    'พิกัด ${widget.customerLatitude.toStringAsFixed(6)} • ${widget.customerLongitude.toStringAsFixed(6)}',
+                    L10n.coordinatesLabel(
+                    widget.customerLatitude,
+                    widget.customerLongitude,
+                  ),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: const Color(0xFF6B7280),
                     ),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'ยอดที่ต้องชำระ: ฿${_formatMoney(grandTotal)}',
+                    L10n.amountDueBaht(grandTotal),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
@@ -1622,11 +1633,11 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('ยกเลิก'),
+              child: Text(L10n.cancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('ยืนยันสั่งซื้อ'),
+              child: Text(L10n.confirmOrder),
             ),
           ],
         );
@@ -1674,7 +1685,7 @@ class _CartScreenState extends State<CartScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (createError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ไม่สามารถสร้างออเดอร์ได้: $createError')),
+        SnackBar(content: Text(L10n.createOrderFailed(createError))),
       );
     }
   }
@@ -1739,8 +1750,8 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
 
     if (boundary == null) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('ยังจับภาพคิวอาร์โค้ดไม่ได้ ลองใหม่อีกครั้ง'),
+        SnackBar(
+          content: Text(L10n.qrCaptureFailed),
         ),
       );
       return;
@@ -1757,7 +1768,7 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
           return;
         }
         messenger.showSnackBar(
-          const SnackBar(content: Text('สร้างไฟล์คิวอาร์โค้ดไม่สำเร็จ')),
+          SnackBar(content: Text(L10n.qrFileCreateFailed)),
         );
         return;
       }
@@ -1774,8 +1785,8 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
           SnackBar(
             content: Text(
               downloaded
-                  ? 'ดาวน์โหลดคิวอาร์โค้ดแล้ว'
-                  : 'ดาวน์โหลดคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง',
+                  ? L10n.qrDownloadSuccess
+                  : L10n.qrDownloadFailed,
             ),
           ),
         );
@@ -1788,7 +1799,7 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
           return;
         }
         messenger.showSnackBar(
-          const SnackBar(content: Text('ไม่ได้รับสิทธิ์บันทึกรูปลงเครื่อง')),
+          SnackBar(content: Text(L10n.photoPermissionDenied)),
         );
         return;
       }
@@ -1809,8 +1820,8 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
         SnackBar(
           content: Text(
             succeeded
-                ? 'บันทึกคิวอาร์โค้ดลงเครื่องแล้ว'
-                : 'บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง',
+                ? L10n.qrSaveSuccess
+                : L10n.qrSaveFailed,
           ),
         ),
       );
@@ -1819,8 +1830,8 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
         return;
       }
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('บันทึกคิวอาร์โค้ดไม่สำเร็จ ลองใหม่อีกครั้ง'),
+        SnackBar(
+          content: Text(L10n.qrSaveFailed),
         ),
       );
     } finally {
@@ -1889,14 +1900,14 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
   String _verificationTitle(String status) {
     switch (status) {
       case 'verified':
-        return 'Slip OK ตรวจสอบผ่าน';
+        return L10n.slipOkVerified;
       case 'failed':
-        return 'Slip OK ตรวจสอบไม่ผ่าน';
+        return L10n.slipOkRejected;
       case 'error':
       case 'slip_verification_error':
-        return 'Slip OK ส่งกลับข้อผิดพลาด';
+        return L10n.slipOkError;
       default:
-        return 'ผลการตรวจสลิป';
+        return L10n.slipCheckResult;
     }
   }
 
@@ -1917,7 +1928,7 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
           actions: <Widget>[
             FilledButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('รับทราบ'),
+              child: Text(L10n.acknowledge),
             ),
           ],
         );
@@ -1933,14 +1944,14 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
 
     if (submitCallback == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ระบบส่งสลิปยังไม่พร้อมใช้งาน')),
+        SnackBar(content: Text(L10n.slipSystemNotReady)),
       );
       return;
     }
 
     if (attachedSlip == null || slipBytes == null || slipBytes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('กรุณาเลือกรูปสลิปก่อนส่งตรวจ')),
+        SnackBar(content: Text(L10n.selectSlipFirst)),
       );
       return;
     }
@@ -1983,7 +1994,7 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('ส่งสลิปไม่สำเร็จ: $error')));
+      ).showSnackBar(SnackBar(content: Text(L10n.slipSubmitFailed(error))));
     } finally {
       if (mounted) {
         setState(() => _isSubmittingSlip = false);
@@ -2015,7 +2026,7 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
-                'ยอดที่ต้องชำระ ฿${_formatDialogMoney(widget.grandTotal)}',
+                L10n.amountDueBaht(widget.grandTotal),
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w900,
                   color: const Color(0xFFE55A00),
@@ -2042,8 +2053,8 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
                       : const Icon(Icons.download_rounded),
                   label: Text(
                     _isSavingQr
-                        ? 'กำลังบันทึก...'
-                        : 'บันทึกคิวอาร์โค้ดลงเครื่อง',
+                        ? L10n.savingQrToDevice
+                        : L10n.save,
                   ),
                 ),
               ),
@@ -2074,24 +2085,24 @@ class _TrueMoneyQrDialogContentState extends State<TrueMoneyQrDialogContent> {
                       : const Icon(Icons.receipt_long_rounded),
                   label: Text(
                     _isSubmittingSlip
-                        ? 'กำลังส่งสลิป...'
-                        : 'ส่งสลิปเพื่อตรวจสอบ',
+                        ? L10n.submittingSlip
+                        : L10n.submitSlipForReview,
                   ),
                 ),
               ),
               if (channel.qrPayload == null && !hasPromptPayQr) ...<Widget>[
                 const SizedBox(height: 12),
                 Text(
-                  'ยังไม่มีข้อมูล PromptPay หรือ Merchant QR สำหรับสร้างคิวอาร์โค้ดจริง',
+                  L10n.promptPayConfigMissing,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: const Color(0xFFB45309),
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'ให้ใส่ค่าใน Firestore ที่ payment_config/collection แล้วคิวอาร์โค้ดจะผูกยอดให้อัตโนมัติ',
-                  style: TextStyle(color: Color(0xFF6B7280)),
+                Text(
+                  L10n.promptPayConfigHint,
+                  style: const TextStyle(color: Color(0xFF6B7280)),
                 ),
               ],
             ],
@@ -2240,10 +2251,10 @@ class _UntrustedCartTotalWarning extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final message = isLoading
-        ? 'กำลังยืนยันยอดจาก server กรุณารอสักครู่'
+        ? L10n.verifyingAmountFromServer
         : (errorMessage?.trim().isNotEmpty == true
               ? errorMessage!.trim()
-              : 'ยอดนี้เป็นประมาณการจากเครื่อง ยังชำระไม่ได้ กรุณาเชื่อมต่ออินเทอร์เน็ตแล้วคำนวณใหม่');
+              : L10n.estimatedAmountOffline);
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -2273,7 +2284,7 @@ class _UntrustedCartTotalWarning extends StatelessWidget {
           ),
           TextButton(
             onPressed: isLoading ? null : onRetry,
-            child: const Text('ลองใหม่'),
+            child: Text(L10n.tryAgain),
           ),
         ],
       ),
@@ -2347,7 +2358,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            'คิวอาร์โค้ดตามยอด',
+            L10n.qrByAmount,
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
@@ -2372,19 +2383,19 @@ class _TrueMoneyQrCard extends StatelessWidget {
                       color: const Color(0xFFF9FAFB),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: const Column(
+                    child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        Icon(
+                        const Icon(
                           Icons.qr_code_2_rounded,
                           size: 42,
                           color: Color(0xFF9CA3AF),
                         ),
-                        SizedBox(height: 8),
+                        const SizedBox(height: 8),
                         Text(
-                          'ยังไม่สามารถสร้างคิวอาร์โค้ดได้',
+                          L10n.qrCreateFailed,
                           textAlign: TextAlign.center,
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
@@ -2485,7 +2496,7 @@ class _TrueMoneyQrCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'ยอดชำระ ฿$amountLabel',
+                          L10n.paymentTotalBaht(amountLabel),
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
@@ -2533,15 +2544,15 @@ class _SlipAttachmentSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Text(
-            'แนบสลิป',
+            L10n.attachSlip,
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'เลือกรูปสลิปจากเครื่องเพื่อเตรียมส่งตรวจการชำระเงิน',
-            style: TextStyle(
+          Text(
+            L10n.attachSlipHint,
+            style: const TextStyle(
               color: Color(0xFF64748B),
               fontWeight: FontWeight.w500,
             ),
@@ -2581,7 +2592,9 @@ class _SlipAttachmentSection extends StatelessWidget {
                   onPressed: onAttach,
                   icon: const Icon(Icons.attach_file_rounded),
                   label: Text(
-                    previewBytes == null ? 'เลือกรูปสลิป' : 'เปลี่ยนรูปสลิป',
+                    previewBytes == null
+                        ? L10n.selectSlip
+                        : L10n.changeSlip,
                   ),
                 ),
               ),
@@ -2589,7 +2602,7 @@ class _SlipAttachmentSection extends StatelessWidget {
                 const SizedBox(width: 8),
                 IconButton(
                   onPressed: onClear,
-                  tooltip: 'ลบสลิป',
+                  tooltip: L10n.removeSlip,
                   icon: const Icon(Icons.close_rounded),
                 ),
               ],
@@ -2692,7 +2705,7 @@ class _CartLocationButton extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                 Text(
-                  'เปลี่ยนพิกัดส่ง',
+                  L10n.changeDeliveryLocation,
                   style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: const Color(0xFF111827),
@@ -2716,22 +2729,20 @@ class _CartLocationButton extends StatelessWidget {
                 const SizedBox(height: 8),
                 ListTile(
                   leading: const Icon(Icons.pin_drop_outlined),
-                  title: const Text('วางพิกัด'),
-                  subtitle: const Text(
-                    'วางค่า latitude, longitude ที่คัดลอกมา',
-                  ),
+                  title: Text(L10n.pasteCoordinates),
+                  subtitle: Text(L10n.pasteCoordinatesHint),
                   onTap: () => runAction(onApplySharedLocation),
                 ),
                 ListTile(
                   leading: const Icon(Icons.share_location_outlined),
-                  title: const Text('แชร์'),
-                  subtitle: const Text('วางลิงก์พิกัดที่แชร์มาจากแผนที่'),
+                  title: Text(L10n.pasteShareLink),
+                  subtitle: Text(L10n.pasteShareLinkHint),
                   onTap: () => runAction(onApplySharedLocation),
                 ),
                 ListTile(
                   leading: const Icon(Icons.map_outlined),
-                  title: const Text('เปลี่ยนด้วยกูเกิลแมพ'),
-                  subtitle: const Text('เปิดแผนที่เพื่อเลือกตำแหน่งใหม่'),
+                  title: Text(L10n.changeViaGoogleMaps),
+                  subtitle: Text(L10n.changeViaGoogleMapsHint),
                   onTap: () => runAction(onPickLocation),
                 ),
                 ],
@@ -2772,7 +2783,7 @@ class _CartLocationButton extends StatelessWidget {
               ),
               const SizedBox(width: 3),
               Text(
-                'เปลี่ยนพิกัดส่ง',
+                L10n.changeDeliveryLocation,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: const Color(0xFF1F2937),

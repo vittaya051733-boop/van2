@@ -9,7 +9,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'models/user_profile.dart';
+import 'l10n/l10n.dart';
 import 'services/agora_call_audio.dart';
+import 'services/locale_service.dart';
 import 'services/notification_service.dart';
 import 'widgets/cached_app_avatar.dart';
 
@@ -61,7 +63,7 @@ class _CallScreenState extends State<CallScreen> {
   Timer? _joinChannelTimer;
   Timer? _remoteConnectTimer;
   bool _cancelSignalSent = false;
-  String? _connectStatusOverride;
+  bool _reconnecting = false;
 
   AudioPlayer? _ringbackPlayer;
   String? _fatalError;
@@ -95,7 +97,7 @@ class _CallScreenState extends State<CallScreen> {
         : widget.channelName.trim();
 
     if (_activeToken.isEmpty || _activeChannelId.isEmpty) {
-      _fatalError = 'ไม่พบข้อมูลการโทรจากเซิร์ฟเวอร์ กรุณาลองใหม่อีกครั้ง';
+      _fatalError = L10n.callServerDataMissing;
       return;
     }
 
@@ -123,13 +125,13 @@ class _CallScreenState extends State<CallScreen> {
   Future<bool> _ensurePermissions() async {
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
-      _showPermissionError('ไมโครโฟน');
+      _showPermissionError(L10n.microphonePermission);
       return false;
     }
     if (widget.isVideo) {
       final cameraStatus = await Permission.camera.request();
       if (!cameraStatus.isGranted) {
-        _showPermissionError('กล้อง');
+        _showPermissionError(L10n.cameraPermission);
         return false;
       }
     }
@@ -139,7 +141,7 @@ class _CallScreenState extends State<CallScreen> {
   void _showPermissionError(String permissionName) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('ต้องอนุญาต$permissionNameก่อนจึงจะใช้การโทรได้')),
+      SnackBar(content: Text(L10n.permissionRequiredForCall(permissionName))),
     );
   }
 
@@ -160,7 +162,7 @@ class _CallScreenState extends State<CallScreen> {
           if (!mounted) return;
           setState(() {
             _joined = true;
-            _connectStatusOverride = null;
+            _reconnecting = false;
           });
           _armRemoteConnectTimer();
         },
@@ -173,7 +175,7 @@ class _CallScreenState extends State<CallScreen> {
             _remoteUid = remoteUid;
             _remoteConnected = true;
             _callStart = DateTime.now();
-            _connectStatusOverride = null;
+            _reconnecting = false;
           });
           unawaited(_updateCallSessionStatus('connected', extra: {
             'connectedAt': FieldValue.serverTimestamp(),
@@ -196,14 +198,14 @@ class _CallScreenState extends State<CallScreen> {
           debugPrint('Agora: connectionState=$state reason=$reason');
           if (!mounted) return;
           if (state == ConnectionStateType.connectionStateReconnecting) {
-            setState(() => _connectStatusOverride = 'กำลังเชื่อมต่อใหม่...');
+            setState(() => _reconnecting = true);
           } else if (state == ConnectionStateType.connectionStateFailed) {
             setState(() {
-              _fatalError = 'การเชื่อมต่อล้มเหลว กรุณาลองใหม่อีกครั้ง';
+              _fatalError = L10n.callConnectionFailed;
             });
             unawaited(_endCall());
           } else if (state == ConnectionStateType.connectionStateConnected) {
-            setState(() => _connectStatusOverride = null);
+            setState(() => _reconnecting = false);
           }
         },
         onError: (err, msg) {
@@ -212,7 +214,7 @@ class _CallScreenState extends State<CallScreen> {
           if (err == ErrorCodeType.errInvalidToken ||
               err == ErrorCodeType.errTokenExpired) {
             setState(() {
-              _fatalError = 'Agora token ไม่ถูกต้องหรือหมดอายุ';
+              _fatalError = L10n.callConnectionFailed;
             });
             unawaited(_endCall(declined: true));
           }
@@ -261,7 +263,7 @@ class _CallScreenState extends State<CallScreen> {
       }
       if (!mounted) return;
       setState(() {
-        _fatalError = 'ไม่สามารถเชื่อมต่อบริการโทรได้ ($error)';
+        _fatalError = L10n.cannotConnectCallService(error);
       });
     }
   }
@@ -428,6 +430,9 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     if (_fatalError != null) {
       return Scaffold(
         backgroundColor: const Color(0xFF1F252B),
@@ -448,7 +453,7 @@ class _CallScreenState extends State<CallScreen> {
                   const SizedBox(height: 24),
                   ElevatedButton(
                     onPressed: () => _endCall(declined: true),
-                    child: const Text('ปิด'),
+                    child: Text(L10n.close),
                   ),
                 ],
               ),
@@ -474,6 +479,8 @@ class _CallScreenState extends State<CallScreen> {
         backgroundColor: widget.isVideo ? Colors.black : const Color(0xFFF5F5F7),
         body: widget.isVideo ? _buildVideoContent() : _buildVoiceContent(),
       ),
+    );
+      },
     );
   }
 
@@ -521,7 +528,7 @@ class _CallScreenState extends State<CallScreen> {
               padding: const EdgeInsets.only(top: 24),
               child: Column(
                 children: [
-                  Text('มีสายเข้า', style: const TextStyle(color: Colors.white70, fontSize: 16)),
+                  Text(L10n.incomingCall, style: const TextStyle(color: Colors.white70, fontSize: 16)),
                   const SizedBox(height: 12),
                   Text(
                     widget.targetProfile.displayName,
@@ -551,14 +558,14 @@ class _CallScreenState extends State<CallScreen> {
                 children: [
                   _CallActionButton(
                     icon: Icons.call,
-                    label: 'รับสาย',
+                    label: L10n.acceptCall,
                     color: const Color(0xFF00B900),
                     onTap: _acceptIncomingCall,
                   ),
                   const SizedBox(width: 32),
                   _CallActionButton(
                     icon: Icons.call_end,
-                    label: 'ไม่รับ',
+                    label: L10n.declineCall,
                     color: Colors.redAccent,
                     onTap: () => _endCall(declined: true),
                   ),
@@ -725,7 +732,7 @@ class _CallScreenState extends State<CallScreen> {
         ),
       );
     }
-    return Container(color: Colors.grey[800], child: const Center(child: Text('คุณปิดกล้อง', style: TextStyle(color: Colors.white))));
+    return Container(color: Colors.grey[800], child: Center(child: Text(L10n.cameraOffSelf, style: const TextStyle(color: Colors.white))));
   }
 
   Widget get remoteVideoView {
@@ -739,7 +746,7 @@ class _CallScreenState extends State<CallScreen> {
         ),
       );
     }
-    return Container(color: Colors.grey[900], child: Center(child: Text('กำลังรอคู่สนทนา...', style: TextStyle(color: Colors.white))));
+    return Container(color: Colors.grey[900], child: Center(child: Text(L10n.waitingForPeer, style: const TextStyle(color: Colors.white))));
   }
 
   Future<void> _toggleVideo() async {
@@ -764,28 +771,28 @@ class _CallScreenState extends State<CallScreen> {
       children: [
         _CallActionButton(
           icon: _videoMuted ? Icons.videocam_off : Icons.videocam,
-          label: _videoMuted ? 'เปิดกล้อง' : 'ปิดกล้อง',
+          label: _videoMuted ? L10n.enableCamera : L10n.disableCamera,
           color: Colors.white24,
           onTap: () => unawaited(_toggleVideo()),
         ),
         const SizedBox(width: 16),
         _CallActionButton(
           icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
-          label: 'ลำโพง',
+          label: L10n.speaker,
           color: Colors.white24,
           onTap: () => unawaited(_toggleSpeaker()),
         ),
         const SizedBox(width: 16),
         _CallActionButton(
           icon: Icons.call_end,
-          label: 'วางสาย',
+          label: L10n.hangUp,
           color: Colors.redAccent,
           onTap: _endCall,
         ),
         const SizedBox(width: 16),
         _CallActionButton(
           icon: _micMuted ? Icons.mic_off : Icons.mic,
-          label: _micMuted ? 'เปิดไมค์' : 'ปิดไมค์',
+          label: _micMuted ? L10n.enableMic : L10n.disableMic,
           color: Colors.white24,
           onTap: () => unawaited(_toggleMute()),
         ),
@@ -799,21 +806,21 @@ class _CallScreenState extends State<CallScreen> {
       children: [
         _CallActionButton(
           icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
-          label: 'ลำโพง',
+          label: L10n.speaker,
           color: Colors.white24,
           onTap: () => unawaited(_toggleSpeaker()),
         ),
         const SizedBox(width: 24),
         _CallActionButton(
           icon: Icons.call_end,
-          label: 'วางสาย',
+          label: L10n.hangUp,
           color: Colors.redAccent,
           onTap: _endCall,
         ),
         const SizedBox(width: 24),
         _CallActionButton(
           icon: _micMuted ? Icons.mic_off : Icons.mic,
-          label: _micMuted ? 'เปิดไมค์' : 'ปิดไมค์',
+          label: _micMuted ? L10n.enableMic : L10n.disableMic,
           color: Colors.white24,
           onTap: () => unawaited(_toggleMute()),
         ),
@@ -835,16 +842,15 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   String _statusText({required bool isVideo}) {
-    final override = _connectStatusOverride;
-    if (override != null && override.isNotEmpty) return override;
-    if (!_joined) return 'กำลังเชื่อมต่อ...';
+    if (_reconnecting) return L10n.reconnecting;
+    if (!_joined) return L10n.connecting;
     if (!_remoteConnected) {
       if (_remoteAccepted) {
-        return 'อีกฝ่ายรับสายแล้ว กำลังเชื่อมต่อ...';
+        return L10n.peerAcceptedConnecting;
       }
-      return isVideo ? 'กำลังโทรหา (วิดีโอ)' : 'กำลังโทรหา';
+      return isVideo ? L10n.callingVideo : L10n.callingAudio;
     }
-    return 'กำลังสนทนากับ';
+    return L10n.talkingWith;
   }
 
   void _armJoinChannelTimer() {
@@ -853,7 +859,7 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted || _joined) return;
       debugPrint('Agora: joinChannel timeout after ${_joinChannelTimeout.inSeconds}s');
       setState(() {
-        _fatalError = 'เชื่อมต่อบริการโทรไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+        _fatalError = L10n.callServiceConnectFailed;
       });
       unawaited(_endCall());
     });
@@ -866,8 +872,8 @@ class _CallScreenState extends State<CallScreen> {
       debugPrint('Agora: remote connect timeout after ${_remoteConnectTimeout.inSeconds}s');
       setState(() {
         _fatalError = widget.isIncoming
-            ? 'ไม่สามารถเชื่อมต่อกับผู้โทรได้'
-            : 'ปลายทางไม่ตอบรับการโทร';
+            ? L10n.cannotReachCaller
+            : L10n.destinationNoAnswer;
       });
       unawaited(_endCall());
     });

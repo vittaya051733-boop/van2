@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/promotion_models.dart';
+import '../services/locale_service.dart';
 
 class HomePromoCarousel extends StatelessWidget {
   const HomePromoCarousel({
@@ -17,6 +19,9 @@ class HomePromoCarousel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     if (promotions.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -27,7 +32,7 @@ class HomePromoCarousel extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Text(
-            'โปรโมชั่นแว๊นตลาด',
+            L10n.homePromoTitle,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: const Color(0xFF111827),
               fontWeight: FontWeight.w800,
@@ -97,8 +102,10 @@ class HomePromoCarousel extends StatelessWidget {
                         const Spacer(),
                         Text(
                           promo.minSubtotal > 0
-                              ? 'ขั้นต่ำ ฿${promo.minSubtotal.toStringAsFixed(0)}'
-                              : 'แตะเพื่อช้อปเลย',
+                              ? L10n.minSubtotalBaht(
+                                  promo.minSubtotal.toStringAsFixed(0),
+                                )
+                              : L10n.tapToShop,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: const Color(0xFF6B7280),
                             fontWeight: FontWeight.w600,
@@ -113,6 +120,8 @@ class HomePromoCarousel extends StatelessWidget {
           ),
         ),
       ],
+    );
+      },
     );
   }
 }

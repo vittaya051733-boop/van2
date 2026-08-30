@@ -8,7 +8,7 @@ $KeyId = '071cf2f9-b810-4eaa-b1bd-c574f2d2d752'
 
 $Referrers = @(
   'https://van1.web.app/*',
-  'https://van2.web.app/*',
+  'https://vantalad.web.app/*',
   'https://van3.web.app/*',
   'https://van4.web.app/*',
   'https://van-merchant.web.app/*',
@@ -74,4 +74,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host '[ok] Browser key now includes Maps JavaScript API + van*.web.app referrers' -ForegroundColor Green
-Write-Host 'Wait 1-3 minutes, then hard-refresh https://van2.web.app (Ctrl+Shift+R)' -ForegroundColor Yellow
+Write-Host 'Wait 1-3 minutes, then hard-refresh https://vantalad.web.app (Ctrl+Shift+R)' -ForegroundColor Yellow

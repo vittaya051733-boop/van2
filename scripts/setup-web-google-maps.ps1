@@ -23,7 +23,7 @@ Write-Host '   Application restrictions → HTTP referrers (web sites)'
 Write-Host '   Add:' -ForegroundColor White
 @(
   'https://van1.web.app/*',
-  'https://van2.web.app/*',
+  'https://vantalad.web.app/*',
   'https://van3.web.app/*',
   'https://van4.web.app/*',
   'https://van-merchant.web.app/*',
@@ -33,7 +33,7 @@ Write-Host '   Add:' -ForegroundColor White
 Write-Host ''
 Write-Host '   API restrictions → restrict key to Maps JS + Places + Directions + Geocoding' -ForegroundColor White
 Write-Host ''
-Write-Host '3) Save, wait 1–5 min, hard-refresh https://van2.web.app' -ForegroundColor Green
+Write-Host '3) Save, wait 1–5 min, hard-refresh https://vantalad.web.app' -ForegroundColor Green
 Write-Host ''
 
 Start-Process $CredentialsUrl

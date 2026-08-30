@@ -69,6 +69,35 @@ String? readCatalogProductImageUrl(Map<String, dynamic> data) {
   return urls.isEmpty ? null : urls.first;
 }
 
+/// Best image URL to attach when sharing (full image first for photo attachment).
+String? readCatalogProductShareAttachmentUrl(Map<String, dynamic> data) {
+  final imageUrl = readCatalogProductImageUrl(data);
+  if (imageUrl != null && imageUrl.isNotEmpty) {
+    return imageUrl;
+  }
+  return readCatalogProductShareImageUrl(data);
+}
+
+/// Best image URL to attach when sharing (thumbnail first, then poster for video-only items).
+String? readCatalogProductShareImageUrl(Map<String, dynamic> data) {
+  final thumbnails = data['thumbnailUrls'];
+  if (thumbnails is List) {
+    for (final entry in thumbnails) {
+      final url = entry.toString().trim();
+      if (url.isNotEmpty) {
+        return url;
+      }
+    }
+  }
+
+  final imageUrl = readCatalogProductImageUrl(data);
+  if (imageUrl != null && imageUrl.isNotEmpty) {
+    return imageUrl;
+  }
+
+  return readCatalogProductVideoThumbnailUrl(data);
+}
+
 String? readCatalogProductVideoUrl(Map<String, dynamic> data) {
   final url = data['videoUrl']?.toString().trim();
   if (url == null || url.isEmpty) {

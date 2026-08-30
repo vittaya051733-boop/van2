@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
+
+import 'l10n/l10n.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -42,7 +44,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   GoogleMapController? _mapController;
   late LatLng _selectedPosition;
-  String _selectedLabel = 'ตำแหน่งที่เลือก';
+  late String _selectedLabel;
   String? _selectedSubtitle;
   bool _isSearching = false;
   bool _isLoadingLocation = false;
@@ -57,7 +59,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
             widget.initialLocation!.latitude,
             widget.initialLocation!.longitude,
           );
-    _selectedLabel = widget.initialLocation?.title ?? 'ตำแหน่งที่เลือก';
+    _selectedLabel = widget.initialLocation?.title ?? L10n.selectedLocation;
     _selectedSubtitle = widget.initialLocation?.subtitle;
 
     if (widget.initialLocation == null) {
@@ -87,14 +89,14 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
       setState(() {
         _selectedPosition = target;
-        _selectedLabel = 'ตำแหน่งปัจจุบัน';
+        _selectedLabel = L10n.currentLocation;
         _selectedSubtitle = null;
       });
 
       await _moveCamera(target);
-      await _resolveAddress(target, fallbackTitle: 'ตำแหน่งปัจจุบัน');
+      await _resolveAddress(target, fallbackTitle: L10n.currentLocation);
     } catch (error) {
-      _showSnackBar('ไม่สามารถดึงตำแหน่งได้: $error');
+      _showSnackBar(L10n.locationFetchFailed(error));
     } finally {
       if (mounted) {
         setState(() => _isLoadingLocation = false);
@@ -105,7 +107,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   Future<bool> _ensureLocationPermission() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showSnackBar('กรุณาเปิดบริการระบุตำแหน่งของอุปกรณ์');
+      _showSnackBar(L10n.enableLocationServices);
       return false;
     }
 
@@ -113,13 +115,13 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        _showSnackBar('กรุณาอนุญาตให้แอพเข้าถึงตำแหน่ง');
+        _showSnackBar(L10n.grantLocationPermission);
         return false;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      _showSnackBar('กรุณาเปิดสิทธิ์ตำแหน่งจากการตั้งค่าเครื่อง');
+      _showSnackBar(L10n.openLocationSettings);
       return false;
     }
 
@@ -148,7 +150,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     try {
       final locations = await locationFromAddress(trimmedQuery);
       if (locations.isEmpty) {
-        _showSnackBar('ไม่พบตำแหน่งที่ค้นหา');
+        _showSnackBar(L10n.locationNotFound);
         return;
       }
 
@@ -168,7 +170,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       await _moveCamera(target);
       await _resolveAddress(target, fallbackTitle: trimmedQuery);
     } catch (error) {
-      _showSnackBar('ค้นหาสถานที่ไม่สำเร็จ: $error');
+      _showSnackBar(L10n.placeSearchFailed(error));
     } finally {
       if (mounted) {
         setState(() => _isSearching = false);
@@ -274,7 +276,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
         unawaited(
           _handleMapPositionChanged(
             position,
-            fallbackTitle: 'ตำแหน่งที่เลือก',
+            fallbackTitle: L10n.selectedLocation,
           ),
         );
       },
@@ -287,7 +289,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
             unawaited(
               _handleMapPositionChanged(
                 position,
-                fallbackTitle: 'ตำแหน่งที่เลือก',
+                fallbackTitle: L10n.selectedLocation,
               ),
             );
           },
@@ -317,7 +319,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               Navigator.of(context).pop(_buildPickedLocation());
             },
             icon: const Icon(Icons.check_circle_outline),
-            label: const Text('ยืนยัน'),
+            label: Text(L10n.confirm),
           ),
         ],
       ),
@@ -331,7 +333,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               onSubmitted: _searchByText,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                hintText: 'ค้นหาสถานที่หรือที่อยู่',
+                hintText: L10n.searchPlaceOrAddress,
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _isSearching
                     ? const Padding(

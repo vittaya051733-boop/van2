@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' as latlng;
 
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
 import 'pricing_config_service.dart';
 import 'public_catalog_service.dart';
 import 'widgets/cached_app_image.dart';
@@ -36,8 +37,6 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
   static const double _initialZoom = 13;
   static const double _shopImageRadiusKmThreshold = 1.0;
   static const double _serviceAreaRadiusMeters = 10000;
-  static const String _marketCenterLabel =
-      'ตลาดโนนสูง ตำบลโนนสูง อำเภอเมืองอุดรธานี จังหวัดอุดรธานี';
 
   String? _selectedShopId;
   double _currentZoom = _initialZoom;
@@ -214,7 +213,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
         builder: (_) => CategoryCatalogScreen(
           title: shop.shopName?.trim().isNotEmpty == true
               ? shop.shopName!.trim()
-              : 'ร้านค้า',
+              : L10n.shopFallback,
           shopIdFilter: shop.shopId,
           customerLatitude: widget.userLatitude,
           customerLongitude: widget.userLongitude,
@@ -254,7 +253,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4FAFB),
       appBar: AppBar(
-        title: const Text('แผนที่ร้าน'),
+        title: Text(L10n.shopMapTitle),
         backgroundColor: const Color(0xFFF57C00),
         foregroundColor: Colors.white,
       ),
@@ -265,7 +264,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'ยังไม่พบร้านค้าที่มีพิกัดสำหรับแสดงบนแผนที่',
+                  L10n.noShopsWithCoordinates,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
@@ -318,7 +317,7 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
                               Text(
-                                'ร้านในพื้นที่ของคุณ',
+                                L10n.shopsInYourArea,
                                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                       fontWeight: FontWeight.w800,
                                       color: const Color(0xFF9A3412),
@@ -326,14 +325,17 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${shops.length} ร้าน • ศูนย์กลาง $_marketCenterLabel',
+                                L10n.shopsNearMarket(
+                                  shops.length,
+                                  L10n.marketCenterLabel,
+                                ),
                                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                       color: const Color(0xFF7C2D12),
                                     ),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'วงกลมรัศมี 10 กม. จากตลาดโนนสูง',
+                                L10n.marketRadiusCircle,
                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: const Color(0xFF0F766E),
                                       fontWeight: FontWeight.w700,
@@ -342,8 +344,8 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                               const SizedBox(height: 4),
                               Text(
                                 showShopImageMarkers
-                                    ? 'โหมดรูปร้าน: รัศมีที่แสดงไม่เกิน 1 กม.'
-                                    : 'ซูมเข้าอีกเพื่อดูรูปร้านในรัศมี 1 กม.',
+                                    ? L10n.shopImageModeHint
+                                    : L10n.zoomForShopImages,
                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: const Color(0xFF9A3412),
                                       fontWeight: FontWeight.w600,
@@ -429,8 +431,8 @@ class _ShopMapScreenState extends State<ShopMapScreen> {
                                   Expanded(
                                     child: Text(
                                       _isShopListCollapsed
-                                          ? 'ย่อแถบร้านอยู่ แตะเพื่อขยาย'
-                                          : 'ร้านใกล้คุณ ${shops.length} ร้าน',
+                                          ? L10n.shopListCollapsedHint
+                                          : L10n.nearbyShopsCount(shops.length),
                                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                             fontWeight: FontWeight.w700,
                                             color: const Color(0xFF374151),
@@ -520,8 +522,6 @@ class _ShopMapCanvas extends StatefulWidget {
 
 class _ShopMapCanvasState extends State<_ShopMapCanvas> {
   static const double _initialZoom = 13;
-  static const String _marketCenterLabel =
-      'ตลาดโนนสูง ตำบลโนนสูง อำเภอเมืองอุดรธานี จังหวัดอุดรธานี';
 
   final MapController _mapController = MapController();
   bool _isMapReady = false;
@@ -685,7 +685,7 @@ class _ShopMapCanvasState extends State<_ShopMapCanvas> {
                       ],
                     ),
                     child: Text(
-                      'ศูนย์กลาง $_marketCenterLabel',
+                      L10n.mapCenterLabel(L10n.marketCenterLabel),
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Colors.white,
@@ -725,7 +725,7 @@ class _ShopMapCanvasState extends State<_ShopMapCanvas> {
                       ],
                     ),
                     child: Text(
-                      'คุณอยู่ที่นี่',
+                      L10n.youAreHere,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             fontWeight: FontWeight.w700,
                             color: const Color(0xFF0F766E),
@@ -774,7 +774,7 @@ class _BottomShopListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final shopName = shop.shopName?.trim().isNotEmpty == true
         ? shop.shopName!.trim()
-        : 'ร้านค้า';
+        : L10n.shopFallback;
     final titleStyle = compact
         ? Theme.of(context).textTheme.titleSmall
         : Theme.of(context).textTheme.titleMedium;
@@ -838,8 +838,8 @@ class _BottomShopListTile extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       distanceKm == null
-                          ? 'ไม่พบระยะทาง'
-                          : 'ห่างจากคุณ ${distanceKm!.toStringAsFixed(1)} กม.',
+                          ? L10n.distanceUnknown
+                          : L10n.distanceFromYouKm(distanceKm!),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: subtitleStyle?.copyWith(
@@ -860,7 +860,7 @@ class _BottomShopListTile extends StatelessWidget {
                       ? const VisualDensity(horizontal: -1, vertical: -1)
                       : VisualDensity.standard,
                 ),
-                child: const Text('เข้าร้าน'),
+                child: Text(L10n.enterShop),
               ),
             ],
           ),
@@ -911,7 +911,7 @@ class _ShopImageMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     final shopName = shop.shopName?.trim().isNotEmpty == true
         ? shop.shopName!.trim()
-        : 'ร้านค้า';
+        : L10n.shopFallback;
     final markerSize = isSelected ? 56.0 : 50.0;
 
     return Column(

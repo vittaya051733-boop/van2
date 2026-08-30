@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'catalog_search_utils.dart';
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
 import 'public_catalog_service.dart';
 
 class CatalogProductSearchScreen extends StatefulWidget {
@@ -87,7 +88,7 @@ class _CatalogProductSearchScreenState
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        'โหลดข้อมูลไม่สำเร็จ: ${snapshot.error}',
+                        L10n.catalogLoadFailed(snapshot.error!),
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -100,11 +101,11 @@ class _CatalogProductSearchScreenState
                 );
 
                 if (_searchQuery.trim().isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Padding(
-                      padding: EdgeInsets.all(24),
+                      padding: const EdgeInsets.all(24),
                       child: Text(
-                        'พิมพ์ชื่อสินค้า ร้าน หรือประเภทสินค้าเพื่อค้นหา',
+                        L10n.catalogSearchPrompt,
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Color(0xFF6B7280),
@@ -120,7 +121,7 @@ class _CatalogProductSearchScreenState
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        'ไม่พบสินค้าที่ตรงกับ "${_searchQuery.trim()}"',
+                        L10n.catalogNoSearchResults(_searchQuery.trim()),
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           color: Color(0xFF6B7280),

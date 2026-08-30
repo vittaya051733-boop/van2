@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../config/payment_gateway_config.dart';
+import '../l10n/l10n.dart';
 import '../models/omise_payment_channel.dart';
+import '../services/locale_service.dart';
 import '../services/omise_payment_service.dart';
 import 'payment_brand_strip.dart';
 
@@ -82,7 +84,7 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
     } catch (error, stackTrace) {
       debugPrint('[payment] checkout failed: $error\n$stackTrace');
       messenger.showSnackBar(
-        SnackBar(content: Text('ชำระเงินไม่สำเร็จ: $error')),
+        SnackBar(content: Text(L10n.paymentFailed(error))),
       );
     } finally {
       _runLock = false;
@@ -94,6 +96,9 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Padding(
@@ -122,14 +127,14 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
                 ),
               ),
               Text(
-                'ชำระเงิน',
+                L10n.paymentTitle,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 6),
               Text(
-                'ยอดชำระ ฿${widget.grandTotal.toStringAsFixed(2)}',
+                L10n.paymentTotalBaht(widget.grandTotal.toStringAsFixed(2)),
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: const Color(0xFFE55A00),
@@ -154,8 +159,8 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
               const SizedBox(height: 16),
               if (widget.onCashOnDelivery != null)
                 _PaymentOptionTile(
-                  title: 'จ่ายปลายทาง',
-                  subtitle: 'ชำระเงินเมื่อได้รับสินค้า',
+                  title: L10n.codTitle,
+                  subtitle: L10n.codSubtitle,
                   icon: Icons.local_shipping_outlined,
                   enabled: !_isProcessing,
                   onTap: () => _run(
@@ -166,8 +171,8 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
               if (PaymentGatewayConfig.embeddedPromptPayScanEnabled &&
                   widget.onEmbeddedPromptPayScan != null)
                 _PaymentOptionTile(
-                  title: 'สแกนจ่ายพร้อมเพย์',
-                  subtitle: 'สแกน QR แล้วแนบสลิปเพื่อยืนยัน',
+                  title: L10n.scanPromptPay,
+                  subtitle: L10n.scanPromptPayHint,
                   logoAssets: const <String>[
                     'assets/payment_logos/promptpay.png',
                   ],
@@ -205,18 +210,20 @@ class _PaymentCheckoutSheetState extends State<_PaymentCheckoutSheet> {
         ),
       ),
     );
+      },
+    );
   }
 
   String _channelSubtitle(OmisePaymentChannel channel) {
     switch (channel) {
       case OmisePaymentChannel.promptPay:
-        return 'สแกน QR พร้อมเพย์';
+        return L10n.omiseScanPromptPayQr;
       case OmisePaymentChannel.card:
         return 'Visa, Mastercard, JCB';
       case OmisePaymentChannel.mobileBanking:
-        return 'โอนผ่านแอปธนาคาร';
+        return L10n.omiseMobileBankTransfer;
       case OmisePaymentChannel.trueMoney:
-        return 'ยืนยัน OTP ใน TrueMoney Wallet';
+        return L10n.omiseTrueMoneyOtpConfirm;
     }
   }
 

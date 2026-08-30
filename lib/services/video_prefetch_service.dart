@@ -13,7 +13,7 @@ class VideoPrefetchService {
   static final VideoPrefetchService instance = VideoPrefetchService._();
 
   static const int maxNeighborPrefetch = 5;
-  static const int headerPrefetchBytes = 2 * 1024 * 1024;
+  static const int headerPrefetchBytes = 5 * 1024 * 1024;
 
   final Set<String> _inFlight = <String>{};
   final Set<String> _completed = <String>{};

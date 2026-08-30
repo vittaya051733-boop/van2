@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'admin_contact_screen.dart';
 import 'data/help_center_content.dart';
 import 'help_article_detail_screen.dart';
-import 'localization/settings_copy.dart';
+import 'l10n/l10n.dart';
 import 'pricing_config_service.dart';
 import 'services/admin_support_config.dart';
 import 'services/locale_service.dart';
@@ -100,7 +100,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
 
         return Scaffold(
       appBar: AppBar(
-        title: Text(SettingsCopy.helpCenter),
+        title: Text(L10n.helpCenter),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -108,7 +108,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
           TextField(
             controller: _searchController,
             decoration: InputDecoration(
-              hintText: SettingsCopy.helpSearchHint,
+              hintText: L10n.helpSearchHint,
               prefixIcon: const Icon(Icons.search_rounded),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
@@ -119,7 +119,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
           if (_query.trim().isEmpty) ...<Widget>[
             const SizedBox(height: 18),
             Text(
-              SettingsCopy.helpPopular,
+              L10n.helpPopular,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
@@ -136,7 +136,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
               ),
             const SizedBox(height: 12),
             Text(
-              SettingsCopy.helpCategories,
+              L10n.helpCategories,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w800,
               ),
@@ -175,14 +175,14 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(
-                  english ? 'No articles found' : 'ไม่พบบทความ',
+                  L10n.helpNoArticlesFound,
                   textAlign: TextAlign.center,
                 ),
               ),
           ],
           const SizedBox(height: 16),
           Text(
-            SettingsCopy.helpStillNeed,
+            L10n.helpStillNeed,
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w800,
             ),
@@ -199,7 +199,7 @@ class _HelpCenterScreenState extends State<HelpCenterScreen> {
               );
             },
             icon: const Icon(Icons.support_agent_rounded),
-            label: Text(SettingsCopy.helpContactCta),
+            label: Text(L10n.helpContactCta),
           ),
         ],
       ),

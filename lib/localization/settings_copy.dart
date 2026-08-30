@@ -1,95 +1,60 @@
-import '../services/locale_service.dart';
+import '../l10n/l10n.dart';
 
+/// Backward-compatible wrapper during migration to [L10n].
 class SettingsCopy {
   SettingsCopy._();
 
-  static bool get _en => LocaleService.instance.isEnglish;
+  static String get settingsTitle => L10n.settingsTitle;
+  static String get helpSection => L10n.helpSection;
+  static String get helpCenter => L10n.helpCenter;
+  static String get contactAdmin => L10n.contactAdmin;
+  static String get adminMessages => L10n.adminMessages;
+  static String get adminMessagesSubtitle => L10n.adminMessagesSubtitle;
+  static String get securitySection => L10n.securitySection;
+  static String get privacySecurity => L10n.privacySecurity;
+  static String get languageSection => L10n.languageSection;
+  static String get language => L10n.language;
+  static String get accountSection => L10n.accountSection;
+  static String get logout => L10n.logout;
+  static String get loggingOut => L10n.loggingOut;
+  static String get logoutTitle => L10n.logoutTitle;
+  static String get logoutConfirm => L10n.logoutConfirm;
+  static String get cancel => L10n.cancel;
+  static String get userFallback => L10n.userFallback;
+  static String get chooseLanguage => L10n.chooseLanguage;
+  static String get thaiLabel => L10n.thaiLabel;
+  static String get englishLabel => L10n.englishLabel;
 
-  static String get settingsTitle => _en ? 'Settings' : 'ตั้งค่า';
-  static String get helpSection => _en ? 'Help' : 'ช่วยเหลือ';
-  static String get helpCenter => _en ? 'Help center' : 'ศูนย์ช่วยเหลือ';
-  static String get contactAdmin => _en ? 'Contact admin' : 'ติดต่อแอดมิน';
-  static String get adminMessages => _en ? 'Messages to admin' : 'ข้อความถึงแอดมิน';
-  static String get adminMessagesSubtitle => _en
-      ? 'View admin replies and respond'
-      : 'ดูคำตอบจากแอดมินและตอบกลับ';
-  static String get securitySection => _en ? 'Security' : 'ความปลอดภัย';
-  static String get privacySecurity =>
-      _en ? 'Privacy & security' : 'ความเป็นส่วนตัวและความปลอดภัย';
-  static String get languageSection => _en ? 'Language' : 'ตั้งค่าภาษา';
-  static String get language => _en ? 'Language' : 'ภาษา';
-  static String get accountSection => _en ? 'Account' : 'บัญชี';
-  static String get logout => _en ? 'Sign out' : 'ออกจากระบบ';
-  static String get loggingOut => _en ? 'Signing out...' : 'กำลังออกจากระบบ...';
-  static String get logoutTitle => _en ? 'Sign out' : 'ออกจากระบบ';
-  static String get logoutConfirm =>
-      _en ? 'Do you want to sign out?' : 'คุณต้องการออกจากระบบใช่หรือไม่';
-  static String get cancel => _en ? 'Cancel' : 'ยกเลิก';
-  static String get userFallback => _en ? 'User' : 'ผู้ใช้';
-  static String get chooseLanguage => _en ? 'Choose language' : 'เลือกภาษา';
-  static String get thaiLabel => 'ไทย';
-  static String get englishLabel => 'English';
+  static String get helpSearchHint => L10n.helpSearchHint;
+  static String get helpPopular => L10n.helpPopular;
+  static String get helpCategories => L10n.helpCategories;
+  static String get helpStillNeed => L10n.helpStillNeed;
+  static String get helpContactCta => L10n.helpContactCta;
 
-  static String get helpSearchHint => _en
-      ? 'Search help articles'
-      : 'ค้นหาคำถาม เช่น คืนเงิน ติดตามออเดอร์';
-  static String get helpPopular => _en ? 'Popular topics' : 'หัวข้อยอดนิยม';
-  static String get helpCategories => _en ? 'Categories' : 'หมวดคำถาม';
-  static String get helpStillNeed =>
-      _en ? 'Still need help?' : 'ยังไม่เจอคำตอบ?';
-  static String get helpContactCta =>
-      _en ? 'Contact admin' : 'ติดต่อแอดมิน';
+  static String get privacyTitle => L10n.privacyTitle;
+  static String get privacyPolicy => L10n.privacyPolicy;
+  static String get termsOfService => L10n.termsOfService;
+  static String get dataWeCollect => L10n.dataWeCollect;
+  static String get managePermissions => L10n.managePermissions;
+  static String get managePermissionsSubtitle => L10n.managePermissionsSubtitle;
+  static String get deleteAccount => L10n.deleteAccount;
+  static String get deleteAccountSubtitle => L10n.deleteAccountSubtitle;
+  static String get appVersion => L10n.appVersion;
+  static String get openAppSettings => L10n.openAppSettings;
+  static String get lastUpdated => L10n.lastUpdated;
 
-  static String get privacyTitle =>
-      _en ? 'Privacy & security' : 'ความเป็นส่วนตัวและความปลอดภัย';
-  static String get privacyPolicy =>
-      _en ? 'Privacy policy' : 'นโยบายความเป็นส่วนตัว';
-  static String get termsOfService =>
-      _en ? 'Terms of service' : 'ข้อกำหนดการใช้งาน';
-  static String get dataWeCollect =>
-      _en ? 'Data we collect' : 'ข้อมูลที่เราเก็บ';
-  static String get managePermissions =>
-      _en ? 'App permissions' : 'จัดการสิทธิ์แอป';
-  static String get managePermissionsSubtitle => _en
-      ? 'Location, notifications, camera'
-      : 'ตำแหน่ง แจ้งเตือน กล้อง';
-  static String get deleteAccount =>
-      _en ? 'Request account deletion' : 'ขอลบบัญชี';
-  static String get deleteAccountSubtitle => _en
-      ? 'Submit a request to admin support'
-      : 'ส่งคำขอผ่านแอดมิน';
-  static String get appVersion => _en ? 'App version' : 'เวอร์ชันแอป';
-  static String get openAppSettings =>
-      _en ? 'Open system app settings' : 'เปิดตั้งค่าแอปของระบบ';
-  static String get lastUpdated => _en ? 'Last updated' : 'อัปเดตล่าสุด';
-
-  static String get consentPreferences =>
-      _en ? 'Consent preferences' : 'การตั้งค่าความยินยอม';
-  static String get pushNotifications =>
-      _en ? 'Order notifications' : 'แจ้งเตือนสถานะออเดอร์';
-  static String get pushNotificationsSubtitle => _en
-      ? 'Optional push alerts for orders and messages'
-      : 'การแจ้งเตือนออเดอร์และข้อความ (ไม่บังคับ)';
-  static String get marketingMessages =>
-      _en ? 'Promotions' : 'ข่าวโปรโมชัน';
-  static String get marketingMessagesSubtitle => _en
-      ? 'Optional marketing messages'
-      : 'ข้อความการตลาด (ไม่บังคับ)';
-  static String get privacyRights =>
-      _en ? 'Your privacy rights' : 'สิทธิข้อมูลส่วนบุคคล';
-  static String get requestDataExport =>
-      _en ? 'Request data export' : 'ขอส่งออกข้อมูล';
-  static String get requestDataExportSubtitle => _en
-      ? 'Receive a copy of your personal data'
-      : 'ขอรับสำเนาข้อมูลส่วนบุคคลของคุณ';
-  static String get requestDataCorrection =>
-      _en ? 'Request data correction' : 'ขอแก้ไขข้อมูล';
-  static String get requestDataCorrectionSubtitle => _en
-      ? 'Ask us to correct inaccurate data'
-      : 'ขอให้แก้ไขข้อมูลที่ไม่ถูกต้อง';
-  static String get requestAccountDeletion =>
-      _en ? 'Request account deletion' : 'ขอลบบัญชี';
-  static String get requestAccountDeletionSubtitle => _en
-      ? 'Submit a deletion request to admin'
-      : 'ส่งคำขอลบบัญชีและข้อมูลไปยังแอดมิน';
+  static String get consentPreferences => L10n.consentPreferences;
+  static String get pushNotifications => L10n.pushNotifications;
+  static String get pushNotificationsSubtitle => L10n.pushNotificationsSubtitle;
+  static String get marketingMessages => L10n.marketingMessages;
+  static String get marketingMessagesSubtitle => L10n.marketingMessagesSubtitle;
+  static String get privacyRights => L10n.privacyRights;
+  static String get requestDataExport => L10n.requestDataExport;
+  static String get requestDataExportSubtitle => L10n.requestDataExportSubtitle;
+  static String get requestDataCorrection => L10n.requestDataCorrection;
+  static String get requestDataCorrectionSubtitle =>
+      L10n.requestDataCorrectionSubtitle;
+  static String get requestAccountDeletion => L10n.requestAccountDeletion;
+  static String get requestAccountDeletionSubtitle =>
+      L10n.requestAccountDeletionSubtitle;
 }

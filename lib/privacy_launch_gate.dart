@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'l10n/l10n.dart';
 import 'services/notification_service.dart';
 import 'services/privacy_consent_service.dart';
 
@@ -29,12 +30,29 @@ class _PrivacyLaunchGateState extends State<PrivacyLaunchGate> {
   @override
   void initState() {
     super.initState();
+    unawaited(_tryFastConsent());
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _runGate();
+      if (!_ready && !_blocked) {
+        _runGate();
+      }
     });
   }
 
+  Future<void> _tryFastConsent() async {
+    try {
+      final accepted = await PrivacyConsentService.instance
+          .hasLocalConsentForCurrentPolicy();
+      if (!mounted || !accepted) {
+        return;
+      }
+      setState(() => _ready = true);
+    } catch (_) {}
+  }
+
   Future<void> _runGate() async {
+    if (_ready) {
+      return;
+    }
     try {
       final accepted = await PrivacyConsentService.instance.ensureConsent(
         context,
@@ -93,15 +111,15 @@ class _PrivacyLaunchGateState extends State<PrivacyLaunchGate> {
               children: [
                 const Icon(Icons.policy_outlined, size: 48),
                 const SizedBox(height: 16),
-                const Text(
-                  'ต้องยอมรับข้อกำหนดและนโยบายความเป็นส่วนตัวก่อนใช้งาน',
+                Text(
+                  L10n.privacyMustAcceptGate,
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontWeight: FontWeight.w700),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: _runGate,
-                  child: const Text('ดูข้อกำหนดอีกครั้ง'),
+                  child: Text(L10n.privacyReviewTermsAgain),
                 ),
               ],
             ),

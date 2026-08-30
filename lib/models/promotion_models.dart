@@ -153,6 +153,7 @@ class ClaimedCoupon {
     this.claimedAt,
     this.expiresAt,
     this.usedAt,
+    this.source,
   });
 
   final String couponId;
@@ -165,8 +166,10 @@ class ClaimedCoupon {
   final DateTime? claimedAt;
   final DateTime? expiresAt;
   final DateTime? usedAt;
+  final String? source;
 
   bool get isActive => status == 'active';
+  bool get isClaimCredit => (source ?? '').trim() == 'claim_credit';
 
   factory ClaimedCoupon.fromFirestore(
     String couponId,
@@ -183,6 +186,7 @@ class ClaimedCoupon {
       claimedAt: _parseFirestoreDate(data['claimedAt']),
       expiresAt: _parseFirestoreDate(data['expiresAt']),
       usedAt: _parseFirestoreDate(data['usedAt']),
+      source: (data['source'] as String?)?.trim(),
     );
   }
 }

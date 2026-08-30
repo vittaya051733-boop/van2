@@ -35,10 +35,14 @@ void main() {
     expect(thai, contains('฿30'));
     expect(thai, isNot(contains('8%')));
     expect(thai, contains('3 ร้าน'));
+    expect(thai, contains('ค่าธรรมเนียมแพลตฟอร์ม'));
+    expect(thai, contains('฿6'));
 
     final english = HelpPricingSummary.bodyForArticle(article, config, true);
     expect(english, contains('฿30'));
     expect(english, isNot(contains('8%')));
     expect(english, contains('at least 3 shops'));
+    expect(english, contains('Platform fee'));
+    expect(english, contains('฿6'));
   });
 }

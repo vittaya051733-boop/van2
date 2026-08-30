@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../models/promotion_models.dart';
+import '../services/locale_service.dart';
 import '../services/user_coupon_wallet_service.dart';
 
 class ClaimableCouponStrip extends StatelessWidget {
@@ -17,6 +19,9 @@ class ClaimableCouponStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     final inlineCoupons = coupons
         .where((coupon) => coupon.showsInline)
         .toList(growable: false);
@@ -30,7 +35,7 @@ class ClaimableCouponStrip extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Text(
-            'คูปองพิเศษ',
+            L10n.specialCoupons,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: const Color(0xFF111827),
               fontWeight: FontWeight.w800,
@@ -57,6 +62,8 @@ class ClaimableCouponStrip extends StatelessWidget {
           ),
         ),
       ],
+    );
+      },
     );
   }
 }
@@ -91,8 +98,8 @@ class _ClaimableCouponCardState extends State<_ClaimableCouponCard> {
         return;
       }
       final message = result.alreadyClaimed
-          ? 'คุณรับคูปองนี้แล้ว'
-          : 'เก็บใน "คูปองของฉัน" แล้ว';
+          ? L10n.couponAlreadyClaimedShort
+          : L10n.couponSavedToMyCoupons;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
       );
@@ -101,7 +108,7 @@ class _ClaimableCouponCardState extends State<_ClaimableCouponCard> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('รับคูปองไม่สำเร็จ: $error'),
+            content: Text(L10n.claimCouponFailed(error)),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -178,9 +185,9 @@ class _ClaimableCouponCardState extends State<_ClaimableCouponCard> {
                               color: const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(999),
                             ),
-                            child: const Text(
-                              'รับแล้ว',
-                              style: TextStyle(
+                            child: Text(
+                              L10n.claimedBadge,
+                              style: const TextStyle(
                                 color: Color(0xFF2E7D32),
                                 fontWeight: FontWeight.w700,
                                 fontSize: 12,

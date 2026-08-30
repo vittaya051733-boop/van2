@@ -6,6 +6,7 @@ const DEFAULT_LEADER_RATE = 0.15;
 const DEFAULT_RIDER_CREDIT_DELAY_MINUTES = 120;
 const DEFAULT_SHOP_CREDIT_DELAY_MINUTES = 120;
 const DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD = 5;
+const DEFAULT_WITHDRAW_FEE_BAHT = 10;
 
 function readDouble(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -34,6 +35,14 @@ function readDelayMinutes(data, key, fallbackMinutes) {
   return Math.round(value);
 }
 
+function readWithdrawFeeBaht(data) {
+  const value = readDouble(data?.withdrawFeeBaht);
+  if (value == null || value < 0) {
+    return DEFAULT_WITHDRAW_FEE_BAHT;
+  }
+  return Math.round(value * 100) / 100;
+}
+
 function readSettlementConfigFromData(data) {
   const source = data && typeof data === 'object' ? data : {};
   return {
@@ -59,6 +68,7 @@ function readSettlementConfigFromData(data) {
       'withdrawBankCsvThreshold',
       DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD,
     ),
+    withdrawFeeBaht: readWithdrawFeeBaht(source),
   };
 }
 
@@ -106,6 +116,8 @@ module.exports = {
   DEFAULT_RIDER_CREDIT_DELAY_MINUTES,
   DEFAULT_SHOP_CREDIT_DELAY_MINUTES,
   DEFAULT_WITHDRAW_BANK_CSV_THRESHOLD,
+  DEFAULT_WITHDRAW_FEE_BAHT,
+  readWithdrawFeeBaht,
   readSettlementConfigFromData,
   createSettlementConfigLoader,
 };

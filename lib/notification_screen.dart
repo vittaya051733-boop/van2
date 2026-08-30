@@ -8,6 +8,8 @@ import 'chat_screen.dart';
 import 'models/user_profile.dart';
 import 'order_roadmap_screen.dart';
 import 'services/admin_support_service.dart';
+import 'l10n/l10n.dart';
+import 'services/locale_service.dart';
 import 'utils/app_colors.dart';
 
 class NotificationScreen extends StatelessWidget {
@@ -100,7 +102,7 @@ class NotificationScreen extends StatelessWidget {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('ปิด'),
+              child: Text(L10n.close),
             ),
           ],
         ),
@@ -128,11 +130,11 @@ class NotificationScreen extends StatelessWidget {
     if (orderId == null || orderId.isEmpty) {
       if (item.isAdminSupportReply) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('แจ้งเตือนนี้ไม่มีรหัสข้อความ')),
+          SnackBar(content: Text(L10n.notificationNoTicketId)),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('แจ้งเตือนนี้ไม่มีรหัสออเดอร์')),
+          SnackBar(content: Text(L10n.notificationNoOrderId)),
         );
       }
       return;
@@ -153,16 +155,19 @@ class NotificationScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    return Scaffold(
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
+        final user = FirebaseAuth.instance.currentUser;
+        return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.white,
-        title: const Text('แจ้งเตือน'),
+        title: Text(L10n.notificationsTitle),
         actions: <Widget>[
           IconButton(
-            tooltip: 'แชต',
+            tooltip: L10n.chatTitle,
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const ChatScreen()),
@@ -173,10 +178,10 @@ class NotificationScreen extends StatelessWidget {
         ],
       ),
       body: user == null || user.isAnonymous
-          ? const _NotificationEmptyState(
+          ? _NotificationEmptyState(
               icon: Icons.lock_outline_rounded,
-              title: 'กรุณาเข้าสู่ระบบ',
-              message: 'เข้าสู่ระบบเพื่อดูแจ้งเตือนของคุณ',
+              title: L10n.notificationSignInTitle,
+              message: L10n.notificationSignInMessage,
             )
           : StreamBuilder<List<_AppNotification>>(
               stream: _watchNotifications(user.uid),
@@ -185,19 +190,19 @@ class NotificationScreen extends StatelessWidget {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
-                  return const _NotificationEmptyState(
+                  return _NotificationEmptyState(
                     icon: Icons.error_outline_rounded,
-                    title: 'โหลดแจ้งเตือนไม่สำเร็จ',
-                    message: 'กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่',
+                    title: L10n.notificationLoadFailedTitle,
+                    message: L10n.notificationLoadFailedMessage,
                   );
                 }
 
                 final items = snapshot.data ?? const <_AppNotification>[];
                 if (items.isEmpty) {
-                  return const _NotificationEmptyState(
+                  return _NotificationEmptyState(
                     icon: Icons.notifications_none_rounded,
-                    title: 'ยังไม่มีแจ้งเตือน',
-                    message: 'อัปเดตคำสั่งซื้อและข้อความสำคัญจะแสดงที่นี่',
+                    title: L10n.notificationEmptyTitle,
+                    message: L10n.notificationEmptyMessage,
                   );
                 }
 
@@ -228,6 +233,8 @@ class NotificationScreen extends StatelessWidget {
                 );
               },
             ),
+    );
+      },
     );
   }
 }
@@ -268,8 +275,8 @@ class _NotificationHeader extends StatelessWidget {
           Expanded(
             child: Text(
               unreadCount == 0
-                  ? 'อ่านแจ้งเตือนครบแล้ว'
-                  : 'มีแจ้งเตือนใหม่ $unreadCount รายการ',
+                  ? L10n.notificationAllRead
+                  : L10n.notificationNewCount(unreadCount),
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: const Color(0xFF111827),
@@ -278,7 +285,7 @@ class _NotificationHeader extends StatelessWidget {
           ),
           TextButton(
             onPressed: onMarkAllRead,
-            child: const Text('อ่านทั้งหมด'),
+            child: Text(L10n.markAllRead),
           ),
         ],
       ),
@@ -368,7 +375,7 @@ class _NotificationTile extends StatelessWidget {
                       children: <Widget>[
                         _NotificationChip(label: item.actionLabel),
                         if (!item.isRead)
-                          const _NotificationChip(label: 'ใหม่'),
+                          _NotificationChip(label: L10n.badgeNew),
                       ],
                     ),
                   ],
@@ -506,18 +513,18 @@ class _AppNotification {
 
   String get actionLabel {
     if (isAdminAnnouncement) {
-      return 'ประกาศจากแอดมิน';
+      return L10n.notificationActionAdminAnnouncement;
     }
     if (isAdminSupportReply) {
-      return 'ข้อความแอดมิน';
+      return L10n.notificationActionAdminMessage;
     }
     if (isChat) {
-      return 'ข้อความ';
+      return L10n.notificationActionMessage;
     }
     if (orderId != null && orderId!.isNotEmpty) {
-      return 'เปิดออเดอร์';
+      return L10n.notificationActionOpenOrder;
     }
-    return 'แจ้งเตือน';
+    return L10n.notificationActionDefault;
   }
 
   String get timeLabel {
@@ -528,18 +535,18 @@ class _AppNotification {
     final now = DateTime.now();
     final diff = now.difference(value);
     if (diff.inMinutes < 1) {
-      return 'ตอนนี้';
+      return L10n.now;
     }
     if (diff.inHours < 1) {
-      return '${diff.inMinutes} นาที';
+      return L10n.timeAgoMinutes(diff.inMinutes);
     }
     if (diff.inDays < 1) {
-      return '${diff.inHours} ชม.';
+      return L10n.timeAgoHours(diff.inHours);
     }
     if (diff.inDays < 7) {
-      return '${diff.inDays} วัน';
+      return L10n.timeAgoDays(diff.inDays);
     }
-    return '${value.day}/${value.month}/${value.year + 543}';
+    return L10n.timeAgoDate(value.day, value.month, value.year);
   }
 
   factory _AppNotification.fromSnapshot(
@@ -547,7 +554,7 @@ class _AppNotification {
   ) {
     final data = doc.data() ?? const <String, dynamic>{};
     final title = _readString(data['title']).isEmpty
-        ? 'แจ้งเตือนใหม่'
+        ? L10n.notificationNewDefaultTitle
         : _readString(data['title']);
     return _AppNotification(
       id: doc.id,

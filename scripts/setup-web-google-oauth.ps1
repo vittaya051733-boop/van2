@@ -20,7 +20,7 @@ $AuthDomainsUrl = "https://console.firebase.google.com/project/$ProjectId/authen
 
 $Origins = @(
   'https://van1.web.app',
-  'https://van2.web.app',
+  'https://vantalad.web.app',
   'https://van3.web.app',
   'https://van4.web.app',
   'https://van-merchant.firebaseapp.com',
@@ -28,7 +28,7 @@ $Origins = @(
 )
 $Redirects = @(
   'https://van1.web.app/__/auth/handler',
-  'https://van2.web.app/__/auth/handler',
+  'https://vantalad.web.app/__/auth/handler',
   'https://van3.web.app/__/auth/handler',
   'https://van4.web.app/__/auth/handler',
   'https://van-merchant.firebaseapp.com/__/auth/handler'
@@ -51,12 +51,12 @@ Write-Host '2) Firebase → Authentication → Settings → Authorized domains' 
 Write-Host "   $AuthDomainsUrl"
 Write-Host '   Ensure these domains exist:' -ForegroundColor White
 Write-Host '     van1.web.app'
-Write-Host '     van2.web.app'
+Write-Host '     vantalad.web.app'
 Write-Host '     van3.web.app'
 Write-Host '     van4.web.app'
 Write-Host ''
 
-Write-Host '3) Wait ~1–5 minutes, then hard-refresh https://van2.web.app (Ctrl+Shift+R) and retry Google sign-in.' -ForegroundColor Green
+Write-Host '3) Wait ~1–5 minutes, then hard-refresh https://vantalad.web.app (Ctrl+Shift+R) and retry Google sign-in.' -ForegroundColor Green
 Write-Host ''
 
 Start-Process $OAuthConsoleUrl

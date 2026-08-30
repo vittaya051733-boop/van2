@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import 'catalog_search_utils.dart';
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
 import 'public_catalog_service.dart';
+import 'services/locale_service.dart';
 import 'services/nationwide_catalog_service.dart';
 
 class NationwideCategoryProductsScreen extends StatefulWidget {
@@ -50,6 +52,9 @@ class _NationwideCategoryProductsScreenState
 
   @override
   Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: LocaleService.instance,
+      builder: (context, _) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4FAFB),
       appBar: AppBar(
@@ -65,7 +70,7 @@ class _NationwideCategoryProductsScreenState
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: CatalogSearchBar(
               controller: _searchController,
-              hintText: 'ค้นหาใน${widget.categoryLabel}',
+              hintText: L10n.catalogSearchInCategory(widget.categoryLabel),
               onChanged: (value) => setState(() => _searchQuery = value),
             ),
           ),
@@ -79,7 +84,7 @@ class _NationwideCategoryProductsScreenState
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        'โหลดสินค้าไม่สำเร็จ: ${snapshot.error}',
+                        L10n.loadProductsFailed(snapshot.error!),
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -101,8 +106,8 @@ class _NationwideCategoryProductsScreenState
                       padding: const EdgeInsets.all(24),
                       child: Text(
                         _searchQuery.trim().isNotEmpty
-                            ? 'ไม่พบสินค้าที่ตรงกับ "${_searchQuery.trim()}"'
-                            : 'ยังไม่มีสินค้าส่งทั่วประเทศในหมวดนี้',
+                            ? L10n.catalogNoSearchResults(_searchQuery.trim())
+                            : L10n.noNationwideProductsInCategory,
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -126,6 +131,8 @@ class _NationwideCategoryProductsScreenState
           ),
         ],
       ),
+    );
+      },
     );
   }
 }

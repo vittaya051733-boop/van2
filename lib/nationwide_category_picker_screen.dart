@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'catalog_search_utils.dart';
 import 'category_catalog_screen.dart';
+import 'l10n/l10n.dart';
 import 'public_catalog_service.dart';
 import 'services/app_image_prefetch.dart';
 import 'services/nationwide_catalog_service.dart';
@@ -86,7 +87,7 @@ class _NationwideCategoryPickerScreenState
     return Scaffold(
       backgroundColor: const Color(0xFFF4FAFB),
       appBar: AppBar(
-        title: const Text('สินค้าส่งทั่วประเทศ'),
+        title: Text(L10n.nationwideShipping),
         backgroundColor: Colors.white,
         foregroundColor: const Color(0xFF111827),
         elevation: 0,
@@ -99,7 +100,7 @@ class _NationwideCategoryPickerScreenState
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'โหลดสินค้าไม่สำเร็จ: ${snapshot.error}',
+                  L10n.loadProductsFailed(snapshot.error!),
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -123,7 +124,7 @@ class _NationwideCategoryPickerScreenState
             children: <Widget>[
               CatalogSearchBar(
                 controller: _searchController,
-                hintText: 'ค้นหาสินค้าส่งทั่วประเทศ',
+                hintText: L10n.catalogSearchNationwide,
                 margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 onChanged: (value) => setState(() => _searchQuery = value),
               ),
@@ -156,11 +157,11 @@ class _NationwideCategoryPickerScreenState
     required List<PublicCatalogProduct> products,
   }) {
     if (sectionsEmpty && snapshot.connectionState != ConnectionState.waiting) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
-            'ยังไม่มีสินค้าส่งทั่วประเทศในตอนนี้',
+            L10n.noNationwideProductsNow,
             textAlign: TextAlign.center,
           ),
         ),
@@ -177,10 +178,10 @@ class _NationwideCategoryPickerScreenState
       final hasCategory =
           (_selectedCategoryKey?.trim().isNotEmpty ?? false);
       final emptyMessage = hasSearch
-          ? 'ไม่พบสินค้าที่ตรงกับ "${_searchQuery.trim()}"'
+          ? L10n.catalogNoSearchResults(_searchQuery.trim())
           : hasCategory
-          ? 'ยังไม่มีสินค้าส่งทั่วประเทศในประเภทนี้'
-          : 'ยังไม่มีสินค้าส่งทั่วประเทศในตอนนี้';
+          ? L10n.noNationwideProductsInCategory
+          : L10n.noNationwideProductsNow;
 
       return Center(
         child: Padding(
@@ -227,7 +228,7 @@ class _NationwideCategoryDropdown extends StatelessWidget {
 
     return InputDecorator(
       decoration: InputDecoration(
-        labelText: 'ประเภทสินค้า',
+        labelText: L10n.productCategory,
         filled: true,
         fillColor: Colors.white,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -252,12 +253,17 @@ class _NationwideCategoryDropdown extends StatelessWidget {
           items: <DropdownMenuItem<String>>[
             DropdownMenuItem<String>(
               value: '',
-              child: Text('ทั้งหมด ($totalProductCount รายการ)'),
+              child: Text(L10n.allItemsCount(totalProductCount)),
             ),
             for (final category in categories)
               DropdownMenuItem<String>(
                 value: category.key,
-                child: Text('${category.label} (${category.productCount} รายการ)'),
+                child: Text(
+                  L10n.categoryItemsCount(
+                    category.label,
+                    category.productCount,
+                  ),
+                ),
               ),
           ],
           onChanged: categories.isEmpty && totalProductCount == 0

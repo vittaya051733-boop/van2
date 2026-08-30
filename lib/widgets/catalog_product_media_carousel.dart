@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 
@@ -22,6 +23,10 @@ class CatalogProductMediaCarousel extends StatefulWidget {
     this.borderRadius = 18,
     this.showPageIndicator = true,
     this.playbackActive = true,
+    this.playVideo,
+    this.initialPage = 0,
+    this.pageIndex,
+    this.onPageChanged,
   });
 
   final Map<String, dynamic> productData;
@@ -35,6 +40,11 @@ class CatalogProductMediaCarousel extends StatefulWidget {
   final bool showPageIndicator;
   /// When false, video playback stops completely (e.g. user left this product).
   final bool playbackActive;
+  /// When set, controls play/pause separately from [playbackActive] (warm preload).
+  final bool? playVideo;
+  final int initialPage;
+  final int? pageIndex;
+  final ValueChanged<int>? onPageChanged;
 
   @override
   State<CatalogProductMediaCarousel> createState() =>
@@ -61,14 +71,42 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
 
   int get _pageCount => _imageUrls.length + (_showVideoPage ? 1 : 0);
 
+  int get _videoPageIndex => _showVideoPage ? _pageCount - 1 : -1;
+
+  bool get _isOnVideoPage =>
+      _showVideoPage && _currentPage == _videoPageIndex;
+
+  bool get _isAdjacentToVideoPage =>
+      _showVideoPage && _currentPage == _videoPageIndex - 1;
+
   @override
   void initState() {
     super.initState();
-    _pageController = PageController();
-    _prefetchVisibleAndNeighbors(0);
+    _currentPage = widget.initialPage.clamp(0, max(0, _pageCount - 1)).toInt();
+    _pageController = PageController(initialPage: _currentPage);
+    _prefetchVisibleAndNeighbors(_currentPage);
     if (_productHasVideo) {
       VideoPrefetchService.instance.preloadVideo(_videoUrl);
     }
+  }
+
+  void _jumpToPage(int index) {
+    final clamped = index.clamp(0, max(0, _pageCount - 1)).toInt();
+    if (clamped == _currentPage) {
+      return;
+    }
+    _currentPage = clamped;
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(clamped);
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_pageController.hasClients) {
+          return;
+        }
+        _pageController.jumpToPage(clamped);
+      });
+    }
+    _prefetchVisibleAndNeighbors(clamped);
   }
 
   @override
@@ -76,18 +114,20 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
     super.didUpdateWidget(oldWidget);
     if (oldWidget.playbackActive != widget.playbackActive &&
         !widget.playbackActive) {
-      setState(() => _currentPage = 0);
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(0);
-      }
+      _jumpToPage(0);
+      setState(() {});
+    }
+    if (widget.pageIndex != null &&
+        widget.pageIndex != oldWidget.pageIndex &&
+        widget.pageIndex != _currentPage) {
+      _jumpToPage(widget.pageIndex!);
+      setState(() {});
     }
     if (oldWidget.productData != widget.productData) {
       _didPrefetchAll = false;
       if (_currentPage >= _pageCount) {
-        _currentPage = 0;
-        if (_pageController.hasClients) {
-          _pageController.jumpToPage(0);
-        }
+        _jumpToPage(0);
+        setState(() {});
       }
       _prefetchVisibleAndNeighbors(_currentPage);
     }
@@ -109,6 +149,10 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
     }
     if (pageIndex + 1 < _imageUrls.length) {
       urls.add(_imageUrls[pageIndex + 1]);
+    }
+    if (_showVideoPage &&
+        (pageIndex == _videoPageIndex || pageIndex == _videoPageIndex - 1)) {
+      VideoPrefetchService.instance.preloadVideo(_videoUrl);
     }
     if (urls.isNotEmpty) {
       unawaited(
@@ -139,9 +183,10 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
                 onPageChanged: (index) {
                   setState(() => _currentPage = index);
                   _prefetchVisibleAndNeighbors(index);
+                  widget.onPageChanged?.call(index);
                 },
                 itemBuilder: (context, index) {
-                  if (_showVideoPage && index == _pageCount - 1) {
+                  if (_showVideoPage && index == _videoPageIndex) {
                     return _buildVideoPage();
                   }
                   return _buildImagePage(_imageUrls[index]);
@@ -162,10 +207,47 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
             ],
           );
 
-    return _wrapTap(_buildFramedChild(media));
+    return _buildFramedChild(_wrapTapContent(media));
   }
 
   double get compactIndicatorBottom => widget.compact ? 6 : 10;
+
+  Widget _sizeChild(Widget child) {
+    if (widget.fixedHeight == null) {
+      return AspectRatio(aspectRatio: 1.05, child: child);
+    }
+    return SizedBox(
+      height: widget.fixedHeight,
+      width: double.infinity,
+      child: child,
+    );
+  }
+
+  /// Transparent layer above media so taps work on web [HtmlElementView] images.
+  Widget _wrapTapContent(Widget child) {
+    if (widget.onTap == null) {
+      return _sizeChild(child);
+    }
+
+    return _sizeChild(
+      Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          child,
+          Positioned.fill(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                onTap: widget.onTap,
+                behavior: HitTestBehavior.translucent,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildSinglePage() {
     if (_showVideoPage && _imageUrls.isEmpty) {
@@ -194,46 +276,30 @@ class _CatalogProductMediaCarouselState extends State<CatalogProductMediaCarouse
   }
 
   Widget _buildVideoPage() {
-    final isVideoPageActive =
-        widget.playbackActive && _currentPage == _pageCount - 1;
+    final shouldPlay = widget.playVideo ?? widget.playbackActive;
+    final warmVideo = _isOnVideoPage || _isAdjacentToVideoPage;
+    final isVideoPageActive = shouldPlay && _isOnVideoPage;
     return _KeepAliveCarouselPage(
       child: ProductVideoPlayer(
         videoUrl: _videoUrl!,
         thumbnailUrl: _videoThumbnailUrl,
         isActive: isVideoPageActive,
-        hostActive: widget.playbackActive,
+        hostActive: widget.playbackActive && warmVideo,
       ),
     );
   }
 
   Widget _buildFramedChild(Widget child) {
+    final frameColor =
+        _isOnVideoPage ? Colors.black : const Color(0xFFF8FAFC);
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: frameColor,
         borderRadius: BorderRadius.circular(widget.borderRadius),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       clipBehavior: Clip.antiAlias,
       child: child,
-    );
-  }
-
-  Widget _wrapTap(Widget child) {
-    final framed = widget.fixedHeight == null
-        ? AspectRatio(aspectRatio: 1.05, child: child)
-        : SizedBox(
-            height: widget.fixedHeight,
-            width: double.infinity,
-            child: child,
-          );
-
-    if (widget.onTap == null) {
-      return framed;
-    }
-
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: framed,
     );
   }
 }
@@ -255,7 +321,7 @@ class _KeepAliveCarouselPageState extends State<_KeepAliveCarouselPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return widget.child;
+    return SizedBox.expand(child: widget.child);
   }
 }
 

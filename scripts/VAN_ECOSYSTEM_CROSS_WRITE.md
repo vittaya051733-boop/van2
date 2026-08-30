@@ -65,7 +65,8 @@ Project: **`van-merchant`** — Firestore DB `(default)` แชร์ van1, van2
 
 | Path | van4 เขียน | van1 | van2 | van3 | หมายเหตุ |
 |------|------------|------|------|------|----------|
-| `orders/{id}` | **W** / **CF** | **R** | **R** | **R** | cancel, payout status, credit release |
+| `orders/{id}` | **W** / **CF** | **R** | **R** | **R** | cancel, payout status, credit release, `adminResolveClaim` replacement |
+| `order_claims/{id}` | **CF** | — | — | — | van4 เรียก CF; client ห้าม create |
 | `orders/{id}/timeline` | **W** | **R** | **R** | **R** | admin cancel event |
 | `withdraw_requests` | **CF** | **R** | — | **R** | van4 UI เรียก CF ไม่เขียนตรง |
 
@@ -110,6 +111,7 @@ Project: **`van-merchant`** — Firestore DB `(default)` แชร์ van1, van2
 | `pushAppNotification` | van2 | backend |
 | withdraw approve/reject | van2 | van4 |
 | `adminUpdateOrderCreditRelease` | van2 | van4 |
+| `adminResolveClaim` | van2 | van4 |
 
 **กฎ:** แก้ function ใน van2 → ระบุว่า van ไหนเรียก; deploy **ทีละชื่อ** + smoke
 

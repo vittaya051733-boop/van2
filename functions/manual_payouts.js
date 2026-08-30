@@ -1,4 +1,5 @@
 const { assertVan4Admin } = require('./social/admin_guard');
+const { DEFAULT_WITHDRAW_FEE_BAHT } = require('./settlement_config');
 const {
   MIN_WITHDRAW_BAHT,
   mapThaiBankToOmiseBrand,
@@ -113,6 +114,26 @@ function csvCell(value) {
   return text;
 }
 
+function resolveWithdrawFeeBaht(config) {
+  const fee = readMoney(config?.withdrawFeeBaht);
+  if (!Number.isFinite(fee) || fee < 0) {
+    return DEFAULT_WITHDRAW_FEE_BAHT;
+  }
+  return roundMoney(fee);
+}
+
+function resolveNetPayout(data) {
+  const amount = readMoney(data?.amount);
+  if (data?.netPayout != null) {
+    return roundMoney(data.netPayout);
+  }
+  const fee =
+    data?.withdrawFeeBaht != null
+      ? readMoney(data.withdrawFeeBaht)
+      : 0;
+  return roundMoney(Math.max(0, amount - fee));
+}
+
 function formatCsvTimestamp(value) {
   if (!value) {
     return '';
@@ -176,13 +197,26 @@ function createManualPayoutHandlers(deps) {
     const actorType = String(request.data?.actorType || 'rider').trim();
     const amount = roundMoney(request.data?.amount);
 
+    const config = await loadSettlementConfig().catch(() => null);
+    const withdrawFeeBaht = resolveWithdrawFeeBaht(config);
+    const minGrossWithdrawAmount = roundMoney(MIN_WITHDRAW_BAHT + withdrawFeeBaht);
+    const netPayout = roundMoney(amount - withdrawFeeBaht);
+
     if (actorType !== 'rider' && actorType !== 'merchant') {
       throw new HttpsError('invalid-argument', 'actorType ไม่ถูกต้อง');
     }
-    if (!Number.isFinite(amount) || amount < MIN_WITHDRAW_BAHT) {
+    if (!Number.isFinite(amount) || amount < minGrossWithdrawAmount) {
       throw new HttpsError(
         'invalid-argument',
-        `ยอดถอนขั้นต่ำ ${MIN_WITHDRAW_BAHT} บาท`,
+        withdrawFeeBaht > 0
+          ? `ยอดถอนขั้นต่ำ ${MIN_WITHDRAW_BAHT} บาท (หลังหักค่าบริการ ${withdrawFeeBaht.toFixed(2)} บาท) — ระบุจากกระเป๋าอย่างน้อย ${minGrossWithdrawAmount.toFixed(2)} บาท`
+          : `ยอดถอนขั้นต่ำ ${MIN_WITHDRAW_BAHT} บาท`,
+      );
+    }
+    if (netPayout + 0.001 < MIN_WITHDRAW_BAHT) {
+      throw new HttpsError(
+        'invalid-argument',
+        `ยอดที่ได้รับหลังหักค่าบริการต้องไม่ต่ำกว่า ${MIN_WITHDRAW_BAHT} บาท`,
       );
     }
 
@@ -229,6 +263,8 @@ function createManualPayoutHandlers(deps) {
         uid,
         actorType,
         amount,
+        withdrawFeeBaht,
+        netPayout,
         payoutMethod,
         payoutDestination,
         status: 'pending_admin',
@@ -243,6 +279,8 @@ function createManualPayoutHandlers(deps) {
       return {
         withdrawRequestId: withdrawRef.id,
         amount,
+        withdrawFeeBaht,
+        netPayout,
         payoutMethod,
       };
     });
@@ -251,6 +289,8 @@ function createManualPayoutHandlers(deps) {
       uid,
       actorType,
       amount,
+      withdrawFeeBaht,
+      netPayout,
       payoutMethod,
       withdrawRequestId: reservation.withdrawRequestId,
     });
@@ -323,7 +363,7 @@ function createManualPayoutHandlers(deps) {
           csvCell(destination.bankName || ''),
           csvCell(destination.accountNumber || ''),
           csvCell(destination.accountName || ''),
-          csvCell(readMoney(data.amount).toFixed(2)),
+          csvCell(readMoney(data.netPayout ?? resolveNetPayout(data)).toFixed(2)),
           csvCell(data.actorType || ''),
           csvCell(data.uid || ''),
           csvCell(formatCsvTimestamp(data.timestamp)),
@@ -414,6 +454,8 @@ function createManualPayoutHandlers(deps) {
       }
 
       const amount = readMoney(data.amount);
+      const withdrawFeeBaht = readMoney(data.withdrawFeeBaht);
+      const netPayout = resolveNetPayout(data);
       const adminPayoutMethod = String(
         request.data?.adminPayoutMethod || data.payoutMethod || '',
       )
@@ -446,7 +488,7 @@ function createManualPayoutHandlers(deps) {
         paymentGroupId: withdrawRequestId,
         fileName,
         contentType,
-        expectedCombinedAmount: amount,
+        expectedCombinedAmount: netPayout,
         validateSlipReceiver: (providerPayload) =>
           validateWithdrawSlipReceiver(
             providerPayload,
@@ -491,6 +533,8 @@ function createManualPayoutHandlers(deps) {
         withdrawRequestId,
         status: 'paid',
         amount,
+        withdrawFeeBaht,
+        netPayout,
       };
     },
   );
@@ -535,12 +579,16 @@ function createManualPayoutHandlers(deps) {
 
     const withdrawBankCsvThreshold =
       configResult?.withdrawBankCsvThreshold ?? 5;
+    const withdrawFeeBaht = resolveWithdrawFeeBaht(configResult);
+    const minGrossWithdrawAmount = roundMoney(MIN_WITHDRAW_BAHT + withdrawFeeBaht);
 
     return {
       uid,
       actorType,
       ...balance,
       minWithdrawAmount: MIN_WITHDRAW_BAHT,
+      minGrossWithdrawAmount,
+      withdrawFeeBaht,
       bankLabel,
       accountName,
       promptPayLabel,

@@ -36,7 +36,9 @@ Future<void> shareCatalogProduct(
 }) async {
   try {
     final data = productDataForImage ?? product.data;
-    final name = (data['name'] ?? product.data['name'] ?? 'สินค้า').toString().trim();
+    final name = (data['name'] ?? product.data['name'] ?? 'สินค้า')
+        .toString()
+        .trim();
     final price = TaxPricingPolicy.resolveCustomerUnitPrice(data);
     final discountPercent = TaxPricingPolicy.parseDiscountPercent(
       data['discountPercent'] ?? product.data['discountPercent'],
@@ -44,9 +46,10 @@ Future<void> shareCatalogProduct(
     final shopName = product.shopName?.trim().isNotEmpty == true
         ? product.shopName!.trim()
         : 'ร้านค้า';
-    final description = (data['description'] ?? product.data['description'] ?? '')
-        .toString()
-        .trim();
+    final description =
+        (data['description'] ?? product.data['description'] ?? '')
+            .toString()
+            .trim();
     final shareShopId = _resolveShareShopId(product);
     final shareUrl = CatalogProductLink.buildShareUrl(
       productId: product.id,
@@ -208,8 +211,9 @@ Future<void> _shareProductPayload({
           shareUrl: shareUrl,
         );
   final shareMime = shareBytes != null ? 'image/png' : 'image/jpeg';
-  final shareFileName =
-      shareBytes != null ? 'vantalad-product.png' : 'vantalad-product.jpg';
+  final shareFileName = shareBytes != null
+      ? 'vantalad-product.png'
+      : 'vantalad-product.jpg';
   final sharePositionOrigin = _sharePositionOrigin(context);
 
   if (shareBytes != null) {
@@ -230,6 +234,7 @@ Future<void> _shareProductPayload({
         context: context,
         imageBytes: shareBytes,
         message: shareUrl,
+        facebookCopyMessage: message,
         title: subject,
         mimeType: shareMime,
         fileName: shareFileName,
@@ -250,6 +255,7 @@ Future<void> _shareProductPayload({
         context: context,
         imageBytes: shareBytes,
         message: shareUrl,
+        facebookCopyMessage: message,
         title: subject,
         mimeType: shareMime,
         fileName: shareFileName,
@@ -264,11 +270,7 @@ Future<void> _shareProductPayload({
         sharePositionOrigin: sharePositionOrigin,
       ),
     );
-    await _showShareSuccess(
-      context,
-      copied: false,
-      withImage: false,
-    );
+    await _showShareSuccess(context, copied: false, withImage: false);
   } on MissingPluginException {
     await _copyShareFallback(
       message,
@@ -343,7 +345,9 @@ void _showShareImageMissing(BuildContext? context) {
   }
   ScaffoldMessenger.of(messengerContext).showSnackBar(
     const SnackBar(
-      content: Text('โหลดรูปไม่สำเร็จ — แชร์ข้อความและลิงก์ก่อน ลองบันทึกรูปจากหน้าสินค้า'),
+      content: Text(
+        'โหลดรูปไม่สำเร็จ — แชร์ข้อความและลิงก์ก่อน ลองบันทึกรูปจากหน้าสินค้า',
+      ),
       duration: Duration(seconds: 3),
       behavior: SnackBarBehavior.floating,
     ),

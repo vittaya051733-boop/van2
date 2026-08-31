@@ -10,6 +10,7 @@ Future<void> showProductShareSheet({
   required BuildContext context,
   required Uint8List imageBytes,
   required String message,
+  String? facebookCopyMessage,
   required String title,
   String mimeType = 'image/png',
   String fileName = 'vantalad-product.png',
@@ -32,28 +33,69 @@ Future<void> showProductShareSheet({
             children: <Widget>[
               Text(
                 'แชร์สินค้า',
-                style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
+                style: Theme.of(
+                  sheetContext,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.memory(
-                  imageBytes,
-                  fit: BoxFit.fitWidth,
-                ),
+                child: Image.memory(imageBytes, fit: BoxFit.fitWidth),
               ),
               const SizedBox(height: 12),
               Text(
                 'ภาพนี้รวมรูปและรายละเอียดแล้ว พร้อมแนบลิงก์คลิกได้ใต้ภาพ',
-                style: Theme.of(sheetContext).textTheme.bodySmall?.copyWith(
-                  color: const Color(0xFF6B7280),
-                ),
+                style: Theme.of(
+                  sheetContext,
+                ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
+              if (kIsWeb) ...<Widget>[
+                FilledButton.icon(
+                  onPressed: () async {
+                    try {
+                      final download = catalog_share_actions
+                          .downloadWebShareImage(
+                            imageBytes,
+                            mimeType: mimeType,
+                            fileName: fileName,
+                          );
+                      final copy = catalog_share_actions.copyWebShareText(
+                        facebookCopyMessage ?? message,
+                      );
+                      await Future.wait<void>(<Future<void>>[download, copy]);
+                      if (sheetContext.mounted) {
+                        Navigator.of(sheetContext).pop();
+                        ScaffoldMessenger.of(sheetContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'ดาวน์โหลดภาพและคัดลอกข้อความแล้ว — แนบภาพและวางข้อความในโพสต์ Facebook',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                            duration: Duration(seconds: 4),
+                          ),
+                        );
+                      }
+                    } catch (_) {
+                      if (sheetContext.mounted) {
+                        ScaffoldMessenger.of(sheetContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'เตรียมโพสต์ไม่สำเร็จ กรุณาลองคัดลอกหรือบันทึกภาพแยกกัน',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.facebook),
+                  label: const Text('เตรียมโพสต์ Facebook'),
+                ),
+                const SizedBox(height: 8),
+              ],
               FilledButton.icon(
                 onPressed: () async {
                   final shared = await catalog_share_actions.tryWebNativeShare(
@@ -117,12 +159,12 @@ Future<void> showWebProductShareSheet({
   required String title,
   String mimeType = 'image/jpeg',
   String fileName = 'vantalad-product.jpg',
-}) =>
-    showProductShareSheet(
-      context: context,
-      imageBytes: imageBytes,
-      message: message,
-      title: title,
-      mimeType: mimeType,
-      fileName: fileName,
-    );
+}) => showProductShareSheet(
+  context: context,
+  imageBytes: imageBytes,
+  message: message,
+  facebookCopyMessage: message,
+  title: title,
+  mimeType: mimeType,
+  fileName: fileName,
+);

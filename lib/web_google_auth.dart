@@ -7,6 +7,17 @@ Future<UserCredential> signInWithGoogleForWeb() async {
   provider.setCustomParameters(<String, String>{'prompt': 'select_account'});
 
   try {
+    final useRedirectFirst =
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+    if (useRedirectFirst) {
+      await FirebaseAuth.instance.signInWithRedirect(provider);
+      throw FirebaseAuthException(
+        code: 'auth/redirect-initiated',
+        message: 'กำลังเปิดหน้าเข้าสู่ระบบ Google...',
+      );
+    }
+
     return await FirebaseAuth.instance.signInWithPopup(provider);
   } on FirebaseAuthException catch (error) {
     final useRedirect = error.code == 'auth/popup-blocked' ||

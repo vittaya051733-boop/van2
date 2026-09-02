@@ -78,7 +78,8 @@ Project: **`van-merchant`** — Firestore DB `(default)` แชร์ van1, van2
 
 | Collection | van4 | van1/2/3 |
 |------------|------|----------|
-| `admins/{email}` | **W** | — |
+| `admins/{email}` | **W** (Console/CF) | — | `role`, `branchId`, `branchIds` |
+| `orders/{id}` | **W** CF | **R** all vans + van4 branch filter | **`branchId`**, **`branchName`** (expand-only, checkout stamp) |
 | `admin_presence/{uid}` | **W** | — |
 | `admin_internal_threads` | **W** | — |
 | `admin_support_tickets` | **W** | **R** (inbox ฝั่ง user ทุก van) |

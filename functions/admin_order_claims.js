@@ -1,5 +1,5 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { assertVan4Admin } = require('./social/admin_guard');
+const { assertVan4Admin, assertAdminBranchAccess, resolveMerchantBranchId } = require('./social/admin_guard');
 
 const ORDERS_COLLECTION = 'orders';
 const ORDER_CLAIMS_COLLECTION = 'order_claims';
@@ -631,6 +631,7 @@ function registerHandlers() {
         throw new HttpsError('not-found', 'ไม่พบออเดอร์เดิม');
       }
       const originalData = originalSnap.data() || {};
+      await assertAdminBranchAccess(request, originalData.branchId || originalData.marketId);
       const existingStatus = readString(originalData.claimStatus).toLowerCase();
       if (existingStatus === 'replaced' || existingStatus === 'credited') {
         throw new HttpsError('failed-precondition', 'ออเดอร์นี้เคลมไปแล้ว');

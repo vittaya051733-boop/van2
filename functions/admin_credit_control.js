@@ -1,5 +1,5 @@
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
-const { assertVan4Admin } = require('./social/admin_guard');
+const { assertVan4Admin, assertSuperAdmin, assertAdminBranchAccess, resolveMerchantBranchId } = require('./social/admin_guard');
 const { syncMerchantWallet } = require('./merchant_wallet');
 
 const CREDITS_COLLECTION = 'credits';
@@ -172,7 +172,7 @@ function registerHandlers() {
   const adminGetCreditOverview = onCall(
     { region: DEFAULT_REGION, enforceAppCheck: true },
     async (request) => {
-      await assertVan4Admin(request);
+      await assertSuperAdmin(request);
 
       const walletsSnap = await db.collection(MERCHANT_WALLETS_COLLECTION).limit(5000).get();
       let merchantCreditTotal = 0;

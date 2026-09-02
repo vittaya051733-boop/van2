@@ -5082,6 +5082,9 @@ adminCreditControl.init({
 });
 Object.assign(exports, adminCreditControl.registerHandlers());
 
+const { registerAdminProvisionHandlers } = require('./admin_provision');
+Object.assign(exports, registerAdminProvisionHandlers());
+
 const riderOrderOps = require('./rider_order_ops');
 riderOrderOps.init({ db, FieldValue, HttpsError, DEFAULT_REGION });
 Object.assign(exports, riderOrderOps.registerHandlers());

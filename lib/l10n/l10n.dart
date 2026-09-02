@@ -91,6 +91,8 @@ class L10n {
   static String get sendOtp => en ? 'Send OTP' : 'ส่ง OTP';
   static String get signInWithGoogle =>
       en ? 'Sign in with Google' : 'เข้าสู่ระบบด้วย Google';
+  static String get signInWithApple =>
+      en ? 'Sign in with Apple' : 'เข้าสู่ระบบด้วย Apple';
   static String get signingIn => en ? 'Signing in...' : 'กำลังเข้าสู่ระบบ...';
 
   static String signInToUseCategory(String categoryLabel) => en
@@ -114,6 +116,21 @@ class L10n {
   static String googleSignInFailed(String message) => en
       ? 'Google sign-in failed: $message'
       : 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ: $message';
+
+  static String get signInSuccessApple =>
+      en ? 'Signed in with Apple' : 'เข้าสู่ระบบด้วย Apple สำเร็จ';
+
+  static String appleSignInFailed(String message) => en
+      ? 'Apple sign-in failed: $message'
+      : 'เข้าสู่ระบบด้วย Apple ไม่สำเร็จ: $message';
+
+  static String oauthSignInFailed(String message) => en
+      ? 'Social sign-in failed: $message'
+      : 'เข้าสู่ระบบด้วยบัญชีภายนอกไม่สำเร็จ: $message';
+
+  static String get appleAccountExistsWithDifferentCredential => en
+      ? 'This email already uses another sign-in method. Please use the original method.'
+      : 'อีเมลนี้ใช้วิธีเข้าสู่ระบบอื่นอยู่แล้ว กรุณาเข้าสู่ระบบด้วยวิธีเดิม';
 
   static String get lookupIdentifierFailed =>
       en ? 'Unable to verify sign-in details' : 'ตรวจสอบข้อมูลเข้าสู่ระบบไม่สำเร็จ';

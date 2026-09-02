@@ -14,6 +14,8 @@ import 'services/notification_service.dart';
 import 'services/privacy_consent_service.dart';
 import 'l10n/l10n.dart';
 import 'utils/app_check_guard.dart';
+import 'apple_auth.dart';
+import 'web_apple_auth.dart';
 import 'web_google_auth.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -46,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     if (kIsWeb) {
-      unawaited(_handleWebGoogleRedirectResult());
+      unawaited(_handleWebOAuthRedirectResult());
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
@@ -62,27 +64,28 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _restoreAnonymousBrowsingSession() => restoreAnonymousBrowsingSession();
 
-  Future<void> _handleWebGoogleRedirectResult() async {
+  Future<void> _handleWebOAuthRedirectResult() async {
     try {
-      final result = await handleWebGoogleRedirectResult();
+      final result = await handleWebOAuthRedirectResult();
       final user = result?.user;
       if (user == null || !mounted) {
         return;
       }
 
+      final apple = isAppleCredential(result!);
       _showSnackBar(
         user.displayName?.trim().isNotEmpty == true
             ? L10n.signInSuccessWithName(user.displayName!)
-            : L10n.signInSuccessGoogle,
+            : apple
+                ? L10n.signInSuccessApple
+                : L10n.signInSuccessGoogle,
       );
       _completeLogin();
     } on FirebaseAuthException catch (error) {
       if (!mounted) {
         return;
       }
-      _showSnackBar(
-        L10n.googleSignInFailed(error.message ?? error.code),
-      );
+      _showSnackBar(L10n.oauthSignInFailed(error.message ?? error.code));
       await _restoreAnonymousBrowsingSession();
     } catch (_) {
       await _restoreAnonymousBrowsingSession();
@@ -545,6 +548,7 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final UserCredential credential;
       if (kIsWeb) {
+        await signOutAnonymousBeforeOAuth();
         credential = await signInWithGoogleForWeb();
       } else {
         final googleUser = await GoogleSignIn(
@@ -599,6 +603,74 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _signInWithApple() async {
+    if (!widget.firebaseEnabled) {
+      _showSnackBar(L10n.firebaseNotReady);
+      return;
+    }
+
+    setState(() => _isSigningIn = true);
+
+    try {
+      await signOutAnonymousBeforeOAuth();
+      final credential = await signInWithApple();
+
+      if (!mounted) {
+        return;
+      }
+
+      final user = credential.user;
+      _showSnackBar(
+        user?.displayName?.trim().isNotEmpty == true
+            ? L10n.signInSuccessWithName(user!.displayName!)
+            : L10n.signInSuccessApple,
+      );
+      _completeLogin();
+    } on FirebaseAuthException catch (error) {
+      if (_isOAuthCancellation(error.code)) {
+        if (!_isOAuthRedirect(error.code)) {
+          await _restoreAnonymousBrowsingSession();
+        }
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      _showSnackBar(
+        _isAccountExistsWithDifferentCredential(error.code)
+            ? L10n.appleAccountExistsWithDifferentCredential
+            : L10n.appleSignInFailed(error.message ?? error.code),
+      );
+      await _restoreAnonymousBrowsingSession();
+    } catch (error) {
+      if (mounted) {
+        _showSnackBar(L10n.appleSignInFailed('$error'));
+      }
+      await _restoreAnonymousBrowsingSession();
+    } finally {
+      if (mounted) {
+        setState(() => _isSigningIn = false);
+      }
+    }
+  }
+
+  bool _isOAuthCancellation(String code) {
+    return code == 'popup-closed-by-user' ||
+        code == 'auth/popup-closed-by-user' ||
+        code == 'cancelled-popup-request' ||
+        code == 'auth/cancelled-popup-request' ||
+        _isOAuthRedirect(code);
+  }
+
+  bool _isOAuthRedirect(String code) {
+    return code == 'redirect-initiated' || code == 'auth/redirect-initiated';
+  }
+
+  bool _isAccountExistsWithDifferentCredential(String code) {
+    return code == 'account-exists-with-different-credential' ||
+        code == 'auth/account-exists-with-different-credential';
+  }
+
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(
       context,
@@ -647,7 +719,7 @@ class _LoginScreenState extends State<LoginScreen> {
         foregroundColor: Colors.white,
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -737,6 +809,29 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
               ),
+              if (isAppleSignInSupported) ...<Widget>[
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _isSigningIn ? null : _signInWithApple,
+                    icon: const Icon(Icons.apple, size: 22),
+                    label: Text(
+                      _isSigningIn ? L10n.signingIn : L10n.signInWithApple,
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.black,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: Colors.black54,
+                      disabledForegroundColor: Colors.white70,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

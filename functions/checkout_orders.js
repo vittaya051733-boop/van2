@@ -29,6 +29,27 @@ function slipAmountsMatch(actualAmount, expectedAmount) {
   return Math.abs(actual - expected) < 0.01;
 }
 
+function normalizeBranchId(raw) {
+  const value = String(raw || '').trim();
+  if (!value) {
+    return 'central';
+  }
+  if (value === 'nonsung') {
+    return 'central';
+  }
+  return value;
+}
+
+function resolveShopBranchFieldsFromRecord(data) {
+  const branchId = normalizeBranchId(data?.branchId || data?.marketId);
+  const branchName = String(data?.branchName || '').trim();
+  return {
+    branchId,
+    marketId: branchId,
+    ...(branchName ? { branchName } : {}),
+  };
+}
+
 async function loadVerifiedStandaloneSlipFeedback(
   db,
   HttpsError,
@@ -400,12 +421,12 @@ async function loadPublicShopProfileMap(db, shopIds) {
       const data = snapshot.data() || {};
       const shopImageUrl = resolveShopImageUrlFromRecord(data);
       const coords = resolveShopCoordinatesFromRecord(data);
-      if (shopImageUrl || coords) {
-        profileMap.set(shopId, {
-          ...(shopImageUrl ? { shopImageUrl } : {}),
-          ...(coords || {}),
-        });
-      }
+      const branchFields = resolveShopBranchFieldsFromRecord(data);
+      profileMap.set(shopId, {
+        ...(shopImageUrl ? { shopImageUrl } : {}),
+        ...(coords || {}),
+        ...branchFields,
+      });
     } catch (_) {
       // Optional enrichment — checkout must still succeed.
     }
@@ -1446,6 +1467,7 @@ async function createCheckoutOrdersHandler(request, deps) {
     const products = buildProductsPayload(lines);
     const productIds = [...new Set(lines.map((line) => line.productId).filter(Boolean))];
     const publicShopProfile = publicShopProfileMap.get(shopId) || {};
+    const shopBranchFields = resolveShopBranchFieldsFromRecord(publicShopProfile);
     const shopImageUrl =
       String(firstItem.shopImageUrl || '').trim()
       || String(publicShopProfile.shopImageUrl || '').trim()
@@ -1493,6 +1515,7 @@ async function createCheckoutOrdersHandler(request, deps) {
       shopOwnerId: shopId,
       shopId,
       shopName: firstItem.shopName,
+      ...shopBranchFields,
       ...(shopImageUrl || hasShopCoordinates
         ? {
             shopSnapshot: {
@@ -1811,6 +1834,7 @@ async function createNationwideParcelOrdersHandler(request, deps) {
   });
 
   const grouped = groupLinesByShop(resolvedLines);
+  const publicShopProfileMap = await loadPublicShopProfileMap(db, [...grouped.keys()]);
   const shopOrderDrafts = [];
   let combinedGrandTotal = 0;
 
@@ -1879,6 +1903,9 @@ async function createNationwideParcelOrdersHandler(request, deps) {
     const orderCode = buildOrderCode('NWP', orderRef.id, now);
     const products = buildProductsPayload(lines);
     const productIdsForOrder = [...new Set(lines.map((line) => line.productId).filter(Boolean))];
+    const shopBranchFields = resolveShopBranchFieldsFromRecord(
+      publicShopProfileMap.get(firstItem.shopId) || {},
+    );
 
     batch.set(orderRef, {
       orderId: orderRef.id,
@@ -1931,6 +1958,7 @@ async function createNationwideParcelOrdersHandler(request, deps) {
       shopOwnerId: firstItem.shopId,
       shopId: firstItem.shopId,
       shopName: firstItem.shopName,
+      ...shopBranchFields,
       deliveryAddress,
       itemCount: lines.length,
       totalQuantity,

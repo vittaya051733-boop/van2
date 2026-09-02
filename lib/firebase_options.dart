@@ -30,7 +30,7 @@ class DefaultFirebaseOptions {
     appId: '1:802503541368:web:652e4356653d7cbcf6a38d',
     messagingSenderId: '802503541368',
     projectId: 'van-merchant',
-    authDomain: 'van-merchant.firebaseapp.com',
+    authDomain: 'vantalad.web.app',
     storageBucket: 'van-merchant-van2-storage-802503541368',
     measurementId: 'G-WNMT2HGLVF',
   );

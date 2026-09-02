@@ -36,7 +36,9 @@ Project: **van-merchant** · DB: `(default)`
 
 | Path | Field สำคัญ | Writer | Reader | Default |
 |------|-------------|--------|--------|---------|
-| `orders/{id}` | `status`, `settlement`, `shopPayout`, `riderPayout`, `driverId`, `shopOwnerId`, `customerId`, `orderType`, `originOrderId`, `claimId`, `claimStatus`, `replacementOrderId`, `claimCreditCouponId` | van2 CF / van4 | van1,2,3 | ไม่มี `orderType`/`claim*` = ออเดอร์ปกติ; UI แสดง "—" ถ้าไม่มี payout |
+| `orders/{id}` | `status`, `settlement`, `shopPayout`, `riderPayout`, `driverId`, `shopOwnerId`, `customerId`, **`branchId`**, **`branchName`**, `marketId` (legacy alias), `orderType`, `originOrderId`, `claimId`, `claimStatus`, `replacementOrderId`, `claimCreditCouponId` | van2 CF / van4 | van1,2,3, van4 branch filter | ไม่มี `branchId` → van4 resolve จาก shop; rules branch admin ใช้ `branchId` |
+| `coupons/{id}` | … + optional **`branchId`** | van4 | van2 | null/ไม่มี = global (super admin only write) |
+| `promotions/{id}` | … + optional **`branchId`** | van4 | van2 | null/ไม่มี = global |
 | `order_claims/{id}` | `originalOrderId`, `customerId`, `kind` (`replacement`\|`credit`), `reason`, `adminUid`, `replacementOrderId` / `couponId`, `status` | van2 CF | van4 (R) | ไม่มีเอกสาร = ยังไม่เคลม |
 | `credits/{creditId}` | `uid`, `amount`, `type` (`top_up`, `order_cod_*`, `withdraw_*`, `admin_adjustment`, …), `reason`, `note`, `adminUid`, `actorType`, `orderId`, `timestamp` | CF / van4 admin CF | van1, van3, van4 | sum(`amount`) where `uid` = balance |
 | `credit_admin_actions/{id}` | mirror ของ admin adjust: `creditId`, `uid`, `amount`, `beforeBalance`, `afterBalance`, `reason`, `adminUid`, `actorType`, `createdAt` | van2 CF | van4 | ไม่มี = ไม่มีประวัติปรับมือ |
@@ -45,9 +47,10 @@ Project: **van-merchant** · DB: `(default)`
 
 ## กลุ่ม E — Admin
 
-| Collection | หมายเหตุ |
-|------------|----------|
-| `admins`, `admin_presence`, `admin_internal_threads` | van4 เป็นหลัก |
+| Collection | Field สำคัญ | Writer | Reader | Default |
+|------------|-------------|--------|--------|---------|
+| `admins/{email}` | `active`, `authUid`, `displayName`, **`role`** (`super_admin` \| `branch_admin`), **`branchId`**, `branchIds` (optional) | Console / CF `adminProvisionBranchAdmin` | van4 self get | ไม่มี `role` = `super_admin`; branch admin ต้องมี `branchId` |
+| `admin_presence`, `admin_internal_threads` | — | van4 | van4 | — |
 | `admin_support_tickets` | user ทุก van สร้างได้; van4 ตอบ; `orderId` ออปชัน; `claimRequest` `{ items[], reason, status, claimId? }` เมื่อ `topicKey=product_claim` (expand-only) |
 
 ## กลุ่ม E2 — Ecosystem heartbeats

@@ -26,6 +26,72 @@ service cloud.firestore {
       return isAdmin() || isAdminFromRegistry();
     }
 
+    function adminDoc() {
+      return get(/databases/$(database)/documents/admins/$(authEmail().lower()));
+    }
+
+    function isSuperAdmin() {
+      return isAdmin()
+          || (
+            isAdminFromRegistry()
+            && authEmail() != null
+            && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
+            && (
+              !('role' in adminDoc().data)
+              || adminDoc().data.role != 'branch_admin'
+            )
+          );
+    }
+
+    function isBranchAdmin() {
+      return !isAdmin()
+          && isAdminFromRegistry()
+          && authEmail() != null
+          && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
+          && adminDoc().data.role == 'branch_admin'
+          && adminDoc().data.branchId is string;
+    }
+
+    function adminBranchId() {
+      return adminDoc().data.branchId;
+    }
+
+    function branchMatchesData(data) {
+      let bid = data.get('branchId', null) != null
+          ? data.get('branchId', null)
+          : data.get('marketId', null);
+      return isSuperAdmin()
+          || (isBranchAdmin() && bid == adminBranchId())
+          || (isBranchAdmin() && bid == null && adminBranchId() == 'central');
+    }
+
+    function canAdminManageBranchEntity(data) {
+      return isSuperAdmin() || (isBranchAdmin() && data != null && branchMatchesData(data));
+    }
+
+    function canAdminReadPromo(data) {
+      return isSuperAdmin()
+          || (isBranchAdmin() && (
+            !('branchId' in data)
+            || data.branchId == null
+            || branchMatchesData(data)
+          ));
+    }
+
+    function canAdminWritePromoCreate(data) {
+      return isSuperAdmin()
+          || (isBranchAdmin()
+              && data.branchId is string
+              && data.branchId == adminBranchId());
+    }
+
+    function canAdminWritePromoUpdate(existing, incoming) {
+      return isSuperAdmin()
+          || (isBranchAdmin()
+              && branchMatchesData(existing)
+              && incoming.branchId == adminBranchId());
+    }
+
     function isSelf(userId) {
       return signedIn() && uid() == userId;
     }
@@ -143,13 +209,13 @@ service cloud.firestore {
       return signedIn()
           && data != null
           && (
-            (data.customerId != null && data.customerId == uid())
-            || (data.driverId != null && data.driverId == uid())
+            (data.get('customerId', null) != null && data.get('customerId', null) == uid())
+            || (data.get('driverId', null) != null && data.get('driverId', null) == uid())
             || (
               !isUnverifiedPromptPayOrder(data)
               && (
-                (data.shopId != null && data.shopId == uid())
-                || (data.shopOwnerId != null && data.shopOwnerId == uid())
+                (data.get('shopId', null) != null && data.get('shopId', null) == uid())
+                || (data.get('shopOwnerId', null) != null && data.get('shopOwnerId', null) == uid())
               )
             )
           );
@@ -763,25 +829,31 @@ service cloud.firestore {
     // สาขาระบบกลาง แอปทุกฝั่งอ่านเพื่อเช็กสถานะ/พิกัด/เวลาตัดรอบได้
     match /branches/{branchId} {
       allow get, list: if true;
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // อัตราบวกเพิ่มราคากลางของระบบ (เช่น 7% = 0.07)
     match /pricing_config/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // โปรโมชั่นอัตโนมัติ — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน
     match /promotions/{promotionId} {
-      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow get, list: if resource.data.active == true || canAdminReadPromo(resource.data);
+      allow create: if canAdminWritePromoCreate(request.resource.data);
+      allow update: if canAdminWritePromoUpdate(resource.data, request.resource.data);
+      allow delete: if isSuperAdmin()
+          || (isBranchAdmin() && branchMatchesData(resource.data));
     }
 
     // คูปอง — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน (ตรวจโค้ดจริงบน Cloud Functions)
     match /coupons/{couponId} {
-      allow get, list: if resource.data.active == true || isPrivilegedAdmin();
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow get, list: if resource.data.active == true || canAdminReadPromo(resource.data);
+      allow create: if canAdminWritePromoCreate(request.resource.data);
+      allow update: if canAdminWritePromoUpdate(resource.data, request.resource.data);
+      allow delete: if isSuperAdmin()
+          || (isBranchAdmin() && branchMatchesData(resource.data));
     }
 
     // บันทึกการใช้คูปอง/โปร — เขียนผ่าน Cloud Functions เท่านั้น
@@ -794,7 +866,7 @@ service cloud.firestore {
     // รูปแบบแสดงโปร/คูปองบน van2
     match /promotion_display_config/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // ตะกร้า van2 — อ่านได้เฉพาะเจ้าของ (เขียน/คืนสต๊อกผ่าน Cloud Functions เท่านั้น)
@@ -940,17 +1012,17 @@ service cloud.firestore {
 
     // สถานะไรเดอร์ออนไลน์ (ใช้ในหน้าตะกร้าฝั่งลูกค้า และอัปเดตจากแอปไรเดอร์)
     match /riders/{riderId} {
-      allow get: if isSelf(riderId) || isPrivilegedAdmin();
-      allow list: if isPrivilegedAdmin()
+      allow get: if isSelf(riderId) || canAdminManageBranchEntity(resource.data);
+      allow list: if canAdminManageBranchEntity(resource.data)
           || (
             signedIn()
             && request.query.limit <= 50
             && resource.data.onlineReady == true
           );
       allow create: if isSelf(riderId);
-      allow update: if isPrivilegedAdmin()
+      allow update: if canAdminManageBranchEntity(resource.data)
           || (isSelf(riderId) && riderPrivilegedFieldsUnchanged());
-      allow delete: if isPrivilegedAdmin();
+      allow delete: if isSuperAdmin();
     }
 
     // เอกสารลงทะเบียนไรเดอร์ (van3 RiderOnboardingGate)
@@ -1005,8 +1077,12 @@ service cloud.firestore {
     // โปรไฟล์ร้านแบบ public สำหรับลูกค้าใช้ดูชื่อ รูป และพิกัดล่าสุด
     match /public_shops/{shopId} {
       allow get, list: if true;
-      allow create: if !isAnonymous() && (isSelf(shopId) || isPrivilegedAdmin());
-      allow update, delete: if !isAnonymous() && (isSelf(shopId) || isPrivilegedAdmin());
+      allow create: if !isAnonymous() && (isSelf(shopId) || isSuperAdmin());
+      allow update, delete: if !isAnonymous() && (
+        isSelf(shopId)
+        || isSuperAdmin()
+        || (isBranchAdmin() && branchMatchesData(resource.data))
+      );
 
       match /catalog_types/{typeId} {
         allow get, list: if true;
@@ -1026,14 +1102,14 @@ service cloud.firestore {
       allow get: if isRegistrationCollection(collection)
           && signedIn()
           && (
-            isPrivilegedAdmin()
+            canAdminManageBranchEntity(resource.data)
             || isRegistrationOwner(docId)
           );
 
       allow list: if isRegistrationCollection(collection)
           && signedIn()
           && (
-            isPrivilegedAdmin()
+            canAdminManageBranchEntity(resource.data)
             || isRegistrationOwner(docId)
           );
 
@@ -1045,7 +1121,7 @@ service cloud.firestore {
       allow update: if isRegistrationCollection(collection)
           && signedIn()
           && (
-            isPrivilegedAdmin()
+            canAdminManageBranchEntity(resource.data)
             || (
               (
                 docId == uid()
@@ -1060,7 +1136,7 @@ service cloud.firestore {
           && (
             docId == uid()
             || (resource.data.ownerId != null && resource.data.ownerId == uid())
-            || isPrivilegedAdmin()
+            || isSuperAdmin()
           );
     }
 
@@ -1248,9 +1324,9 @@ service cloud.firestore {
 
     // ออเดอร์
     match /orders/{orderId} {
-      allow read: if canAccessOrderAsParticipant(resource.data) || isPrivilegedAdmin();
+      allow read: if canAccessOrderAsParticipant(resource.data) || canAdminManageBranchEntity(resource.data);
       allow create: if canClientCreateOrder(request.resource.data);
-      allow update: if isPrivilegedAdmin()
+      allow update: if canAdminManageBranchEntity(resource.data)
           || (
             (canAccessOrderAsParticipant(resource.data))
             && orderSensitiveFieldsUnchanged()
@@ -1259,20 +1335,22 @@ service cloud.firestore {
             && !clientCannotMutateOrderLifecycle()
             && !merchantPenaltyBlocksOrderAccept()
           );
-      allow delete: if isPrivilegedAdmin();
+      allow delete: if isSuperAdmin();
 
       match /timeline/{timelineId} {
         allow read: if signedIn()
             && (
               canAccessOrderAsParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data)
-              || isPrivilegedAdmin()
+              || canAdminManageBranchEntity(get(/databases/$(database)/documents/orders/$(orderId)).data)
             );
         allow create: if signedIn()
             && (
               canAccessOrderAsParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data)
-              || isPrivilegedAdmin()
+              || canAdminManageBranchEntity(get(/databases/$(database)/documents/orders/$(orderId)).data)
             );
-        allow update, delete: if isPrivilegedAdmin();
+        allow update, delete: if canAdminManageBranchEntity(
+            get(/databases/$(database)/documents/orders/$(orderId)).data
+          );
       }
     }
 
@@ -1360,13 +1438,13 @@ service cloud.firestore {
     match /admins/{emailId} {
       allow get: if signedIn()
           && (
-            isPrivilegedAdmin()
+            isSuperAdmin()
             || (
               authEmail() != null
               && authEmail().lower() == emailId
             )
           );
-      allow list: if isPrivilegedAdmin();
+      allow list: if isSuperAdmin();
       allow create, delete: if false;
       allow update: if signedIn()
           && authEmail() != null
@@ -1400,14 +1478,14 @@ service cloud.firestore {
 
     // ตั้งค่าแอดมิน van4 (อนุมัติอัตโนมัติ ฯลฯ)
     match /admin_config/{docId} {
-      allow get, list: if isPrivilegedAdmin();
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow get, list: if isSuperAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // ชั้นสินค้าหน้าแรก van2 (แอดมินแก้ไข / ลูกค้าอ่านได้)
     match /platform_catalog/{docId} {
       allow get, list: if true;
-      allow create, update, delete: if isPrivilegedAdmin();
+      allow create, update, delete: if isSuperAdmin();
     }
 
     // ยอดขายสินค้า (Cloud Function เขียน / ลูกค้าอ่านได้)

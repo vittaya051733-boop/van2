@@ -119,6 +119,7 @@
         "supportEmail": "support@vantalad.app",
         "authorizedRedirectUris": [
           "https://vantalad.web.app",
+          "https://vantalad.web.app/__/auth/handler",
           "https://van1.web.app",
           "https://van3.web.app",
           "https://van4.web.app",

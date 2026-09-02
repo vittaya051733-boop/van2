@@ -1,4 +1,4 @@
-const { assertVan4Admin } = require('./social/admin_guard');
+const { assertVan4Admin, assertAdminBranchAccess, resolveMerchantBranchId } = require('./social/admin_guard');
 const { DEFAULT_WITHDRAW_FEE_BAHT } = require('./settlement_config');
 const {
   MIN_WITHDRAW_BAHT,
@@ -405,7 +405,10 @@ function createManualPayoutHandlers(deps) {
       throw new HttpsError('not-found', 'ไม่พบคำขอถอนเงิน');
     }
 
-    const status = String(withdrawDoc.data()?.status || '').trim();
+    const rejectData = withdrawDoc.data() || {};
+    await assertAdminBranchAccess(request, await resolveMerchantBranchId(rejectData.uid));
+
+    const status = String(rejectData.status || '').trim();
     if (status !== 'pending_admin') {
       throw new HttpsError('failed-precondition', 'คำขอนี้ไม่อยู่ในสถานะรอแอดมิน');
     }
@@ -448,6 +451,8 @@ function createManualPayoutHandlers(deps) {
       }
 
       const data = withdrawDoc.data() || {};
+      const merchantBranchId = await resolveMerchantBranchId(data.uid);
+      await assertAdminBranchAccess(request, merchantBranchId);
       const status = String(data.status || '').trim();
       if (status !== 'pending_admin') {
         throw new HttpsError('failed-precondition', 'คำขอนี้ไม่อยู่ในสถานะรอแอดมิน');

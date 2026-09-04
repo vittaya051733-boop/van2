@@ -30,7 +30,7 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/admins/$(authEmail().lower()));
     }
 
-    function isSuperAdmin() {
+    function isOwner() {
       return isAdmin()
           || (
             isAdminFromRegistry()
@@ -38,13 +38,18 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
             && (
               !('role' in adminDoc().data)
-              || adminDoc().data.role != 'branch_admin'
+              || adminDoc().data.role == 'owner'
+              || adminDoc().data.role == 'super_admin'
             )
           );
     }
 
+    function isSuperAdmin() {
+      return isOwner();
+    }
+
     function isBranchAdmin() {
-      return !isAdmin()
+      return !isOwner()
           && isAdminFromRegistry()
           && authEmail() != null
           && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
@@ -52,26 +57,52 @@ service cloud.firestore {
           && adminDoc().data.branchId is string;
     }
 
+    function isStaffAdmin() {
+      return !isOwner()
+          && isAdminFromRegistry()
+          && authEmail() != null
+          && exists(/databases/$(database)/documents/admins/$(authEmail().lower()))
+          && adminDoc().data.role == 'staff_admin'
+          && adminDoc().data.branchId is string;
+    }
+
+    function isBranchScopedAdmin() {
+      return isBranchAdmin() || isStaffAdmin();
+    }
+
     function adminBranchId() {
       return adminDoc().data.branchId;
+    }
+
+    function adminAllowedCaps() {
+      return adminDoc().data.get('allowedCaps', []);
+    }
+
+    function hasCap(cap) {
+      return isOwner()
+          || (isBranchAdmin() && (
+            !('allowedCaps' in adminDoc().data)
+            || adminAllowedCaps().hasAny([cap])
+          ))
+          || (isStaffAdmin() && adminAllowedCaps().hasAny([cap]));
     }
 
     function branchMatchesData(data) {
       let bid = data.get('branchId', null) != null
           ? data.get('branchId', null)
           : data.get('marketId', null);
-      return isSuperAdmin()
-          || (isBranchAdmin() && bid == adminBranchId())
-          || (isBranchAdmin() && bid == null && adminBranchId() == 'central');
+      return isOwner()
+          || (isBranchScopedAdmin() && bid == adminBranchId())
+          || (isBranchScopedAdmin() && bid == null && adminBranchId() == 'central');
     }
 
     function canAdminManageBranchEntity(data) {
-      return isSuperAdmin() || (isBranchAdmin() && data != null && branchMatchesData(data));
+      return isOwner() || (isBranchScopedAdmin() && data != null && branchMatchesData(data));
     }
 
     function canAdminReadPromo(data) {
-      return isSuperAdmin()
-          || (isBranchAdmin() && (
+      return isOwner()
+          || (isBranchScopedAdmin() && hasCap('promotions') && (
             !('branchId' in data)
             || data.branchId == null
             || branchMatchesData(data)
@@ -79,15 +110,17 @@ service cloud.firestore {
     }
 
     function canAdminWritePromoCreate(data) {
-      return isSuperAdmin()
-          || (isBranchAdmin()
+      return isOwner()
+          || (isBranchScopedAdmin()
+              && hasCap('promotions')
               && data.branchId is string
               && data.branchId == adminBranchId());
     }
 
     function canAdminWritePromoUpdate(existing, incoming) {
-      return isSuperAdmin()
-          || (isBranchAdmin()
+      return isOwner()
+          || (isBranchScopedAdmin()
+              && hasCap('promotions')
               && branchMatchesData(existing)
               && incoming.branchId == adminBranchId());
     }
@@ -844,7 +877,7 @@ service cloud.firestore {
       allow create: if canAdminWritePromoCreate(request.resource.data);
       allow update: if canAdminWritePromoUpdate(resource.data, request.resource.data);
       allow delete: if isSuperAdmin()
-          || (isBranchAdmin() && branchMatchesData(resource.data));
+          || (isBranchScopedAdmin() && hasCap('promotions') && branchMatchesData(resource.data));
     }
 
     // คูปอง — ลูกค้าอ่านได้เฉพาะที่เปิดใช้งาน (ตรวจโค้ดจริงบน Cloud Functions)
@@ -853,7 +886,7 @@ service cloud.firestore {
       allow create: if canAdminWritePromoCreate(request.resource.data);
       allow update: if canAdminWritePromoUpdate(resource.data, request.resource.data);
       allow delete: if isSuperAdmin()
-          || (isBranchAdmin() && branchMatchesData(resource.data));
+          || (isBranchScopedAdmin() && hasCap('promotions') && branchMatchesData(resource.data));
     }
 
     // บันทึกการใช้คูปอง/โปร — เขียนผ่าน Cloud Functions เท่านั้น
@@ -982,6 +1015,11 @@ service cloud.firestore {
         allow delete: if isSelf(userId);
       }
 
+      match /blocked/{blockedId} {
+        allow get, list: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
+      }
+
       match /saved_payment_methods/{cardId} {
         allow get, list: if isSelf(userId);
         allow write: if false;
@@ -1007,6 +1045,11 @@ service cloud.firestore {
         allow get, list: if isSelf(userId);
         allow create, update: if canWriteFriendPreview(userId, friendId);
         allow delete: if isSelf(userId);
+      }
+
+      match /blocked/{blockedId} {
+        allow get, list: if isSelf(userId);
+        allow create, update, delete: if isSelf(userId);
       }
     }
 
@@ -1081,7 +1124,7 @@ service cloud.firestore {
       allow update, delete: if !isAnonymous() && (
         isSelf(shopId)
         || isSuperAdmin()
-        || (isBranchAdmin() && branchMatchesData(resource.data))
+        || (isBranchScopedAdmin() && branchMatchesData(resource.data))
       );
 
       match /catalog_types/{typeId} {
@@ -1386,11 +1429,12 @@ service cloud.firestore {
 
     // คำขอถอนเงิน — สร้างผ่าน Cloud Function เท่านั้น
     match /withdraw_requests/{requestId} {
-      allow read: if isPrivilegedAdmin()
+      allow read: if (isPrivilegedAdmin() && hasCap('withdraw'))
+          || isOwner()
           || (signedIn() && resource.data.uid == uid());
       allow create: if false;
-      allow update: if isPrivilegedAdmin();
-      allow delete: if isPrivilegedAdmin();
+      allow update: if hasCap('withdraw');
+      allow delete: if isOwner();
     }
 
     // สถานะการโทร
@@ -1438,13 +1482,21 @@ service cloud.firestore {
     match /admins/{emailId} {
       allow get: if signedIn()
           && (
-            isSuperAdmin()
+            isOwner()
             || (
               authEmail() != null
               && authEmail().lower() == emailId
             )
+            || (
+              isBranchAdmin()
+              && resource.data.get('branchId', '') == adminBranchId()
+            )
           );
-      allow list: if isSuperAdmin();
+      allow list: if isOwner()
+          || (
+            isBranchAdmin()
+            && resource.data.get('branchId', '') == adminBranchId()
+          );
       allow create, delete: if false;
       allow update: if signedIn()
           && authEmail() != null
@@ -1568,6 +1620,33 @@ service cloud.firestore {
       allow read, write: if isPrivilegedAdmin();
     }
 
+    // บัญชีภาษีแพลตฟอร์ม (van4 + CF)
+    match /tax_ledger_entries/{entryId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if isPrivilegedAdmin()
+          && request.resource.data.source in ['manual', 'adjustment', 'expense_import']
+          && request.resource.data.status == 'active';
+      allow update: if isPrivilegedAdmin()
+          && resource.data.source == 'expense_import'
+          && request.resource.data.source == 'expense_import';
+      allow delete: if isPrivilegedAdmin()
+          && resource.data.source == 'expense_import';
+    }
+
+    match /tax_vat_periods/{periodId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create: if isPrivilegedAdmin();
+      allow update: if isPrivilegedAdmin()
+          && resource.data.status != 'closed';
+      allow delete: if false;
+    }
+
+    match /tax_income_periods/{periodId} {
+      allow get, list: if isPrivilegedAdmin();
+      allow create, update: if isPrivilegedAdmin();
+      allow delete: if false;
+    }
+
     // แชทภายในแอดมิน van4
     match /admin_internal_threads/{threadId} {
       allow get, list: if isPrivilegedAdmin();
@@ -1586,6 +1665,64 @@ service cloud.firestore {
       allow get, list: if isPrivilegedAdmin();
       allow create, update: if isPrivilegedAdmin() && uid() == uid;
       allow delete: if isPrivilegedAdmin() && uid() == uid;
+    }
+
+    // รับงานแอดมิน — เขียนผ่าน Cloud Functions เท่านั้น
+    match /admin_work_tasks/{taskId} {
+      allow get, list: if isPrivilegedAdmin()
+          && (
+            isOwner()
+            || resource.data.get('branchId', 'central') == adminBranchId()
+          );
+      allow create, update, delete: if false;
+    }
+
+    // บันทึกพฤติกรรมแอดมิน van4 — สร้างได้เฉพาะของตัวเอง
+    match /admin_activity_logs/{logId} {
+      allow get, list: if isPrivilegedAdmin()
+          && (
+            isOwner()
+            || resource.data.get('branchId', 'central') == adminBranchId()
+          );
+      allow create: if isPrivilegedAdmin()
+          && request.resource.data.keys().hasOnly([
+            'actorEmail',
+            'actorUid',
+            'actorRole',
+            'branchId',
+            'action',
+            'targetType',
+            'targetId',
+            'labelTh',
+            'at',
+          ])
+          && request.resource.data.actorUid == uid()
+          && request.resource.data.actorEmail == authEmail().lower()
+          && request.resource.data.actorEmail is string
+          && request.resource.data.actorEmail.size() <= 254
+          && request.resource.data.actorRole is string
+          && (
+            (isOwner() && request.resource.data.actorRole == 'owner')
+            || (isBranchAdmin() && request.resource.data.actorRole == 'branch_admin')
+            || (isStaffAdmin() && request.resource.data.actorRole == 'staff_admin')
+          )
+          && request.resource.data.branchId is string
+          && request.resource.data.branchId.size() >= 1
+          && request.resource.data.branchId.size() <= 100
+          && request.resource.data.action in ['claim', 'complete', 'open_menu', 'write']
+          && request.resource.data.targetType is string
+          && request.resource.data.targetType.size() <= 100
+          && request.resource.data.targetId is string
+          && request.resource.data.targetId.size() <= 200
+          && request.resource.data.labelTh is string
+          && request.resource.data.labelTh.size() >= 1
+          && request.resource.data.labelTh.size() <= 500
+          && request.resource.data.at == request.time
+          && (
+            isOwner()
+            || request.resource.data.get('branchId', 'central') == adminBranchId()
+          );
+      allow update, delete: if false;
     }
 
     // Heartbeat จาก van1/van2/van3/van4 → van4 dashboard สุขภาพระบบ
